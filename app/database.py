@@ -135,7 +135,11 @@ class ConversationState(Base):
 
 engine_kwargs = {"echo": False}
 if "postgresql" in settings.database_url:
-    engine_kwargs["connect_args"] = {"ssl": "require"}
+    engine_kwargs["connect_args"] = {
+        "ssl": "require",
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0
+    }
 
 engine = create_async_engine(settings.database_url, **engine_kwargs)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
