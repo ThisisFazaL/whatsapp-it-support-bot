@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: supportit_db
+    restart: always
+    environment:
+      POSTGRES_USER: supportit
+      POSTGRES_PASSWORD: supportit_password_123
+      POSTGRES_DB: supportit
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  chatbot:
+    build: .
+    container_name: whatsapp_it_bot
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://supportit:supportit_password_123@postgres:5432/supportit
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
