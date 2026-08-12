@@ -133,7 +133,11 @@ class ConversationState(Base):
     current_data = Column(JSON, default=dict)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-engine = create_async_engine(settings.database_url, echo=False)
+engine_kwargs = {"echo": False}
+if "postgresql" in settings.database_url:
+    engine_kwargs["connect_args"] = {"ssl": "require"}
+
+engine = create_async_engine(settings.database_url, **engine_kwargs)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
