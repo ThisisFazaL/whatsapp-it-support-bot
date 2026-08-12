@@ -17,13 +17,17 @@ class Settings(BaseSettings):
         if not v:
             return "sqlite+aiosqlite:///./itsupport.db"
         
-        # Render PostgreSQL default format fix: postgres:// or postgresql:// -> postgresql+asyncpg://
-        if v.startswith("postgres://"):
-            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
-            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
-            
-        return v
+        v_str = str(v).strip()
+        
+        # Ensure asyncpg driver prefix for any PostgreSQL scheme
+        if v_str.startswith("postgres://"):
+            v_str = "postgresql+asyncpg://" + v_str[11:]
+        elif v_str.startswith("postgresql://"):
+            v_str = "postgresql+asyncpg://" + v_str[13:]
+        elif v_str.startswith("postgres+asyncpg://"):
+            v_str = "postgresql+asyncpg://" + v_str[19:]
+
+        return v_str
 
     model_config = SettingsConfigDict(
         env_file=".env",
