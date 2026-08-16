@@ -264,20 +264,32 @@ async def handle_flow(
         session.add(new_ticket)
         await session.flush()
 
-        # Category-Based Admin Routing
+        # Subcategory-Level 1:1 Admin Routing Matrix
         assigned_admin = None
-        if category_id:
-            map_stmt = (
+        if subcategory_id:
+            sub_map_stmt = (
+                select(AdminCategoryMapping)
+                .options(selectinload(AdminCategoryMapping.admin))
+                .where(AdminCategoryMapping.subcategory_id == subcategory_id)
+            )
+            sub_mappings = (await session.execute(sub_map_stmt)).scalars().all()
+            active_sub_admins = [m.admin for m in sub_mappings if m.admin and m.admin.active]
+            if active_sub_admins:
+                assigned_admin = active_sub_admins[0]
+
+        # Category-Level Fallback
+        if not assigned_admin and category_id:
+            cat_map_stmt = (
                 select(AdminCategoryMapping)
                 .options(selectinload(AdminCategoryMapping.admin))
                 .where(AdminCategoryMapping.category_id == category_id)
             )
-            mappings = (await session.execute(map_stmt)).scalars().all()
-            active_mapped_admins = [m.admin for m in mappings if m.admin and m.admin.active]
-            if active_mapped_admins:
-                assigned_admin = random.choice(active_mapped_admins)
+            cat_mappings = (await session.execute(cat_map_stmt)).scalars().all()
+            active_cat_admins = [m.admin for m in cat_mappings if m.admin and m.admin.active]
+            if active_cat_admins:
+                assigned_admin = active_cat_admins[0]
 
-        # Fallback to Master Admin if no category admin mapped
+        # Master Admin Fallback
         if not assigned_admin:
             master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
             assigned_admin = (await session.execute(master_stmt)).scalars().first()

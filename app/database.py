@@ -50,10 +50,12 @@ class AdminCategoryMapping(Base):
     __tablename__ = "admin_category_mapping"
     mapping_id = Column(Integer, primary_key=True, autoincrement=True)
     admin_id = Column(Integer, ForeignKey("support_admins.admin_id"), nullable=False)
-    category_id = Column(Integer, ForeignKey("categories.category_id"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.category_id"), nullable=True)
+    subcategory_id = Column(Integer, ForeignKey("subcategories.subcategory_id"), nullable=True)
 
     admin = relationship("SupportAdmin", back_populates="category_mappings")
     category = relationship("Category")
+    subcategory = relationship("Subcategory")
 
 class Category(Base):
     __tablename__ = "categories"

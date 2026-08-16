@@ -1,4 +1,6 @@
 import logging
+import asyncio
+import datetime
 from typing import Set
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, Query, Depends, HTTPException
@@ -7,12 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.database import get_db, init_db_models, Ticket
+from app.database import get_db, init_db_models, Ticket, async_session_factory
 from app.state_manager import is_employee_registered, get_user_state
 from app.handlers.admin_handler import handle_admin_command
 from app.handlers.resolution_handler import handle_resolution_confirmation
 from app.handlers.flow_handler import handle_flow
 from app.handlers.my_tickets_handler import handle_my_tickets
+from app.reports import send_daily_report_to_master
 from app.meta_api import meta_api
 
 logger = logging.getLogger("main")
@@ -20,13 +23,43 @@ logging.basicConfig(level=logging.INFO)
 
 PROCESSED_WAMIDS: Set[str] = set()
 
+async def scheduled_daily_report_loop():
+    """Background task loop to deliver Daily Master Executive Report at 8:00 PM IST (14:30 UTC) daily."""
+    while True:
+        try:
+            now_utc = datetime.datetime.utcnow()
+            # Target 14:30 UTC (8:00 PM IST)
+            target_utc = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
+            if now_utc >= target_utc:
+                target_utc += datetime.timedelta(days=1)
+            
+            sleep_seconds = (target_utc - now_utc).total_seconds()
+            logger.info(f"Daily Master EOD Report scheduled in {sleep_seconds/3600:.2f} hours (at 8:00 PM IST / {target_utc.isoformat()}).")
+            await asyncio.sleep(sleep_seconds)
+
+            logger.info("Executing 8:00 PM IST Daily Master Report delivery...")
+            async with async_session_factory() as session:
+                await send_daily_report_to_master(session)
+            logger.info("Daily Master Report delivered successfully!")
+
+        except asyncio.CancelledError:
+            logger.info("Scheduled report loop cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Error in scheduled daily report loop: {e}", exc_info=True)
+            await asyncio.sleep(300) # Wait 5 mins on error before retrying
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle startup and shutdown hooks."""
     logger.info("Initializing database models and seed data...")
     await init_db_models()
     logger.info("Database initialized successfully.")
+    
+    # Start 8 PM IST EOD report background task loop
+    report_task = asyncio.create_task(scheduled_daily_report_loop())
     yield
+    report_task.cancel()
     logger.info("Shutting down application...")
 
 app = FastAPI(
@@ -48,6 +81,12 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "whatsapp_it_support_bot"}
+
+@app.get("/trigger-daily-report")
+async def trigger_daily_report(db: AsyncSession = Depends(get_db)):
+    """API endpoint to manually trigger 8 PM IST Daily Master Report on demand."""
+    await send_daily_report_to_master(db)
+    return {"status": "report_delivered", "message": "Daily Master Report sent to Master Admin!"}
 
 @app.get("/webhook/meta-whatsapp")
 async def verify_webhook(

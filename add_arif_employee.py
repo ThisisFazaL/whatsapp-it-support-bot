@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app.database import async_session_factory, Department, Location, Employee
 
 logging.basicConfig(level=logging.INFO)
@@ -8,6 +8,12 @@ logger = logging.getLogger("add_arif")
 
 async def add_employee_arif():
     async with async_session_factory() as session:
+        # Sync sequence for departments table first
+        try:
+            await session.execute(text("SELECT setval('departments_department_id_seq', COALESCE((SELECT MAX(department_id) FROM departments), 0) + 1, false);"))
+        except Exception:
+            pass
+
         # 1. Ensure CEO Department exists
         stmt_dept = select(Department).where(Department.department_name == "CEO")
         dept = (await session.execute(stmt_dept)).scalars().first()
@@ -21,6 +27,12 @@ async def add_employee_arif():
         stmt_loc = select(Location).limit(1)
         loc = (await session.execute(stmt_loc)).scalars().first()
         loc_id = loc.location_id if loc else 1
+
+        # Sync sequence for employees table
+        try:
+            await session.execute(text("SELECT setval('employees_employee_id_seq', COALESCE((SELECT MAX(employee_id) FROM employees), 0) + 1, false);"))
+        except Exception:
+            pass
 
         # 3. Add or update Arif
         phone = "263732786786"
