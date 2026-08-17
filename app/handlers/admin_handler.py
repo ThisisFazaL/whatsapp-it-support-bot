@@ -159,11 +159,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         ticket.updated_at = datetime.datetime.utcnow()
         await session.commit()
 
-        employee = ticket.employee
-        if employee:
+        # Update Employee state to awaiting_resolution_confirmation & send interactive buttons
+        if ticket.employee:
             await set_user_state(
                 session=session,
-                phone=employee.phone,
+                phone=ticket.employee.phone,
                 current_step="awaiting_resolution_confirmation",
                 current_data={
                     "ticket_id": ticket.ticket_id,
@@ -172,20 +172,36 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 flow_name="resolution_confirmation"
             )
 
-            emp_msg = (
-                f"🔔 *IT Support Ticket Update*\n\n"
-                f"Your support ticket *{ticket.ticket_number}* has been marked as **RESOLVED** by IT Admin ({admin.full_name}).\n\n"
-                f"Please confirm if your issue is fixed by replying:\n"
-                f"1️⃣ Reply *1* to Confirm & Close Ticket\n"
-                f"2️⃣ Reply *2* to Reopen Ticket"
+            # Send Interactive WhatsApp Buttons to Employee
+            emp_header = "🔔 TICKET RESOLUTION CONFIRMATION"
+            emp_body = (
+                f"Your support ticket *{ticket.ticket_number}* has been marked as **RESOLVED** by IT Support Admin ({admin.full_name}).\n\n"
+                f"Please confirm if your issue has been completely fixed."
             )
-            await meta_api.send_text_message(employee.phone, emp_msg)
+            emp_footer = "Tap a button below to respond"
+            emp_buttons = [
+                {
+                    "id": "confirm_close_ticket",
+                    "title": "✅ Confirm & Close"
+                },
+                {
+                    "id": "reopen_ticket",
+                    "title": "🔄 Reopen Ticket"
+                }
+            ]
+            await meta_api.send_button_message(
+                to_phone=ticket.employee.phone,
+                body_text=emp_body,
+                buttons=emp_buttons,
+                header_text=emp_header,
+                footer_text=emp_footer
+            )
 
         # Notify Admin
         admin_msg = (
             f"✅ *Ticket Marked as Resolved*\n\n"
             f"Ticket: *{ticket.ticket_number}*\n"
-            f"Employee: {employee.full_name if employee else 'N/A'}\n"
+            f"Employee: {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
             f"Resolution confirmation prompt sent to employee."
         )
         await meta_api.send_text_message(sender_phone, admin_msg)

@@ -39,9 +39,9 @@ async def handle_resolution_confirmation(
         await meta_api.send_text_message(sender_phone, "Ticket no longer exists. State reset.")
         return True
 
-    choice = message_text.strip()
+    choice = message_text.strip().lower()
 
-    if choice == "1":
+    if choice in ("1", "confirm_close_ticket", "confirm & close", "✅ confirm & close", "close", "confirm"):
         # 1 = Close Ticket (status_id = 4)
         ticket.status_id = 4
         ticket.closed_at = datetime.datetime.utcnow()
@@ -94,7 +94,7 @@ async def handle_resolution_confirmation(
 
         return True
 
-    elif choice == "2":
+    elif choice in ("2", "reopen_ticket", "reopen ticket", "🔄 reopen ticket", "reopen", "cancel"):
         # 2 = Reopen Ticket (status_id = 1)
         ticket.status_id = 1
         ticket.updated_at = datetime.datetime.utcnow()
