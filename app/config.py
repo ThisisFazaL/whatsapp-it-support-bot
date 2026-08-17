@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     verify_token: str = "itsupport_meta_secret_123"
     master_group_phone: str = "HQ0msg8LFOp1i3bZoB2V3H"
     master_group_link: str = "https://chat.whatsapp.com/HQ0msg8LFOp1i3bZoB2V3H"
+    master_admin_phone: str = "919265368695"
+    executive_observer_phones: list = [
+        "263776477481",  # Arshford Mariga
+        "263732786786",  # Arif
+        "263713866223",  # Zayn
+        "263778405964",  # Faizan Patel
+        "263718352518",  # Sujit
+    ]
     
     database_url: str = "sqlite+aiosqlite:///./itsupport.db"
 

@@ -371,11 +371,22 @@ async def handle_flow(
                 footer_text=footer
             )
 
-        # Master Admin Group Notification (New Ticket Created)
+        # Master Admin Fazal (Master Alert with Interactive Resolve Button)
+        if settings.master_admin_phone and (not assigned_admin or assigned_admin.phone != settings.master_admin_phone):
+            master_body = f"ℹ️ *[MASTER ALERT]* New Ticket `{ticket_number}` assigned to {assigned_admin.full_name if assigned_admin else 'Unassigned'}.\n\n" + body
+            await meta_api.send_button_message(
+                to_phone=settings.master_admin_phone,
+                body_text=master_body,
+                buttons=buttons,
+                header_text="🚨 MASTER TICKET ALERT",
+                footer_text="Master Admin: Tap button to resolve anytime"
+            )
+
+        # Broadcast Executive Observer Alerts to 5 Executives (NO resolve button)
         asg_name = assigned_admin.full_name if assigned_admin else "Unassigned"
         asg_phone = f" (+{assigned_admin.phone})" if assigned_admin else ""
-        master_group_notice = (
-            f"📢 *[MASTER GROUP ALERT] NEW TICKET CREATED* 🚨\n\n"
+        observer_notice = (
+            f"📢 *[EXECUTIVE OBSERVER ALERT] NEW TICKET CREATED* 🚨\n\n"
             f"🎫 *Ticket ID:* `{ticket_number}`\n"
             f"👤 *Employee:* {employee.full_name} (`+{employee.phone}`)\n"
             f"🏢 *Location:* {loc_name} ({dept_name})\n"
@@ -386,17 +397,8 @@ async def handle_flow(
             f"👤 *Assigned Support Admin:* {asg_name}{asg_phone}"
         )
 
-        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
-        master_admins = (await session.execute(master_stmt)).scalars().all()
-        notified_phones = set()
-
-        if settings.master_group_phone:
-            await meta_api.send_text_message(settings.master_group_phone, master_group_notice)
-            notified_phones.add(settings.master_group_phone)
-
-        for master in master_admins:
-            if master.phone not in notified_phones:
-                await meta_api.send_text_message(master.phone, master_group_notice)
-                notified_phones.add(master.phone)
+        for obs_phone in settings.executive_observer_phones:
+            if obs_phone != phone and obs_phone != settings.master_admin_phone and (not assigned_admin or obs_phone != assigned_admin.phone):
+                await meta_api.send_text_message(obs_phone, observer_notice)
 
         return

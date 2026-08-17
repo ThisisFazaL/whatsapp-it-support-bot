@@ -23,6 +23,15 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if not claim_match and not resolve_match:
         return False
 
+    # Verify if sender is an executive observer (observers cannot resolve tickets)
+    from app.config import settings
+    if sender_phone in settings.executive_observer_phones and sender_phone != settings.master_admin_phone:
+        await meta_api.send_text_message(
+            sender_phone,
+            "⚠️ *Access Denied*: You are registered as an Executive Observer. Only assigned Support Admins or Master Admin can resolve tickets."
+        )
+        return True
+
     # Verify if sender is an active support admin
     admin = await is_admin(session, sender_phone)
     if not admin:
@@ -181,28 +190,29 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
         await meta_api.send_text_message(sender_phone, admin_msg)
 
-        # Notify Master Group of Ticket Resolution
-        master_group_resolved = (
-            f"✅ *[MASTER GROUP ALERT] TICKET RESOLVED*\n\n"
+        # Notify Master Admin Fazal
+        if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
+            master_resolved = (
+                f"✅ *[MASTER ALERT] TICKET RESOLVED*\n\n"
+                f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                f"👤 *Employee:* {employee.full_name if employee else 'N/A'}\n"
+                f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
+                f"📊 *Status:* 🔵 RESOLVED"
+            )
+            await meta_api.send_text_message(settings.master_admin_phone, master_resolved)
+
+        # Notify Executive Observers of Ticket Resolution
+        observer_resolved = (
+            f"✅ *[EXECUTIVE OBSERVER ALERT] TICKET RESOLVED*\n\n"
             f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
             f"👤 *Employee:* {employee.full_name if employee else 'N/A'}\n"
             f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
             f"📊 *Status:* 🔵 RESOLVED (Awaiting employee confirmation)"
         )
 
-        from app.config import settings
-        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
-        master_admins = (await session.execute(master_stmt)).scalars().all()
-        notified_phones = set()
-
-        if settings.master_group_phone:
-            await meta_api.send_text_message(settings.master_group_phone, master_group_resolved)
-            notified_phones.add(settings.master_group_phone)
-
-        for master in master_admins:
-            if master.phone not in notified_phones:
-                await meta_api.send_text_message(master.phone, master_group_resolved)
-                notified_phones.add(master.phone)
+        for obs_phone in settings.executive_observer_phones:
+            if obs_phone != settings.master_admin_phone and obs_phone != sender_phone:
+                await meta_api.send_text_message(obs_phone, observer_resolved)
 
         return True
 
