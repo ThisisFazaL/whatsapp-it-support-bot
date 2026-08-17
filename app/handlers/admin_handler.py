@@ -15,10 +15,10 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     """
     text_strip = message_text.strip()
     
-    # Match ACCEPT / CLAIM command: "accept TKT-...", "claim TKT-...", "accept 00001", "claim 1"
-    claim_match = re.match(r"^(?:accept|claim)\s+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
-    # Match RESOLVE command: "resolve TKT-...", "resolve 00001", "resolve 1"
-    resolve_match = re.match(r"^resolve\s+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+    # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-...", "claim 1"
+    claim_match = re.match(r"^(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+    # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "resolve 1"
+    resolve_match = re.match(r"^resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
 
     if not claim_match and not resolve_match:
         return False
