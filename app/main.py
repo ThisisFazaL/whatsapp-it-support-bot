@@ -1,9 +1,11 @@
 import logging
 import asyncio
 import datetime
+import os
 from typing import Set
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, Query, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -25,29 +27,38 @@ PROCESSED_WAMIDS: Set[str] = set()
 
 async def scheduled_daily_report_loop():
     """Background task loop to deliver Daily Master Executive Report at 8:00 PM IST (14:30 UTC) daily."""
+    last_sent_date = None
     while True:
         try:
             now_utc = datetime.datetime.utcnow()
-            # Target 14:30 UTC (8:00 PM IST)
-            target_utc = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
-            if now_utc >= target_utc:
-                target_utc += datetime.timedelta(days=1)
+            today_date_str = now_utc.strftime("%Y-%m-%d")
             
-            sleep_seconds = (target_utc - now_utc).total_seconds()
-            logger.info(f"Daily Master EOD Report scheduled in {sleep_seconds/3600:.2f} hours (at 8:00 PM IST / {target_utc.isoformat()}).")
-            await asyncio.sleep(sleep_seconds)
+            # Check if current time is past 14:30 UTC (8:00 PM IST) and hasn't sent today
+            target_utc = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
+            
+            if now_utc >= target_utc and last_sent_date != today_date_str:
+                logger.info("8:00 PM IST trigger window reached. Executing Daily Master Report delivery...")
+                async with async_session_factory() as session:
+                    await send_daily_report_to_master(session)
+                last_sent_date = today_date_str
+                logger.info("Daily Master Report delivered successfully!")
 
-            logger.info("Executing 8:00 PM IST Daily Master Report delivery...")
-            async with async_session_factory() as session:
-                await send_daily_report_to_master(session)
-            logger.info("Daily Master Report delivered successfully!")
+            # Calculate next target (tomorrow 14:30 UTC if sent, or check again in 60s)
+            now_utc = datetime.datetime.utcnow()
+            next_target = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
+            if now_utc >= next_target:
+                next_target += datetime.timedelta(days=1)
+
+            sleep_seconds = (next_target - now_utc).total_seconds()
+            logger.info(f"Next Daily Master Report scheduled in {sleep_seconds/3600:.2f} hours (at 8:00 PM IST / {next_target.isoformat()}).")
+            await asyncio.sleep(min(sleep_seconds, 3600))
 
         except asyncio.CancelledError:
             logger.info("Scheduled report loop cancelled.")
             break
         except Exception as e:
             logger.error(f"Error in scheduled daily report loop: {e}", exc_info=True)
-            await asyncio.sleep(300) # Wait 5 mins on error before retrying
+            await asyncio.sleep(300)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -81,6 +92,19 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "whatsapp_it_support_bot"}
+
+@app.get("/download-daily-report-pdf")
+async def download_daily_report_pdf():
+    """Serves the latest Daily Master Executive Report PDF directly for Meta WhatsApp API."""
+    pdf_path = "Daily_IT_Support_Master_Report_Sample.pdf"
+    if not os.path.exists(pdf_path):
+        from generate_daily_report_pdf import create_daily_report_pdf
+        create_daily_report_pdf(pdf_path)
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=f"Daily_IT_Support_Master_Report_{datetime.datetime.now().strftime('%d%b%Y')}.pdf"
+    )
 
 @app.get("/trigger-daily-report")
 async def trigger_daily_report(db: AsyncSession = Depends(get_db)):

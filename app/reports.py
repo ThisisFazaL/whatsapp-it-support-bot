@@ -1,5 +1,6 @@
 import datetime
 import logging
+import os
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,18 +133,19 @@ async def send_daily_report_to_master(session: AsyncSession):
     # 2. Generate PDF Report Document
     now_str = datetime.datetime.now().strftime("%d%b%Y")
     pdf_filename = f"Daily_IT_Support_Master_Report_{now_str}.pdf"
+    local_path = "Daily_IT_Support_Master_Report_Sample.pdf"
     try:
-        create_daily_report_pdf(pdf_filename)
-        pdf_url = f"https://github.com/ThisisFazaL/whatsapp-it-support-bot/raw/main/Daily_IT_Support_Master_Report_Sample.pdf"
+        create_daily_report_pdf(local_path)
+        pdf_url = "https://whatsapp-it-support-bot.onrender.com/download-daily-report-pdf"
 
-        # 3. Send PDF Document Attachment via WhatsApp
-        await meta_api.send_document_message(
+        # 3. Send PDF Document Attachment via WhatsApp Meta Cloud API
+        res_doc = await meta_api.send_document_message(
             to_phone=master_phone,
             document_url=pdf_url,
             filename=pdf_filename,
             caption=f"📄 *DAILY IT SUPPORT EXECUTIVE REPORT (PDF)*\n📅 Date: {datetime.datetime.now().strftime('%d %B %Y')}"
         )
-        logger.info("PDF Executive Report sent to Master Admin via WhatsApp!")
+        logger.info(f"PDF Executive Report sent to Master Admin via WhatsApp! Result: {res_doc}")
 
     except Exception as e:
         logger.error(f"Failed to generate/send PDF report: {e}", exc_info=True)
