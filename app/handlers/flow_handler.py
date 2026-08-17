@@ -398,7 +398,7 @@ async def handle_flow(
         )
 
         for obs_phone in settings.executive_observer_phones:
-            if obs_phone != phone and obs_phone != settings.master_admin_phone and (not assigned_admin or obs_phone != assigned_admin.phone):
+            if obs_phone != settings.master_admin_phone and (not assigned_admin or obs_phone != assigned_admin.phone):
                 await meta_api.send_text_message(obs_phone, observer_notice)
 
         return
