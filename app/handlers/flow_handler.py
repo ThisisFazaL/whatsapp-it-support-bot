@@ -340,10 +340,10 @@ async def handle_flow(
         )
         await meta_api.send_text_message(phone, emp_confirmation)
 
-        # Broadcast Ticket Alert to ALL Active Support Admins (First-Come-First-Served Claiming)
+        # Broadcast Ticket Alert with Interactive Quick Reply Button to ALL Active Support Admins
         img_admin_line = f"\n🖼️ *Photo Attachment ID:* `{ticket_image_id}`" if ticket_image_id else ""
-        admin_alert = (
-            f"🚨 *NEW IT SUPPORT REQUEST* 🚨\n\n"
+        header = "🚨 NEW IT SUPPORT REQUEST 🚨"
+        body = (
             f"🎫 *Ticket ID:* `{ticket_number}`\n"
             f"👤 *Employee:* {employee.full_name}\n"
             f"📞 *Phone:* +{employee.phone}\n"
@@ -352,14 +352,25 @@ async def handle_flow(
             f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
             f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
             f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
-            f"📝 *Description:* {description}{img_admin_line}\n\n"
-            f"⚡ *To Claim This Ticket:*\n"
-            f"Reply `accept {ticket_number}` (or `claim {ticket_number}`)"
+            f"📝 *Description:* {description}{img_admin_line}"
         )
+        footer = "Tap button below to claim this ticket"
+        buttons = [
+            {
+                "id": f"claim_{ticket_number}",
+                "title": "⚡ Accept Ticket"
+            }
+        ]
 
         all_admins_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
         all_admins = (await session.execute(all_admins_stmt)).scalars().all()
         for adm in all_admins:
-            await meta_api.send_text_message(adm.phone, admin_alert)
+            await meta_api.send_button_message(
+                to_phone=adm.phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer
+            )
 
         return

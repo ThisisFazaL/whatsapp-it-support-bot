@@ -149,9 +149,17 @@ async def handle_incoming_webhook(request: Request, db: AsyncSession = Depends(g
             image_id = image_obj.get("id")
             message_text = image_obj.get("caption", "Photo attachment").strip()
             logger.info(f"Received Image attachment ID '{image_id}' from {sender_phone}.")
+        elif msg_type == "interactive":
+            interactive_obj = msg_obj.get("interactive", {})
+            btn_reply = interactive_obj.get("button_reply", {})
+            btn_id = btn_reply.get("id", "")
+            btn_title = btn_reply.get("title", "")
+            # e.g., btn_id = "claim_TKT-20260817-00001" -> message_text = "claim TKT-20260817-00001"
+            message_text = btn_id.replace("_", " ") if btn_id else btn_title
+            logger.info(f"Received Interactive Button click from {sender_phone}: id='{btn_id}', title='{btn_title}' -> text='{message_text}'")
         else:
             logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
-            await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, or photo attachments.")
+            await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
             return {"status": "ok"}
 
         # Step 1: Employee Registration Check
