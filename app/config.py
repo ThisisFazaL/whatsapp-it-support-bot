@@ -8,7 +8,8 @@ class Settings(BaseSettings):
     meta_graph_version: str = "v19.0"
     meta_display_number: str = "+91 93282 95424"
     verify_token: str = "itsupport_meta_secret_123"
-    master_group_phone: str = "919265368695"
+    master_group_phone: str = "HQ0msg8LFOp1i3bZoB2V3H"
+    master_group_link: str = "https://chat.whatsapp.com/HQ0msg8LFOp1i3bZoB2V3H"
     
     database_url: str = "sqlite+aiosqlite:///./itsupport.db"
 
