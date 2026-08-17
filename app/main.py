@@ -103,114 +103,115 @@ async def verify_webhook(
     logger.warning("Webhook verification FAILED.")
     return Response(content="Verification token mismatch", status_code=403)
 
+async def process_webhook_payload(body: dict):
+    """Processes incoming Meta WhatsApp Webhook payload safely in background task."""
+    async with async_session_factory() as db:
+        try:
+            entry = body.get("entry", [])
+            if not entry:
+                return
+            changes = entry[0].get("changes", [])
+            if not changes:
+                return
+            value = changes[0].get("value", {})
+            messages = value.get("messages", [])
+            if not messages:
+                return
+
+            msg_obj = messages[0]
+            wamid = msg_obj.get("id")
+            sender_phone = msg_obj.get("from")
+            msg_type = msg_obj.get("type")
+
+            # Deduplication check
+            if wamid and wamid in PROCESSED_WAMIDS:
+                logger.info(f"Duplicate wamid '{wamid}' skipped.")
+                return
+
+            if wamid:
+                PROCESSED_WAMIDS.add(wamid)
+                if len(PROCESSED_WAMIDS) > 5000:
+                    PROCESSED_WAMIDS.clear()
+
+            image_id = None
+            message_text = ""
+
+            if msg_type == "text":
+                message_text = msg_obj.get("text", {}).get("body", "").strip()
+            elif msg_type == "image":
+                image_obj = msg_obj.get("image", {})
+                image_id = image_obj.get("id")
+                message_text = image_obj.get("caption", "Photo attachment").strip()
+                logger.info(f"Received Image attachment ID '{image_id}' from {sender_phone}.")
+            elif msg_type == "interactive":
+                interactive_obj = msg_obj.get("interactive", {})
+                btn_reply = interactive_obj.get("button_reply", {})
+                btn_id = btn_reply.get("id", "")
+                btn_title = btn_reply.get("title", "")
+                message_text = btn_id.replace("_", " ") if btn_id else btn_title
+                logger.info(f"Received Interactive Button click from {sender_phone}: id='{btn_id}', title='{btn_title}' -> text='{message_text}'")
+            else:
+                logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
+                await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
+                return
+
+            # Step 1: Employee Registration Check
+            employee = await is_employee_registered(db, sender_phone)
+            if not employee:
+                logger.warning(f"Unregistered phone number attempted access: {sender_phone}")
+                warning_msg = (
+                    f"🚫 *Access Restricted*\n\n"
+                    f"Your phone number (`+{sender_phone}`) is not registered as an active employee in our IT Support database.\n\n"
+                    f"Please contact your IT System Administrator to register your account."
+                )
+                await meta_api.send_text_message(sender_phone, warning_msg)
+                return
+
+            # Step 2: "My Tickets" Command Check
+            isMyTickets = await handle_my_tickets(db, employee, message_text)
+            if isMyTickets:
+                return
+
+            # Step 3: Admin Command Check (e.g. 'resolve TKT-...')
+            isAdminCmd = await handle_admin_command(db, sender_phone, message_text)
+            if isAdminCmd:
+                return
+
+            # Step 4: Check Current Conversation State
+            state = await get_user_state(db, sender_phone)
+
+            # Step 5: Check Resolution Confirmation Loop
+            if state and state.current_step == "awaiting_resolution_confirmation":
+                await handle_resolution_confirmation(
+                    session=db,
+                    sender_phone=sender_phone,
+                    message_text=message_text,
+                    current_data=state.current_data or {}
+                )
+                return
+
+            # Step 6: Multi-Step Ticket Flow Execution (with optional image)
+            await handle_flow(
+                session=db,
+                employee=employee,
+                message_text=message_text,
+                state=state,
+                image_id=image_id
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing webhook payload: {e}", exc_info=True)
+
 @app.post("/webhook/meta-whatsapp")
-async def handle_incoming_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Meta WhatsApp Cloud API Webhook Handler for incoming text & image messages."""
+async def handle_incoming_webhook(request: Request):
+    """Meta WhatsApp Cloud API Webhook Handler - Responds HTTP 200 immediately & processes in background."""
     try:
         body = await request.json()
-        logger.info(f"Incoming Webhook Payload: {body}")
-
-        entry = body.get("entry", [])
-        if not entry:
-            return {"status": "ignored", "reason": "No entry"}
-
-        changes = entry[0].get("changes", [])
-        if not changes:
-            return {"status": "ignored", "reason": "No changes"}
-
-        value = changes[0].get("value", {})
-        messages = value.get("messages", [])
-
-        if not messages:
-            return {"status": "ignored", "reason": "Status event / non-message event"}
-
-        msg_obj = messages[0]
-        wamid = msg_obj.get("id")
-        sender_phone = msg_obj.get("from")
-        msg_type = msg_obj.get("type")
-
-        # Deduplication check
-        if wamid and wamid in PROCESSED_WAMIDS:
-            logger.info(f"Duplicate wamid '{wamid}' skipped.")
-            return {"status": "duplicate_skipped"}
-
-        if wamid:
-            PROCESSED_WAMIDS.add(wamid)
-            if len(PROCESSED_WAMIDS) > 5000:
-                PROCESSED_WAMIDS.clear()
-
-        image_id = None
-        message_text = ""
-
-        if msg_type == "text":
-            message_text = msg_obj.get("text", {}).get("body", "").strip()
-        elif msg_type == "image":
-            image_obj = msg_obj.get("image", {})
-            image_id = image_obj.get("id")
-            message_text = image_obj.get("caption", "Photo attachment").strip()
-            logger.info(f"Received Image attachment ID '{image_id}' from {sender_phone}.")
-        elif msg_type == "interactive":
-            interactive_obj = msg_obj.get("interactive", {})
-            btn_reply = interactive_obj.get("button_reply", {})
-            btn_id = btn_reply.get("id", "")
-            btn_title = btn_reply.get("title", "")
-            # e.g., btn_id = "claim_TKT-20260817-00001" -> message_text = "claim TKT-20260817-00001"
-            message_text = btn_id.replace("_", " ") if btn_id else btn_title
-            logger.info(f"Received Interactive Button click from {sender_phone}: id='{btn_id}', title='{btn_title}' -> text='{message_text}'")
-        else:
-            logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
-            await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
-            return {"status": "ok"}
-
-        # Step 1: Employee Registration Check
-        employee = await is_employee_registered(db, sender_phone)
-        if not employee:
-            logger.warning(f"Unregistered phone number attempted access: {sender_phone}")
-            warning_msg = (
-                f"🚫 *Access Restricted*\n\n"
-                f"Your phone number (`+{sender_phone}`) is not registered as an active employee in our IT Support database.\n\n"
-                f"Please contact your IT System Administrator to register your account."
-            )
-            await meta_api.send_text_message(sender_phone, warning_msg)
-            return {"status": "access_denied"}
-
-        # Step 2: "My Tickets" Command Check
-        isMyTickets = await handle_my_tickets(db, employee, message_text)
-        if isMyTickets:
-            return {"status": "my_tickets_handled"}
-
-        # Step 3: Admin Command Check (e.g. 'resolve TKT-...')
-        isAdminCmd = await handle_admin_command(db, sender_phone, message_text)
-        if isAdminCmd:
-            return {"status": "admin_command_handled"}
-
-        # Step 4: Check Current Conversation State
-        state = await get_user_state(db, sender_phone)
-
-        # Step 5: Check Resolution Confirmation Loop
-        if state and state.current_step == "awaiting_resolution_confirmation":
-            await handle_resolution_confirmation(
-                session=db,
-                sender_phone=sender_phone,
-                message_text=message_text,
-                current_data=state.current_data or {}
-            )
-            return {"status": "resolution_confirmation_handled"}
-
-        # Step 6: Multi-Step Ticket Flow Execution (with optional image)
-        await handle_flow(
-            session=db,
-            employee=employee,
-            message_text=message_text,
-            state=state,
-            image_id=image_id
-        )
-
-        return {"status": "ok"}
-
+        asyncio.create_task(process_webhook_payload(body))
+        return {"status": "accepted"}
     except Exception as e:
-        logger.error(f"Error handling incoming Meta WhatsApp webhook: {e}", exc_info=True)
-        return {"status": "error", "detail": str(e)}
+        logger.error(f"Error receiving webhook payload: {e}")
+        return {"status": "error"}
 
 @app.get("/tickets")
 async def list_recent_tickets(db: AsyncSession = Depends(get_db)):
