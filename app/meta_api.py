@@ -107,6 +107,43 @@ class MetaWhatsAppAPI:
             fallback_msg = f"{header_text or ''}\n\n{body_text}\n\n{footer_text or ''}".strip()
             return await self.send_text_message(clean_phone, fallback_msg)
 
+    async def send_document_message(self, to_phone: str, document_url: str, filename: str, caption: str = "") -> dict:
+        """
+        Sends a PDF or Document file to WhatsApp recipient via Meta Graph API.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "document",
+            "document": {
+                "link": document_url,
+                "filename": filename,
+                "caption": caption
+            }
+        }
+
+        logger.info(f"[OUTGOING DOCUMENT -> {clean_phone}]\nFile: {filename}\nURL: {document_url}")
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(self.base_url, headers=headers, json=payload)
+                response_json = response.json()
+                if response.status_code != 200:
+                    logger.error(f"Meta Graph API Document Error ({response.status_code}): {response_json}")
+                else:
+                    logger.info(f"Meta Graph API Document Success: {response_json}")
+                return response_json
+        except Exception as e:
+            logger.error(f"Failed to send document message via Meta API: {e}")
+            return {"error": str(e)}
+
     async def send_template_message(self, to_phone: str, template_name: str, lang_code: str = "en") -> dict:
         """
         Sends an approved Meta WhatsApp Template message to the recipient phone number.
