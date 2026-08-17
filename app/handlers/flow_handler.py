@@ -371,18 +371,32 @@ async def handle_flow(
                 footer_text=footer
             )
 
-        # Notify Master Admin (Fazal) with interactive button if Master Admin is different from assigned admin
+        # Master Admin Group Notification (New Ticket Created)
+        asg_name = assigned_admin.full_name if assigned_admin else "Unassigned"
+        asg_phone = f" (+{assigned_admin.phone})" if assigned_admin else ""
+        master_group_notice = (
+            f"📢 *[MASTER GROUP ALERT] NEW TICKET CREATED* 🚨\n\n"
+            f"🎫 *Ticket ID:* `{ticket_number}`\n"
+            f"👤 *Employee:* {employee.full_name} (`+{employee.phone}`)\n"
+            f"🏢 *Location:* {loc_name} ({dept_name})\n"
+            f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
+            f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
+            f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
+            f"📝 *Description:* {description}\n\n"
+            f"👤 *Assigned Support Admin:* {asg_name}{asg_phone}"
+        )
+
         master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
         master_admins = (await session.execute(master_stmt)).scalars().all()
+        notified_phones = set()
+
+        if settings.master_group_phone:
+            await meta_api.send_text_message(settings.master_group_phone, master_group_notice)
+            notified_phones.add(settings.master_group_phone)
+
         for master in master_admins:
-            if not assigned_admin or master.phone != assigned_admin.phone:
-                master_body = f"ℹ️ *[MASTER ALERT]* New Ticket `{ticket_number}` assigned to {assigned_admin.full_name if assigned_admin else 'Unassigned'}.\n\n" + body
-                await meta_api.send_button_message(
-                    to_phone=master.phone,
-                    body_text=master_body,
-                    buttons=buttons,
-                    header_text="🚨 MASTER TICKET ALERT",
-                    footer_text="Master Admin: Tap button to resolve anytime"
-                )
+            if master.phone not in notified_phones:
+                await meta_api.send_text_message(master.phone, master_group_notice)
+                notified_phones.add(master.phone)
 
         return

@@ -69,6 +69,29 @@ async def handle_resolution_confirmation(
                 f"ℹ️ *Ticket Resolution Confirmed*\n\n"
                 f"Employee {ticket.employee.full_name} confirmed resolution for Ticket *{ticket_number}*. Ticket is now CLOSED."
             )
+
+        # Notify Master Group of Ticket Closed
+        master_group_closed = (
+            f"🎉 *[MASTER GROUP ALERT] TICKET OFFICIALLY CLOSED*\n\n"
+            f"🎫 *Ticket ID:* `{ticket_number}`\n"
+            f"👤 *Employee:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
+            f"📊 *Status:* ⚪ CLOSED (Resolution Confirmed by Employee)"
+        )
+
+        from app.config import settings
+        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
+        master_admins = (await session.execute(master_stmt)).scalars().all()
+        notified_phones = set()
+
+        if settings.master_group_phone:
+            await meta_api.send_text_message(settings.master_group_phone, master_group_closed)
+            notified_phones.add(settings.master_group_phone)
+
+        for master in master_admins:
+            if master.phone not in notified_phones:
+                await meta_api.send_text_message(master.phone, master_group_closed)
+                notified_phones.add(master.phone)
+
         return True
 
     elif choice == "2":

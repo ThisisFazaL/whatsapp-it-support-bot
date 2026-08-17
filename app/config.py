@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     meta_graph_version: str = "v19.0"
     meta_display_number: str = "+91 93282 95424"
     verify_token: str = "itsupport_meta_secret_123"
+    master_group_phone: str = "919265368695"
     
     database_url: str = "sqlite+aiosqlite:///./itsupport.db"
 

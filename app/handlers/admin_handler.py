@@ -172,6 +172,7 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             )
             await meta_api.send_text_message(employee.phone, emp_msg)
 
+        # Notify Admin
         admin_msg = (
             f"✅ *Ticket Marked as Resolved*\n\n"
             f"Ticket: *{ticket.ticket_number}*\n"
@@ -179,6 +180,29 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             f"Resolution confirmation prompt sent to employee."
         )
         await meta_api.send_text_message(sender_phone, admin_msg)
+
+        # Notify Master Group of Ticket Resolution
+        master_group_resolved = (
+            f"✅ *[MASTER GROUP ALERT] TICKET RESOLVED*\n\n"
+            f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+            f"👤 *Employee:* {employee.full_name if employee else 'N/A'}\n"
+            f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
+            f"📊 *Status:* 🔵 RESOLVED (Awaiting employee confirmation)"
+        )
+
+        from app.config import settings
+        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
+        master_admins = (await session.execute(master_stmt)).scalars().all()
+        notified_phones = set()
+
+        if settings.master_group_phone:
+            await meta_api.send_text_message(settings.master_group_phone, master_group_resolved)
+            notified_phones.add(settings.master_group_phone)
+
+        for master in master_admins:
+            if master.phone not in notified_phones:
+                await meta_api.send_text_message(master.phone, master_group_resolved)
+                notified_phones.add(master.phone)
 
         return True
 
