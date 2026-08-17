@@ -25,9 +25,9 @@ async def get_master_admins(session: AsyncSession):
     res = await session.execute(stmt)
     return res.scalars().all()
 
-async def generate_daily_master_report_text(session: AsyncSession) -> str:
+async def generate_daily_master_report_data(session: AsyncSession):
     """
-    Generates itemized daily master report text for 8:00 PM IST.
+    Generates itemized daily master report text and returns (text_summary, today_tickets, asg_map).
     Lists each and every ticket logged on that day grouped by Support Admin.
     """
     now = datetime.datetime.utcnow()
@@ -64,18 +64,20 @@ async def generate_daily_master_report_text(session: AsyncSession) -> str:
         f"------------------------------------\n"
     )
 
-    if not today_tickets:
-        return header + "\n✨ *No tickets logged today! Everything is running smoothly.*"
-
     t_ids = [t.ticket_id for t in today_tickets]
-    asg_stmt = (
-        select(TicketAssignment)
-        .options(selectinload(TicketAssignment.admin))
-        .where(TicketAssignment.ticket_id.in_(t_ids))
-    )
-    asg_res = await session.execute(asg_stmt)
-    assignments = asg_res.scalars().all()
-    asg_map = {a.ticket_id: a.admin for a in assignments}
+    asg_map = {}
+    if t_ids:
+        asg_stmt = (
+            select(TicketAssignment)
+            .options(selectinload(TicketAssignment.admin))
+            .where(TicketAssignment.ticket_id.in_(t_ids))
+        )
+        asg_res = await session.execute(asg_stmt)
+        assignments = asg_res.scalars().all()
+        asg_map = {a.ticket_id: a.admin for a in assignments}
+
+    if not today_tickets:
+        return header + "\n✨ *No tickets logged today! Everything is running smoothly.*", today_tickets, asg_map
 
     admin_groups = {}
     for t in today_tickets:
@@ -116,7 +118,8 @@ async def generate_daily_master_report_text(session: AsyncSession) -> str:
     report_body = "\n\n".join(sections)
     footer = "\n\n💡 _Automated Daily Master Executive Report delivered at 8:00 PM IST._"
     
-    return header + report_body + footer
+    text_summary = header + report_body + footer
+    return text_summary, today_tickets, asg_map
 
 async def send_daily_report_to_master(session: AsyncSession):
     """
@@ -126,16 +129,16 @@ async def send_daily_report_to_master(session: AsyncSession):
     master_phone = settings.master_admin_phone or "919265368695"
     logger.info(f"Generating and sending 8:00 PM IST Daily Master Report to Master Admin ({master_phone})...")
 
-    # 1. Send Text Report Summary
-    text_summary = await generate_daily_master_report_text(session)
+    # 1. Fetch live tickets and generate Text Report Summary
+    text_summary, today_tickets, asg_map = await generate_daily_master_report_data(session)
     await meta_api.send_text_message(master_phone, text_summary)
 
-    # 2. Generate PDF Report Document
+    # 2. Generate Dynamic PDF Report Document built 100% from Live Database Tickets
     now_str = datetime.datetime.now().strftime("%d%b%Y")
     pdf_filename = f"Daily_IT_Support_Master_Report_{now_str}.pdf"
     local_path = "Daily_IT_Support_Master_Report_Sample.pdf"
     try:
-        create_daily_report_pdf(local_path)
+        create_daily_report_pdf(local_path, today_tickets=today_tickets, asg_map=asg_map)
         pdf_url = "https://whatsapp-it-support-bot.onrender.com/daily-report.pdf"
 
         # 3. Send PDF Document Attachment via WhatsApp Meta Cloud API (Media ID Upload + Direct URL Fallback)
