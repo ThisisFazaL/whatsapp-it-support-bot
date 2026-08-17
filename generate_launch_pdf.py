@@ -5,7 +5,7 @@ try:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
     from reportlab.lib.units import inch
 except ImportError:
     import subprocess
@@ -13,10 +13,10 @@ except ImportError:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
     from reportlab.lib.units import inch
 
-def create_launch_pdf(filename="Tagoneswa_Support_Chatbot_Launch_Guide.pdf"):
+def create_launch_pdf(filename="Support_Chatbot_Launch_Guide.pdf"):
     doc = SimpleDocTemplate(
         filename,
         pagesize=letter,
@@ -76,15 +76,6 @@ def create_launch_pdf(filename="Tagoneswa_Support_Chatbot_Launch_Guide.pdf"):
         textColor=DARK_GRAY
     )
 
-    bullet_style = ParagraphStyle(
-        'BulletCustom',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=9,
-        leading=13,
-        textColor=DARK_GRAY
-    )
-
     table_header_style = ParagraphStyle(
         'TableHeader',
         parent=styles['Normal'],
@@ -106,15 +97,15 @@ def create_launch_pdf(filename="Tagoneswa_Support_Chatbot_Launch_Guide.pdf"):
     story = []
 
     # Title & Header
-    story.append(Paragraph("TAGONESWA GROUP IT & FACILITIES SUPPORT", title_style))
+    story.append(Paragraph("SUPPORT CHATBOT", title_style))
     story.append(Paragraph("OFFICIAL WHATSAPP CHATBOT LAUNCH & USER GUIDE | EFFECTIVE 17 AUGUST 2026", subtitle_style))
     story.append(HRFlowable(width="100%", thickness=2, color=NAVY, spaceAfter=15))
 
     # Executive Announcement Box
     announcement_text = """
-    <b>Dear Tagoneswa Group Team,</b><br/><br/>
+    <b>Dear Team,</b><br/><br/>
     We are pleased to announce the official launch of our automated <b>WhatsApp IT & Facilities Support Chatbot</b>, effective <b>Monday, 17th August 2026</b>.<br/>
-    All employees can now log hardware, software, network, printer, security, power, and facilities requests directly via WhatsApp 24x7. Each request is automatically routed to the designated Support Administrator for fast resolution.
+    All team members can now log hardware, software, network, printer, security, power, and facilities requests directly via WhatsApp 24x7. Each request is automatically routed to the designated Support Administrator for fast resolution.
     """
     box_table = Table([[Paragraph(announcement_text, body_style)]], colWidths=[532])
     box_table.setStyle(TableStyle([
@@ -128,7 +119,7 @@ def create_launch_pdf(filename="Tagoneswa_Support_Chatbot_Launch_Guide.pdf"):
     # Quick Access Box
     access_data = [
         [Paragraph("<b>OFFICIAL WHATSAPP SUPPORT NUMBER:</b>", table_header_style), Paragraph("<b>+91 93282 95424</b>", table_header_style)],
-        [Paragraph("<b>CONTACT NAME TO SAVE:</b>", table_body_style), Paragraph("Tagoneswa Support", table_body_style)],
+        [Paragraph("<b>CONTACT NAME TO SAVE:</b>", table_body_style), Paragraph("Support Chatbot", table_body_style)],
         [Paragraph("<b>DIRECT CHAT LINK:</b>", table_body_style), Paragraph("https://wa.me/919328295424?text=Hi", table_body_style)],
         [Paragraph("<b>AVAILABILITY:</b>", table_body_style), Paragraph("Active 24 Hours / 7 Days a Week", table_body_style)],
     ]
@@ -184,7 +175,7 @@ def create_launch_pdf(filename="Tagoneswa_Support_Chatbot_Launch_Guide.pdf"):
     story.append(Paragraph("2. How to Raise & Track Support Tickets", heading2_style))
     
     steps_data = [
-        [Paragraph("<b>STEP 1: SAVE CONTACT</b>", table_header_style), Paragraph("Save <b>+91 93282 95424</b> as <b>Tagoneswa Support</b> in your phone contacts.", table_body_style)],
+        [Paragraph("<b>STEP 1: SAVE CONTACT</b>", table_header_style), Paragraph("Save <b>+91 93282 95424</b> as <b>Support Chatbot</b> in your phone contacts.", table_body_style)],
         [Paragraph("<b>STEP 2: START CHAT</b>", table_header_style), Paragraph("Send <b>'Hi'</b> or <b>'Menu'</b> on WhatsApp. The chatbot will recognize your registered profile.", table_body_style)],
         [Paragraph("<b>STEP 3: SELECT CATEGORY</b>", table_header_style), Paragraph("Reply with the number corresponding to your Category, Subcategory, and Issue.", table_body_style)],
         [Paragraph("<b>STEP 4: ENTER DETAILS</b>", table_header_style), Paragraph("Type a brief description of the problem and optionally attach a photo/screenshot.", table_body_style)],
@@ -220,7 +211,7 @@ def create_launch_pdf(filename="Tagoneswa_Support_Chatbot_Launch_Guide.pdf"):
     story.append(roster_table)
 
     story.append(Spacer(1, 20))
-    footer_p = Paragraph("<font color='#718096'><b>Tagoneswa Group Executive & IT Operations Team</b> | Confidential Internal Document</font>", ParagraphStyle('FooterStyle', parent=styles['Normal'], alignment=1, fontSize=8))
+    footer_p = Paragraph("<font color='#718096'><b>Support Team & Executive Management</b> | Confidential Internal Document</font>", ParagraphStyle('FooterStyle', parent=styles['Normal'], alignment=1, fontSize=8))
     story.append(footer_p)
 
     doc.build(story)
