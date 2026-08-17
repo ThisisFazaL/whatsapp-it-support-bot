@@ -136,14 +136,15 @@ async def send_daily_report_to_master(session: AsyncSession):
     local_path = "Daily_IT_Support_Master_Report_Sample.pdf"
     try:
         create_daily_report_pdf(local_path)
-        pdf_url = "https://whatsapp-it-support-bot.onrender.com/download-daily-report-pdf"
+        pdf_url = "https://whatsapp-it-support-bot.onrender.com/daily-report.pdf"
 
-        # 3. Send PDF Document Attachment via WhatsApp Meta Cloud API
+        # 3. Send PDF Document Attachment via WhatsApp Meta Cloud API (Media ID Upload + Direct URL Fallback)
         res_doc = await meta_api.send_document_message(
             to_phone=master_phone,
             document_url=pdf_url,
             filename=pdf_filename,
-            caption=f"📄 *DAILY IT SUPPORT EXECUTIVE REPORT (PDF)*\n📅 Date: {datetime.datetime.now().strftime('%d %B %Y')}"
+            caption=f"📄 *DAILY IT SUPPORT EXECUTIVE REPORT (PDF)*\n📅 Date: {datetime.datetime.now().strftime('%d %B %Y')}",
+            local_file_path=local_path
         )
         logger.info(f"PDF Executive Report sent to Master Admin via WhatsApp! Result: {res_doc}")
 

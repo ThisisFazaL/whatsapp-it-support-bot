@@ -93,7 +93,7 @@ async def root():
 async def health_check():
     return {"status": "healthy", "service": "whatsapp_it_support_bot"}
 
-@app.get("/download-daily-report-pdf")
+@app.get("/daily-report.pdf")
 async def download_daily_report_pdf():
     """Serves the latest Daily Master Executive Report PDF directly for Meta WhatsApp API."""
     pdf_path = "Daily_IT_Support_Master_Report_Sample.pdf"
