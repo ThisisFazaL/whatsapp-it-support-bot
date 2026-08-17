@@ -336,35 +336,30 @@ async def handle_flow(
             f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
             f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
             f"📝 *Description:* {description}{img_notice}\n\n"
-            f"Our IT Support team has been notified and will assist you shortly!"
+            f"Our IT Support team has been notified on WhatsApp and will assist you shortly!"
         )
         await meta_api.send_text_message(phone, emp_confirmation)
 
-        # Send Enriched Alert to Category Admin
+        # Broadcast Ticket Alert to ALL Active Support Admins (First-Come-First-Served Claiming)
         img_admin_line = f"\n🖼️ *Photo Attachment ID:* `{ticket_image_id}`" if ticket_image_id else ""
         admin_alert = (
-            f"🚨 *NEW TICKET ASSIGNED*\n\n"
+            f"🚨 *NEW IT SUPPORT REQUEST* 🚨\n\n"
             f"🎫 *Ticket ID:* `{ticket_number}`\n"
             f"👤 *Employee:* {employee.full_name}\n"
-            f"📞 *Phone:* {employee.phone}\n"
-            f"🏢 *Office Location:* {loc_name}\n"
+            f"📞 *Phone:* +{employee.phone}\n"
+            f"🏢 *Location:* {loc_name}\n"
             f"🏬 *Department:* {dept_name}\n\n"
             f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
             f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
             f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
             f"📝 *Description:* {description}{img_admin_line}\n\n"
-            f"💡 *Action:* Reply `resolve {ticket_number}` once fixed."
+            f"⚡ *To Claim This Ticket:*\n"
+            f"Reply `accept {ticket_number}` (or `claim {ticket_number}`)"
         )
 
-        if assigned_admin:
-            await meta_api.send_text_message(assigned_admin.phone, admin_alert)
-
-        # Also notify Master Admin if Master Admin is different from Category Admin
-        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
-        master_admins = (await session.execute(master_stmt)).scalars().all()
-        for master in master_admins:
-            if not assigned_admin or master.phone != assigned_admin.phone:
-                master_notice = f"ℹ️ *[MASTER ALERT]* New Ticket `{ticket_number}` assigned to {assigned_admin.full_name if assigned_admin else 'Unassigned'}.\nCategory: {cat_obj.category_name if cat_obj else 'General'}\nEmployee: {employee.full_name} ({employee.phone})"
-                await meta_api.send_text_message(master.phone, master_notice)
+        all_admins_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
+        all_admins = (await session.execute(all_admins_stmt)).scalars().all()
+        for adm in all_admins:
+            await meta_api.send_text_message(adm.phone, admin_alert)
 
         return
