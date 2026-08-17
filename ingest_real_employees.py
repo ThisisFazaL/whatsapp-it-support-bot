@@ -71,7 +71,8 @@ Milcah Munashe Chidemo,263788068560,Accounts,Tagoneswa investments,110 Coventry 
 Millcent Mkhwananzi,263718793307,Accounts,Tagoneswa Investments,110 Coventry Road Workington
 Vigilance Bangezhano,263780100288,Accounts,Kreckle Foods,6 Austin Road Workington
 Munashe Mangirandi,263787348969,Accounts,Krecklefoods,6 Austin Road Workington
-Imraan Jooma,263781207175,Sales,"Krecklefoods,Lightgroove and Tagoneswa investments",110 Coventry Road Workington"""
+Imraan Jooma,263781207175,Sales,"Krecklefoods,Lightgroove and Tagoneswa investments",110 Coventry Road Workington
+Zayn,263713866223,General,"Tagoneswa Investments, Kreckle",110 Coventry Road Workington"""
 
 async def ingest_real_company_directory():
     logger.info("Starting complete database reset and real employee ingestion...")
