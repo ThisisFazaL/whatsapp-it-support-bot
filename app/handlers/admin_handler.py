@@ -1,45 +1,191 @@
 import re
 import datetime
+import asyncio
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import Ticket, SupportAdmin, Employee, TicketStatus, TicketAssignment
-from app.state_manager import is_admin, set_user_state
+from app.state_manager import is_admin, set_user_state, clear_user_state
 from app.meta_api import meta_api
+
+STATUS_NAMES = {
+    1: "🟡 Open",
+    2: "🔵 In Progress",
+    3: "🟢 Resolved",
+    4: "⚪ Closed"
+}
 
 async def handle_admin_command(session: AsyncSession, sender_phone: str, message_text: str) -> bool:
     """
-    Checks if message is an admin command (e.g., 'accept TKT-20260817-00001' or 'resolve TKT-20260817-00001').
+    Checks if message is an admin command (greeting, menu button, accept, or resolve command).
     Returns True if handled, False otherwise.
     """
     text_strip = message_text.strip()
+    text_lower = text_strip.lower()
     
     # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-...", "claim 1"
     claim_match = re.match(r"^(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
     # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "resolve 1"
     resolve_match = re.match(r"^resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
 
-    if not claim_match and not resolve_match:
+    is_greeting = text_lower in ("hi", "hello", "menu", "admin", "start", "help", "hey")
+    is_view_assigned = text_lower in ("cmd_my_assigned_tickets", "my assigned tickets", "assigned tickets", "view tickets", "my tickets")
+    is_summary = text_lower in ("cmd_admin_summary_report", "summary report", "summary", "my summary")
+    is_raise_cmd = text_lower in ("cmd_raise_ticket", "raise ticket")
+
+    if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
         return False
 
-    # Verify if sender is an executive observer (observers cannot resolve tickets)
+    # Check if sender is an executive observer
     from app.config import settings
     if sender_phone in settings.executive_observer_phones and sender_phone != settings.master_admin_phone:
-        await meta_api.send_text_message(
-            sender_phone,
-            "⚠️ *Access Denied*: You are registered as an Executive Observer. Only assigned Support Admins or Master Admin can resolve tickets."
+        if claim_match or resolve_match:
+            await meta_api.send_text_message(
+                sender_phone,
+                "⚠️ *Access Denied*: You are registered as an Executive Observer. Only assigned Support Admins or Master Admin can resolve tickets."
+            )
+            return True
+
+    # Check if sender is an active support admin
+    admin = await is_admin(session, sender_phone)
+    if not admin:
+        return False  # Pass through to standard employee logic if not an admin
+
+    # ----------------------------------------------------
+    # 1. HANDLE ADMIN GREETING / MENU ("Hi", "Hello", "Menu")
+    # ----------------------------------------------------
+    if is_greeting:
+        header = "🛠️ IT SUPPORT ADMIN PORTAL"
+        body = (
+            f"Hello *{admin.full_name}*! 👋\n\n"
+            f"Welcome to the Tagoneswa IT Support Admin Dashboard.\n\n"
+            f"Please select an option below to manage your tickets:"
+        )
+        footer = "Tap a button to proceed"
+        buttons = [
+            {
+                "id": "cmd_my_assigned_tickets",
+                "title": "📋 My Assigned Tickets"
+            },
+            {
+                "id": "cmd_admin_summary_report",
+                "title": "📊 Summary Report"
+            },
+            {
+                "id": "cmd_raise_ticket",
+                "title": "➕ Raise IT Ticket"
+            }
+        ]
+        await meta_api.send_button_message(
+            to_phone=sender_phone,
+            body_text=body,
+            buttons=buttons,
+            header_text=header,
+            footer_text=footer
         )
         return True
 
-    # Verify if sender is an active support admin
-    admin = await is_admin(session, sender_phone)
-    if not admin:
-        await meta_api.send_text_message(
-            sender_phone,
-            "⚠️ *Access Denied*: You are not registered as an active IT Support Admin."
+    # ----------------------------------------------------
+    # 2. HANDLE "MY ASSIGNED TICKETS" BUTTON CLICK
+    # ----------------------------------------------------
+    if is_view_assigned:
+        asg_stmt = (
+            select(TicketAssignment)
+            .options(
+                selectinload(TicketAssignment.ticket).selectinload(Ticket.employee),
+                selectinload(TicketAssignment.ticket).selectinload(Ticket.category),
+                selectinload(TicketAssignment.ticket).selectinload(Ticket.subcategory),
+                selectinload(TicketAssignment.ticket).selectinload(Ticket.issue_type),
+                selectinload(TicketAssignment.ticket).selectinload(Ticket.priority)
+            )
+            .where(TicketAssignment.admin_id == admin.admin_id)
         )
+        asgs = (await session.execute(asg_stmt)).scalars().all()
+        tickets = [a.ticket for a in asgs if a.ticket and a.ticket.status_id in (1, 2, 3)]
+
+        if not tickets:
+            no_t_msg = f"📋 *IT SUPPORT TICKETS ASSIGNED TO YOU*\n\nHello {admin.full_name},\nYou currently have *0 active tickets* assigned to you. Great job!"
+            await meta_api.send_text_message(sender_phone, no_t_msg)
+            return True
+
+        summary_header = f"📋 *IT SUPPORT TICKETS ASSIGNED TO YOU ({len(tickets)} Active)*\n\nHello {admin.full_name},\nHere are your current active IT support tickets:"
+        await meta_api.send_text_message(sender_phone, summary_header)
+        await asyncio.sleep(0.5)
+
+        for t in tickets:
+            emp = t.employee
+            emp_name = emp.full_name if emp else "Unknown"
+            emp_phone = emp.phone if emp else ""
+            cat_name = t.category.category_name if t.category else "N/A"
+            sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
+            issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
+            p_name = t.priority.priority_name if t.priority else "Medium"
+            status_str = STATUS_NAMES.get(t.status_id, "🟡 Open")
+
+            img_line = f"\n🖼️ *Photo Attachment ID:* `{t.image_id}`" if t.image_id else ""
+
+            header = f"🎫 TICKET {t.ticket_number}"
+            body = (
+                f"👤 *Employee:* {emp_name} (`+{emp_phone}`)\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"🚨 *Priority:* {p_name} | Status: *{status_str}*\n"
+                f"📝 *Description:* {t.description}{img_line}"
+            )
+            footer = "Tap button below once resolved"
+            buttons = [
+                {
+                    "id": f"resolve_{t.ticket_number}",
+                    "title": "✅ Mark Resolved"
+                }
+            ]
+            await meta_api.send_button_message(
+                to_phone=sender_phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer
+            )
+            await asyncio.sleep(0.8)
         return True
+
+    # ----------------------------------------------------
+    # 3. HANDLE "SUMMARY REPORT" BUTTON CLICK
+    # ----------------------------------------------------
+    if is_summary:
+        asg_stmt = (
+            select(TicketAssignment)
+            .options(selectinload(TicketAssignment.ticket))
+            .where(TicketAssignment.admin_id == admin.admin_id)
+        )
+        asgs = (await session.execute(asg_stmt)).scalars().all()
+        tickets = [a.ticket for a in asgs if a.ticket]
+
+        total = len(tickets)
+        resolved = sum(1 for t in tickets if t.status_id in (3, 4))
+        pending = sum(1 for t in tickets if t.status_id in (1, 2))
+
+        report_msg = (
+            f"📊 *MY SUPPORT PERFORMANCE SUMMARY*\n\n"
+            f"👤 Admin: *{admin.full_name}*\n"
+            f"------------------------------------\n"
+            f"• Total Assigned Tickets: *{total}*\n"
+            f"• 🟢 Resolved / Closed: *{resolved}*\n"
+            f"• 🟡 Pending Action: *{pending}*\n"
+            f"------------------------------------\n"
+            f"💡 Reply `Hi` anytime to access this admin portal menu."
+        )
+        await meta_api.send_text_message(sender_phone, report_msg)
+        return True
+
+    # ----------------------------------------------------
+    # 4. HANDLE "RAISE TICKET" BUTTON CLICK
+    # ----------------------------------------------------
+    if is_raise_cmd:
+        await clear_user_state(session, sender_phone)
+        await meta_api.send_text_message(sender_phone, "🆕 Starting new ticket creation flow...")
+        return False # Fallthrough to flow handler
 
     raw_ticket_arg = (claim_match or resolve_match).group(1).upper()
     
@@ -67,7 +213,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     # HANDLE ACCEPT / CLAIM COMMAND
     # ----------------------------------------------------
     if claim_match:
-        # Check current assignment
         asg_stmt = (
             select(TicketAssignment)
             .options(selectinload(TicketAssignment.admin))
@@ -76,7 +221,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         asg_res = await session.execute(asg_stmt)
         existing_assignment = asg_res.scalars().first()
 
-        # If ticket is already claimed by someone else and status is In Progress (2), Resolved (3), or Closed (4)
         if ticket.status_id in (2, 3, 4) and existing_assignment and existing_assignment.admin_id != admin.admin_id:
             claimed_by = existing_assignment.admin.full_name if existing_assignment.admin else "Another Admin"
             claimed_phone = f" (+{existing_assignment.admin.phone})" if existing_assignment.admin else ""
@@ -94,7 +238,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             return True
 
         # Claim the ticket!
-        # Clear old assignment if any
         await session.execute(delete(TicketAssignment).where(TicketAssignment.ticket_id == ticket.ticket_id))
         
         new_assignment = TicketAssignment(
@@ -103,12 +246,10 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
         session.add(new_assignment)
         
-        # Change status to In Progress (status_id = 2)
         ticket.status_id = 2
         ticket.updated_at = datetime.datetime.utcnow()
         await session.commit()
 
-        # 1. Confirm to Claiming Admin
         await meta_api.send_text_message(
             sender_phone,
             f"✅ *Ticket Claimed Successfully!*\n\n"
@@ -118,7 +259,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             f"💡 *Action:* Reply `resolve {ticket.ticket_number}` once resolved."
         )
 
-        # 2. Notify Employee on WhatsApp
         if ticket.employee:
             emp_msg = (
                 f"🔔 *IT Support Ticket Update*\n\n"
@@ -128,7 +268,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             )
             await meta_api.send_text_message(ticket.employee.phone, emp_msg)
 
-        # 3. Notify Other Active Admins that ticket is claimed
         other_admins_stmt = select(SupportAdmin).where(SupportAdmin.active == True, SupportAdmin.admin_id != admin.admin_id)
         other_admins = (await session.execute(other_admins_stmt)).scalars().all()
         for o_admin in other_admins:
@@ -149,7 +288,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             )
             return True
 
-        # Ensure ticket assignment is logged to this admin if resolving directly
         asg_chk = select(TicketAssignment).where(TicketAssignment.ticket_id == ticket.ticket_id)
         current_asg = (await session.execute(asg_chk)).scalars().first()
         if not current_asg:
@@ -159,7 +297,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         ticket.updated_at = datetime.datetime.utcnow()
         await session.commit()
 
-        # Update Employee state to awaiting_resolution_confirmation & send interactive buttons
         if ticket.employee:
             await set_user_state(
                 session=session,
@@ -172,7 +309,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 flow_name="resolution_confirmation"
             )
 
-            # Send Interactive WhatsApp Buttons to Employee
             emp_header = "🔔 TICKET RESOLUTION CONFIRMATION"
             emp_body = (
                 f"Your support ticket *{ticket.ticket_number}* has been marked as **RESOLVED** by IT Support Admin ({admin.full_name}).\n\n"
@@ -197,7 +333,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 footer_text=emp_footer
             )
 
-        # Notify Admin
         admin_msg = (
             f"✅ *Ticket Marked as Resolved*\n\n"
             f"Ticket: *{ticket.ticket_number}*\n"
@@ -206,22 +341,20 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
         await meta_api.send_text_message(sender_phone, admin_msg)
 
-        # Notify Master Admin Fazal
         if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
             master_resolved = (
                 f"✅ *[MASTER ALERT] TICKET RESOLVED*\n\n"
                 f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
-                f"👤 *Employee:* {employee.full_name if employee else 'N/A'}\n"
+                f"👤 *Employee:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
                 f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
                 f"📊 *Status:* 🔵 RESOLVED"
             )
             await meta_api.send_text_message(settings.master_admin_phone, master_resolved)
 
-        # Notify Executive Observers of Ticket Resolution
         observer_resolved = (
             f"✅ *[EXECUTIVE OBSERVER ALERT] TICKET RESOLVED*\n\n"
             f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
-            f"👤 *Employee:* {employee.full_name if employee else 'N/A'}\n"
+            f"👤 *Employee:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
             f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
             f"📊 *Status:* 🔵 RESOLVED (Awaiting employee confirmation)"
         )
