@@ -340,8 +340,7 @@ async def handle_flow(
         )
         await meta_api.send_text_message(phone, emp_confirmation)
 
-        # Send Interactive Alert with "Mark Resolved" Button to Assigned Support Admin
-        img_admin_line = f"\n🖼️ *Photo Attachment ID:* `{ticket_image_id}`" if ticket_image_id else ""
+        # Send Interactive Alert with Full Photo Header & "Mark Resolved" Button to Assigned Support Admin
         header = "🚨 NEW IT SUPPORT TICKET ASSIGNED"
         body = (
             f"🎫 *Ticket ID:* `{ticket_number}`\n"
@@ -352,7 +351,7 @@ async def handle_flow(
             f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
             f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
             f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
-            f"📝 *Description:* {description}{img_admin_line}"
+            f"📝 *Description:* {description}"
         )
         footer = "Tap button below once fixed"
         buttons = [
@@ -368,10 +367,11 @@ async def handle_flow(
                 body_text=body,
                 buttons=buttons,
                 header_text=header,
-                footer_text=footer
+                footer_text=footer,
+                image_id=ticket_image_id
             )
 
-        # Master Admin Fazal (Master Alert with Interactive Resolve Button)
+        # Master Admin Fazal (Master Alert with Full Photo Header & Interactive Resolve Button)
         if settings.master_admin_phone and (not assigned_admin or assigned_admin.phone != settings.master_admin_phone):
             master_body = f"ℹ️ *[MASTER ALERT]* New Ticket `{ticket_number}` assigned to {assigned_admin.full_name if assigned_admin else 'Unassigned'}.\n\n" + body
             await meta_api.send_button_message(
@@ -379,10 +379,11 @@ async def handle_flow(
                 body_text=master_body,
                 buttons=buttons,
                 header_text="🚨 MASTER TICKET ALERT",
-                footer_text="Master Admin: Tap button to resolve anytime"
+                footer_text="Master Admin: Tap button to resolve anytime",
+                image_id=ticket_image_id
             )
 
-        # Broadcast Executive Observer Alerts to 5 Executives (NO resolve button)
+        # Broadcast Executive Observer Alerts to 5 Executives (with photo if present)
         asg_name = assigned_admin.full_name if assigned_admin else "Unassigned"
         asg_phone = f" (+{assigned_admin.phone})" if assigned_admin else ""
         observer_notice = (
@@ -399,6 +400,9 @@ async def handle_flow(
 
         for obs_phone in settings.executive_observer_phones:
             if obs_phone != settings.master_admin_phone and (not assigned_admin or obs_phone != assigned_admin.phone):
-                await meta_api.send_text_message(obs_phone, observer_notice)
+                if ticket_image_id:
+                    await meta_api.send_image_message(obs_phone, ticket_image_id, caption=observer_notice)
+                else:
+                    await meta_api.send_text_message(obs_phone, observer_notice)
 
         return

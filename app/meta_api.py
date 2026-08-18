@@ -101,9 +101,27 @@ class MetaWhatsAppAPI:
         logger.info(f"[OUTGOING WHATSAPP -> {clean_phone}]\n{text}\n----------------------------------")
         return await self._post_with_retry(payload)
 
-    async def send_button_message(self, to_phone: str, body_text: str, buttons: list, header_text: str = None, footer_text: str = None) -> dict:
+    async def send_image_message(self, to_phone: str, image_id: str, caption: str = "") -> dict:
         """
-        Sends interactive quick reply buttons to a WhatsApp recipient via Meta Graph API with fallback.
+        Sends a full high-res WhatsApp photo attachment to the recipient via Meta Graph API.
+        """
+        clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "image",
+            "image": {
+                "id": image_id,
+                "caption": caption
+            }
+        }
+        logger.info(f"[OUTGOING FULL PHOTO ATTACHMENT -> {clean_phone}]\nImage ID: {image_id}\nCaption: {caption}")
+        return await self._post_with_retry(payload)
+
+    async def send_button_message(self, to_phone: str, body_text: str, buttons: list, header_text: str = None, footer_text: str = None, image_id: str = None) -> dict:
+        """
+        Sends interactive quick reply buttons (with optional full photo attachment header) to a WhatsApp recipient via Meta Graph API.
         """
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
         interactive_dict = {
@@ -121,8 +139,17 @@ class MetaWhatsAppAPI:
                 ]
             }
         }
-        if header_text:
+
+        if image_id:
+            interactive_dict["header"] = {
+                "type": "image",
+                "image": {
+                    "id": image_id
+                }
+            }
+        elif header_text:
             interactive_dict["header"] = {"type": "text", "text": header_text[:60]}
+
         if footer_text:
             interactive_dict["footer"] = {"text": footer_text[:60]}
 
@@ -134,10 +161,13 @@ class MetaWhatsAppAPI:
             "interactive": interactive_dict
         }
 
-        logger.info(f"[OUTGOING INTERACTIVE BUTTONS -> {clean_phone}]\n{header_text}\n{body_text}")
+        logger.info(f"[OUTGOING INTERACTIVE BUTTONS (PHOTO HEADER: {image_id}) -> {clean_phone}]\n{header_text}\n{body_text}")
         res = await self._post_with_retry(payload)
 
+        # Fallback to plain text / image message if interactive button fails
         if "error" in res or res.get("error"):
+            if image_id:
+                await self.send_image_message(clean_phone, image_id, caption=body_text)
             fallback_msg = f"{header_text or ''}\n\n{body_text}\n\n{footer_text or ''}".strip()
             return await self.send_text_message(clean_phone, fallback_msg)
         return res
@@ -148,7 +178,6 @@ class MetaWhatsAppAPI:
         """
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
         
-        # Primary Attempt: Direct Meta Media ID Upload
         if local_file_path and os.path.exists(local_file_path):
             media_id = await self.upload_media(local_file_path, mime_type="application/pdf")
             if media_id:
@@ -168,7 +197,6 @@ class MetaWhatsAppAPI:
                 if "error" not in res and not res.get("error"):
                     return res
 
-        # Secondary Attempt: Direct URL
         url_payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",

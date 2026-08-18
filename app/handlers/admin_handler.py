@@ -123,15 +123,13 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             p_name = t.priority.priority_name if t.priority else "Medium"
             status_str = STATUS_NAMES.get(t.status_id, "🟡 Open")
 
-            img_line = f"\n🖼️ *Photo Attachment ID:* `{t.image_id}`" if t.image_id else ""
-
             header = f"🎫 TICKET {t.ticket_number}"
             body = (
                 f"👤 *Employee:* {emp_name} (`+{emp_phone}`)\n"
                 f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                 f"⚙️ *Issue:* {issue_name}\n"
                 f"🚨 *Priority:* {p_name} | Status: *{status_str}*\n"
-                f"📝 *Description:* {t.description}{img_line}"
+                f"📝 *Description:* {t.description}"
             )
             footer = "Tap button below once resolved"
             buttons = [
@@ -145,7 +143,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 body_text=body,
                 buttons=buttons,
                 header_text=header,
-                footer_text=footer
+                footer_text=footer,
+                image_id=t.image_id
             )
             await asyncio.sleep(0.8)
         return True
