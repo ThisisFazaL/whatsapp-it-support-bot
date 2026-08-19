@@ -29,10 +29,10 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "resolve 1"
     resolve_match = re.match(r"^resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
 
-    is_greeting = text_lower in ("hi", "hello", "menu", "admin", "start", "help", "hey")
-    is_view_assigned = text_lower in ("cmd_my_assigned_tickets", "my assigned tickets", "assigned tickets", "view tickets", "my tickets")
-    is_summary = text_lower in ("cmd_admin_summary_report", "summary report", "summary", "my summary")
-    is_raise_cmd = text_lower in ("cmd_raise_ticket", "raise ticket")
+    is_view_assigned = any(k in text_lower for k in ("cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets"))
+    is_summary = any(k in text_lower for k in ("cmd_admin_summary_report", "summary", "report"))
+    is_raise_cmd = any(k in text_lower for k in ("cmd_raise_ticket", "raise ticket", "raise it ticket"))
+    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and any(k in text_lower for k in ("hi", "hello", "menu", "admin", "start", "help", "hey"))
 
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
         return False
@@ -51,6 +51,9 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     admin = await is_admin(session, sender_phone)
     if not admin:
         return False  # Pass through to standard employee logic if not an admin
+
+    # Clear any stuck conversation state (e.g. awaiting_category) when an admin uses menu/button commands
+    await clear_user_state(session, sender_phone)
 
     # ----------------------------------------------------
     # 1. HANDLE ADMIN GREETING / MENU ("Hi", "Hello", "Menu")

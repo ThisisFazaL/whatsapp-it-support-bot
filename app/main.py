@@ -172,7 +172,8 @@ async def process_webhook_payload(body: dict):
                 btn_reply = interactive_obj.get("button_reply", {})
                 btn_id = btn_reply.get("id", "")
                 btn_title = btn_reply.get("title", "")
-                message_text = btn_id.replace("_", " ") if btn_id else btn_title
+                # Keep btn_id intact if present (e.g. "cmd_my_assigned_tickets" or "resolve_TKT-...")
+                message_text = btn_id if btn_id else btn_title
                 logger.info(f"Received Interactive Button click from {sender_phone}: id='{btn_id}', title='{btn_title}' -> text='{message_text}'")
             else:
                 logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
