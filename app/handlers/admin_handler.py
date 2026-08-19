@@ -194,7 +194,12 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     # Flexible ticket search: full "TKT-YYYYMMDD-00001" or partial number/ID "00001" or "1"
     stmt = (
         select(Ticket)
-        .options(selectinload(Ticket.employee))
+        .options(
+            selectinload(Ticket.employee),
+            selectinload(Ticket.category),
+            selectinload(Ticket.subcategory),
+            selectinload(Ticket.issue_type)
+        )
         .where(
             (Ticket.ticket_number == raw_ticket_arg) |
             (Ticket.ticket_number.endswith(f"-{raw_ticket_arg.zfill(5)}")) |
@@ -311,9 +316,16 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 flow_name="resolution_confirmation"
             )
 
+            cat_name = ticket.category.category_name if ticket.category else "N/A"
+            sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
+            issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
+
             emp_header = "🔔 TICKET RESOLUTION CONFIRMATION"
             emp_body = (
                 f"Your support ticket *{ticket.ticket_number}* has been marked as **RESOLVED** by IT Support Admin ({admin.full_name}).\n\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"📝 *Description:* {ticket.description}\n\n"
                 f"Please confirm if your issue has been completely fixed."
             )
             emp_footer = "Tap a button below to respond"
@@ -332,7 +344,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 body_text=emp_body,
                 buttons=emp_buttons,
                 header_text=emp_header,
-                footer_text=emp_footer
+                footer_text=emp_footer,
+                image_id=ticket.image_id
             )
 
         admin_msg = (
