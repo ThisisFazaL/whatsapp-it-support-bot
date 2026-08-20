@@ -17,7 +17,6 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     """
     Returns complete live database ticket metrics and 100% full records of all historical tickets.
     """
-    # Fetch all tickets ordered by newest first
     stmt = (
         select(Ticket)
         .options(
@@ -34,7 +33,6 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     res = await db.execute(stmt)
     tickets = res.scalars().all()
 
-    # Fetch all assignments
     asg_stmt = (
         select(TicketAssignment)
         .options(selectinload(TicketAssignment.admin))
@@ -122,7 +120,7 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
 @router.get("/dashboard", response_class=HTMLResponse)
 async def render_dashboard_page():
     """
-    Renders a modern, real-time Live Web Dashboard UI for Executive Ticket Tracking.
+    Renders an ultra-clean, professional white-themed Live Web Dashboard UI for Executive Ticket Tracking.
     """
     html_content = """<!DOCTYPE html>
 <html lang="en">
@@ -135,48 +133,49 @@ async def render_dashboard_page():
     <!-- FontAwesome CDN -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .glass-header { background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(12px); }
-        .badge-open { background-color: #FEF3C7; color: #D97706; border: 1px solid #FCD34D; }
-        .badge-progress { background-color: #DBEAFE; color: #2563EB; border: 1px solid #93C5FD; }
-        .badge-resolved { background-color: #D1FAE5; color: #059669; border: 1px solid #6EE7B7; }
-        .badge-closed { background-color: #F3F4F6; color: #4B5563; border: 1px solid #E5E7EB; }
-        .badge-urgent { background-color: #FEE2E2; color: #DC2626; border: 1px solid #FCA5A5; font-weight: 700; }
-        .badge-high { background-color: #FFEDD5; color: #EA580C; border: 1px solid #FDBA74; }
-        .badge-medium { background-color: #FEF08A; color: #CA8A04; border: 1px solid #FDE047; }
-        .badge-low { background-color: #E0E7FF; color: #4338CA; border: 1px solid #A5B4FC; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8FAFC; color: #0F172A; }
+        
+        .badge-open { background-color: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
+        .badge-progress { background-color: #EFF6FF; color: #1D4ED8; border: 1px solid #BFDBFE; }
+        .badge-resolved { background-color: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; }
+        .badge-closed { background-color: #F1F5F9; color: #475569; border: 1px solid #E2E8F0; }
+        
+        .badge-urgent { background-color: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA; font-weight: 700; }
+        .badge-high { background-color: #FFEDD5; color: #C2410C; border: 1px solid #FDBA74; }
+        .badge-medium { background-color: #FEF9C3; color: #A16207; border: 1px solid #FDE047; }
+        .badge-low { background-color: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; }
     </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen">
+<body class="bg-slate-50 text-slate-900 min-h-screen">
 
-    <!-- Top Navigation Header -->
-    <header class="sticky top-0 z-40 glass-header border-b border-slate-800">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <!-- Clean Header Navbar -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div class="flex items-center space-x-3">
-                <div class="bg-blue-600 text-white p-2.5 rounded-xl shadow-lg shadow-blue-500/30">
+                <div class="bg-blue-600 text-white p-2.5 rounded-xl shadow-md shadow-blue-500/20">
                     <i class="fa-solid fa-headset text-xl"></i>
                 </div>
                 <div>
-                    <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                    <h1 class="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
                         TAGONESWA IT SUPPORT
-                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                             Live System Operational
                         </span>
                     </h1>
-                    <p class="text-xs text-slate-400">Real-Time Ticket Tracking & Executive Analytics Portal</p>
+                    <p class="text-xs text-slate-500">Real-Time Ticket Tracking & Executive Analytics Portal</p>
                 </div>
             </div>
             
             <div class="flex items-center space-x-3">
-                <button onclick="fetchDashboardData()" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
-                    <i class="fa-solid fa-arrows-rotate" id="refresh-icon"></i>
-                    <span>Refresh Now</span>
+                <button onclick="fetchDashboardData()" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shadow-sm transition">
+                    <i class="fa-solid fa-arrows-rotate text-blue-600" id="refresh-icon"></i>
+                    <span>Refresh Data</span>
                 </button>
-                <div class="text-xs text-slate-400 hidden sm:block text-right">
-                    <div>Last Updated: <span id="last-updated-time" class="font-mono text-slate-200">--:--:--</span></div>
-                    <div class="text-slate-500">Auto-Refreshes every 15s</div>
+                <div class="text-xs text-slate-500 hidden sm:block text-right border-l border-slate-200 pl-4">
+                    <div>Last Updated: <span id="last-updated-time" class="font-mono font-semibold text-slate-800">--:--:--</span></div>
+                    <div class="text-slate-400">Auto-refreshes every 15s</div>
                 </div>
             </div>
         </div>
@@ -185,95 +184,94 @@ async def render_dashboard_page():
     <!-- Main Container -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
-        <!-- Executive KPI Metrics Grid -->
+        <!-- Executive Summary KPI Cards -->
         <div class="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-6">
-            <!-- Total Tickets -->
-            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden group hover:border-slate-700 transition">
+            <!-- Total All-Time -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Total All-Time</span>
-                    <div class="p-2 bg-blue-500/10 text-blue-400 rounded-lg"><i class="fa-solid fa-ticket"></i></div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Total All-Time</span>
+                    <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-ticket text-lg"></i></div>
                 </div>
-                <div class="mt-4 flex items-baseline">
-                    <span class="text-3xl font-extrabold text-white" id="stat-total">0</span>
-                    <span class="ml-2 text-xs text-slate-400">tickets</span>
+                <div class="mt-3 flex items-baseline">
+                    <span class="text-3xl font-black text-slate-900" id="stat-total">0</span>
+                    <span class="ml-2 text-xs text-slate-500">tickets</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-500">Complete system records</div>
+                <div class="mt-2 text-xs text-slate-400">Complete database records</div>
             </div>
 
             <!-- Pending Action -->
-            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden group hover:border-amber-500/40 transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-amber-400">Pending Action</span>
-                    <div class="p-2 bg-amber-500/10 text-amber-400 rounded-lg"><i class="fa-solid fa-clock-rotate-left"></i></div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-amber-600">Pending Action</span>
+                    <div class="p-2 bg-amber-50 text-amber-600 rounded-lg"><i class="fa-solid fa-clock-rotate-left text-lg"></i></div>
                 </div>
-                <div class="mt-4 flex items-baseline">
-                    <span class="text-3xl font-extrabold text-amber-400" id="stat-pending">0</span>
-                    <span class="ml-2 text-xs text-slate-400">active</span>
+                <div class="mt-3 flex items-baseline">
+                    <span class="text-3xl font-black text-amber-600" id="stat-pending">0</span>
+                    <span class="ml-2 text-xs text-slate-500">active</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Open: <strong id="stat-open" class="text-slate-200">0</strong></span>
-                    <span>In Progress: <strong id="stat-progress" class="text-slate-200">0</strong></span>
+                <div class="mt-2 text-xs text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
+                    <span>Open: <strong id="stat-open" class="text-slate-800">0</strong></span>
+                    <span>In Progress: <strong id="stat-progress" class="text-slate-800">0</strong></span>
                 </div>
             </div>
 
             <!-- Resolved / Completed -->
-            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden group hover:border-emerald-500/40 transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-emerald-400">Resolved / Closed</span>
-                    <div class="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg"><i class="fa-solid fa-circle-check"></i></div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-emerald-600">Resolved / Closed</span>
+                    <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><i class="fa-solid fa-circle-check text-lg"></i></div>
                 </div>
-                <div class="mt-4 flex items-baseline">
-                    <span class="text-3xl font-extrabold text-emerald-400" id="stat-completed">0</span>
-                    <span class="ml-2 text-xs text-slate-400">fixed</span>
+                <div class="mt-3 flex items-baseline">
+                    <span class="text-3xl font-black text-emerald-600" id="stat-completed">0</span>
+                    <span class="ml-2 text-xs text-slate-500">fixed</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-400 flex items-center justify-between">
-                    <span>Resolved: <strong id="stat-resolved" class="text-slate-200">0</strong></span>
-                    <span>Closed: <strong id="stat-closed" class="text-slate-200">0</strong></span>
+                <div class="mt-2 text-xs text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
+                    <span>Resolved: <strong id="stat-resolved" class="text-slate-800">0</strong></span>
+                    <span>Closed: <strong id="stat-closed" class="text-slate-800">0</strong></span>
                 </div>
             </div>
 
             <!-- Today's New -->
-            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden group hover:border-purple-500/40 transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-purple-400">Today's New</span>
-                    <div class="p-2 bg-purple-500/10 text-purple-400 rounded-lg"><i class="fa-solid fa-calendar-day"></i></div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-purple-600">Today's New</span>
+                    <div class="p-2 bg-purple-50 text-purple-600 rounded-lg"><i class="fa-solid fa-calendar-day text-lg"></i></div>
                 </div>
-                <div class="mt-4 flex items-baseline">
-                    <span class="text-3xl font-extrabold text-purple-400" id="stat-today">0</span>
-                    <span class="ml-2 text-xs text-slate-400">today</span>
+                <div class="mt-3 flex items-baseline">
+                    <span class="text-3xl font-black text-purple-600" id="stat-today">0</span>
+                    <span class="ml-2 text-xs text-slate-500">today</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-500">Created in last 24h</div>
+                <div class="mt-2 text-xs text-slate-400">Created in last 24 hours</div>
             </div>
 
             <!-- Resolution Rate -->
-            <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden group hover:border-blue-500/40 transition col-span-2 sm:col-span-1">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition col-span-2 sm:col-span-1">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-semibold uppercase tracking-wider text-blue-400">Resolution Rate</span>
-                    <div class="p-2 bg-blue-500/10 text-blue-400 rounded-lg"><i class="fa-solid fa-chart-pie"></i></div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Completion Rate</span>
+                    <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-chart-pie text-lg"></i></div>
                 </div>
-                <div class="mt-4 flex items-baseline">
-                    <span class="text-3xl font-extrabold text-blue-400" id="stat-rate">0%</span>
+                <div class="mt-3 flex items-baseline">
+                    <span class="text-3xl font-black text-blue-600" id="stat-rate">0%</span>
                 </div>
-                <div class="w-full bg-slate-800 h-2 rounded-full mt-3 overflow-hidden">
-                    <div id="rate-bar" class="bg-blue-500 h-full transition-all duration-500" style="width: 0%"></div>
+                <div class="w-full bg-slate-100 h-2 rounded-full mt-3 overflow-hidden">
+                    <div id="rate-bar" class="bg-blue-600 h-full transition-all duration-500" style="width: 0%"></div>
                 </div>
             </div>
         </div>
 
-        <!-- Controls, Filters & Search Header -->
-        <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+        <!-- Search & Filter Controls -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
             <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <!-- Search Input -->
                 <div class="relative flex-1">
-                    <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                    <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
                     <input type="text" id="search-input" onkeyup="filterTickets()" placeholder="Search by Ticket #, Employee Name, Phone, Category, Issue description..." 
-                           class="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition">
+                           class="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition">
                 </div>
 
-                <!-- Filter Controls -->
+                <!-- Filters -->
                 <div class="flex flex-wrap items-center gap-3">
-                    <!-- Status Filter -->
-                    <select id="filter-status" onchange="filterTickets()" class="bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-blue-500">
+                    <select id="filter-status" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
                         <option value="ALL">All Statuses</option>
                         <option value="Open">🟡 Open</option>
                         <option value="In Progress">🔵 In Progress</option>
@@ -281,8 +279,7 @@ async def render_dashboard_page():
                         <option value="Closed">⚪ Closed</option>
                     </select>
 
-                    <!-- Priority Filter -->
-                    <select id="filter-priority" onchange="filterTickets()" class="bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-blue-500">
+                    <select id="filter-priority" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
                         <option value="ALL">All Priorities</option>
                         <option value="Urgent">🔥 Urgent</option>
                         <option value="High">🚨 High</option>
@@ -293,36 +290,35 @@ async def render_dashboard_page():
             </div>
         </div>
 
-        <!-- Historical Ticket Records Table Card -->
-        <div class="bg-slate-900/80 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
-            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900">
-                <h3 class="text-base font-semibold text-white flex items-center gap-2">
-                    <i class="fa-solid fa-list-check text-blue-400"></i>
-                    All Historical Ticket Records
-                    <span class="text-xs text-slate-400 font-normal">(Showing <span id="visible-count">0</span> records)</span>
+        <!-- Historical Ticket Table -->
+        <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
+                <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                    <i class="fa-solid fa-list-check text-blue-600"></i>
+                    Historical Ticket Records
+                    <span class="text-xs text-slate-500 font-normal capitalize">(Showing <span id="visible-count" class="font-bold text-slate-800">0</span> records)</span>
                 </h3>
             </div>
 
             <div class="overflow-x-auto">
-                <table class="w-full text-left text-sm text-slate-300">
-                    <thead class="text-xs uppercase bg-slate-950/80 text-slate-400 border-b border-slate-800">
+                <table class="w-full text-left text-sm text-slate-700">
+                    <thead class="text-xs uppercase bg-slate-100/80 text-slate-500 border-b border-slate-200 font-bold">
                         <tr>
-                            <th class="px-6 py-3.5 font-semibold">Ticket #</th>
-                            <th class="px-6 py-3.5 font-semibold">Employee</th>
-                            <th class="px-6 py-3.5 font-semibold">Location / Dept</th>
-                            <th class="px-6 py-3.5 font-semibold">Category & Issue</th>
-                            <th class="px-6 py-3.5 font-semibold">Priority</th>
-                            <th class="px-6 py-3.5 font-semibold">Status</th>
-                            <th class="px-6 py-3.5 font-semibold">Assigned Admin</th>
-                            <th class="px-6 py-3.5 font-semibold text-right">Action</th>
+                            <th class="px-6 py-3.5">Ticket #</th>
+                            <th class="px-6 py-3.5">Employee & Contact</th>
+                            <th class="px-6 py-3.5">Location / Dept</th>
+                            <th class="px-6 py-3.5">Category & Issue</th>
+                            <th class="px-6 py-3.5">Priority</th>
+                            <th class="px-6 py-3.5">Status</th>
+                            <th class="px-6 py-3.5">Assigned Admin</th>
+                            <th class="px-6 py-3.5 text-right">Action</th>
                         </tr>
                     </thead>
-                    <tbody id="tickets-table-body" class="divide-y divide-slate-800/60 font-normal">
-                        <!-- Dynamic Ticket Rows -->
+                    <tbody id="tickets-table-body" class="divide-y divide-slate-100">
                         <tr>
-                            <td colspan="8" class="text-center py-12 text-slate-500">
-                                <i class="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
-                                <div>Loading live ticket records from database...</div>
+                            <td colspan="8" class="text-center py-12 text-slate-400">
+                                <i class="fa-solid fa-spinner fa-spin text-2xl mb-2 text-blue-600"></i>
+                                <div>Loading live ticket database...</div>
                             </td>
                         </tr>
                     </tbody>
@@ -333,66 +329,66 @@ async def render_dashboard_page():
     </main>
 
     <!-- Ticket Detail Modal -->
-    <div id="detail-modal" class="fixed inset-0 z-50 hidden bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 space-y-6 shadow-2xl relative">
-            <button onclick="closeModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white p-2 text-xl">
+    <div id="detail-modal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div class="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full p-6 space-y-6 shadow-2xl relative">
+            <button onclick="closeModal()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-700 p-2 text-xl transition">
                 <i class="fa-solid fa-xmark"></i>
             </button>
 
-            <div class="flex items-center space-x-3 border-b border-slate-800 pb-4">
-                <div class="p-3 bg-blue-600/10 text-blue-400 rounded-xl">
+            <div class="flex items-center space-x-3 border-b border-slate-100 pb-4">
+                <div class="p-3 bg-blue-50 text-blue-600 rounded-xl">
                     <i class="fa-solid fa-receipt text-2xl"></i>
                 </div>
                 <div>
-                    <h2 class="text-lg font-bold text-white flex items-center gap-2" id="m-ticket-num">TKT-XXXXXX</h2>
-                    <p class="text-xs text-slate-400" id="m-created-at">Created at: --</p>
+                    <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2" id="m-ticket-num">TKT-XXXXXX</h2>
+                    <p class="text-xs text-slate-500" id="m-created-at">Created at: --</p>
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-4 text-xs bg-slate-950 p-4 rounded-xl border border-slate-800/80">
+            <div class="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div>
-                    <span class="text-slate-500 block">Employee:</span>
-                    <strong class="text-slate-200 text-sm" id="m-emp-name">--</strong>
-                    <div class="text-slate-400 font-mono mt-0.5" id="m-emp-phone">--</div>
+                    <span class="text-slate-500 block font-medium">Employee Name:</span>
+                    <strong class="text-slate-900 text-sm font-bold" id="m-emp-name">--</strong>
+                    <div class="text-slate-500 font-mono mt-0.5" id="m-emp-phone">--</div>
                 </div>
                 <div>
-                    <span class="text-slate-500 block">Location & Dept:</span>
-                    <strong class="text-slate-200 text-sm" id="m-location">--</strong>
-                    <div class="text-slate-400 mt-0.5" id="m-dept">--</div>
+                    <span class="text-slate-500 block font-medium">Location & Dept:</span>
+                    <strong class="text-slate-900 text-sm font-bold" id="m-location">--</strong>
+                    <div class="text-slate-600 mt-0.5" id="m-dept">--</div>
                 </div>
             </div>
 
             <div class="space-y-3">
                 <div>
-                    <span class="text-xs text-slate-500 block">Category ➡️ Subcategory:</span>
-                    <div class="text-sm font-semibold text-slate-200" id="m-category">--</div>
+                    <span class="text-xs font-semibold text-slate-500 block">Category ➡️ Subcategory:</span>
+                    <div class="text-sm font-bold text-slate-800" id="m-category">--</div>
                 </div>
                 <div>
-                    <span class="text-xs text-slate-500 block">Specific Issue:</span>
-                    <div class="text-sm text-slate-300" id="m-issue">--</div>
+                    <span class="text-xs font-semibold text-slate-500 block">Specific Issue:</span>
+                    <div class="text-sm text-slate-700" id="m-issue">--</div>
                 </div>
                 <div>
-                    <span class="text-xs text-slate-500 block">Full Description:</span>
-                    <div class="text-xs bg-slate-950 p-3 rounded-lg border border-slate-800 text-slate-200 leading-relaxed font-mono whitespace-pre-wrap" id="m-desc">--</div>
+                    <span class="text-xs font-semibold text-slate-500 block">Full Issue Description:</span>
+                    <div class="text-xs bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 leading-relaxed font-mono whitespace-pre-wrap" id="m-desc">--</div>
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-4 text-xs border-t border-slate-800 pt-4">
+            <div class="grid grid-cols-2 gap-4 text-xs border-t border-slate-100 pt-4">
                 <div>
-                    <span class="text-slate-500 block">Assigned Support Admin:</span>
-                    <strong class="text-blue-400 text-sm" id="m-admin">--</strong>
+                    <span class="text-slate-500 block font-medium">Assigned Support Admin:</span>
+                    <strong class="text-blue-700 text-sm font-bold" id="m-admin">--</strong>
                 </div>
                 <div>
-                    <span class="text-slate-500 block">Current Status:</span>
+                    <span class="text-slate-500 block font-medium">Current Status:</span>
                     <span id="m-status-badge">--</span>
                 </div>
             </div>
 
-            <div id="m-photo-container" class="hidden border-t border-slate-800 pt-4">
-                <span class="text-xs text-slate-500 block mb-2">Attached Photo Media ID:</span>
-                <div class="text-xs font-mono bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-amber-400 flex items-center justify-between">
-                    <span>Meta Photo ID: <strong id="m-photo-id">--</strong></span>
-                    <span class="text-slate-400">Attached in WhatsApp</span>
+            <div id="m-photo-container" class="hidden border-t border-slate-100 pt-4">
+                <span class="text-xs font-semibold text-slate-500 block mb-2">WhatsApp Photo Attachment:</span>
+                <div class="text-xs font-mono bg-amber-50 p-3 rounded-xl border border-amber-200 text-amber-900 flex items-center justify-between">
+                    <span>Meta Image ID: <strong id="m-photo-id" class="text-amber-700">--</strong></span>
+                    <span class="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-sans font-semibold">Attached</span>
                 </div>
             </div>
         </div>
@@ -443,18 +439,18 @@ async def render_dashboard_page():
         }
 
         function getStatusBadgeHtml(status) {
-            if (status === 'Open') return '<span class="px-2.5 py-1 rounded-full text-xs font-semibold badge-open"><i class="fa-solid fa-circle-dot mr-1"></i>Open</span>';
-            if (status === 'In Progress') return '<span class="px-2.5 py-1 rounded-full text-xs font-semibold badge-progress"><i class="fa-solid fa-spinner fa-spin mr-1"></i>In Progress</span>';
-            if (status === 'Resolved') return '<span class="px-2.5 py-1 rounded-full text-xs font-semibold badge-resolved"><i class="fa-solid fa-check-double mr-1"></i>Resolved</span>';
-            if (status === 'Closed') return '<span class="px-2.5 py-1 rounded-full text-xs font-semibold badge-closed"><i class="fa-solid fa-lock mr-1"></i>Closed</span>';
-            return `<span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-300">${status}</span>`;
+            if (status === 'Open') return '<span class="px-3 py-1 rounded-full text-xs font-bold badge-open"><i class="fa-solid fa-circle-dot mr-1 text-amber-600"></i>Open</span>';
+            if (status === 'In Progress') return '<span class="px-3 py-1 rounded-full text-xs font-bold badge-progress"><i class="fa-solid fa-spinner fa-spin mr-1 text-blue-600"></i>In Progress</span>';
+            if (status === 'Resolved') return '<span class="px-3 py-1 rounded-full text-xs font-bold badge-resolved"><i class="fa-solid fa-check-double mr-1 text-emerald-600"></i>Resolved</span>';
+            if (status === 'Closed') return '<span class="px-3 py-1 rounded-full text-xs font-bold badge-closed"><i class="fa-solid fa-lock mr-1 text-slate-500"></i>Closed</span>';
+            return `<span class="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700">${status}</span>`;
         }
 
         function getPriorityBadgeHtml(p) {
-            if (p === 'Urgent') return '<span class="px-2 py-0.5 rounded text-xs badge-urgent"><i class="fa-solid fa-fire mr-1"></i>Urgent</span>';
-            if (p === 'High') return '<span class="px-2 py-0.5 rounded text-xs badge-high">High</span>';
-            if (p === 'Medium') return '<span class="px-2 py-0.5 rounded text-xs badge-medium">Medium</span>';
-            return '<span class="px-2 py-0.5 rounded text-xs badge-low">Low</span>';
+            if (p === 'Urgent') return '<span class="px-2.5 py-0.5 rounded-md text-xs badge-urgent"><i class="fa-solid fa-fire mr-1"></i>Urgent</span>';
+            if (p === 'High') return '<span class="px-2.5 py-0.5 rounded-md text-xs badge-high">High</span>';
+            if (p === 'Medium') return '<span class="px-2.5 py-0.5 rounded-md text-xs badge-medium">Medium</span>';
+            return '<span class="px-2.5 py-0.5 rounded-md text-xs badge-low">Low</span>';
         }
 
         function renderTable(records) {
@@ -462,30 +458,30 @@ async def render_dashboard_page():
             document.getElementById('visible-count').innerText = records.length;
 
             if (records.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 text-slate-500">No ticket records found matching criteria.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 text-slate-400">No ticket records found matching criteria.</td></tr>`;
                 return;
             }
 
             let html = '';
             records.forEach(r => {
-                const photoIcon = r.image_id ? `<span class="text-amber-400 ml-1" title="Photo Attachment Present"><i class="fa-solid fa-image"></i></span>` : '';
+                const photoIcon = r.image_id ? `<span class="text-amber-500 ml-1.5" title="Photo Attachment Present"><i class="fa-solid fa-image"></i></span>` : '';
 
                 html += `
-                <tr class="hover:bg-slate-800/40 transition border-b border-slate-800/50 cursor-pointer" onclick='openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})'>
-                    <td class="px-6 py-4 font-mono font-bold text-blue-400 whitespace-nowrap">
+                <tr class="hover:bg-slate-50/80 transition cursor-pointer" onclick='openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})'>
+                    <td class="px-6 py-4 font-mono font-bold text-blue-600 whitespace-nowrap">
                         ${r.ticket_number}${photoIcon}
                     </td>
                     <td class="px-6 py-4">
-                        <div class="font-semibold text-slate-200">${escapeHtml(r.employee_name)}</div>
-                        <div class="text-xs text-slate-400 font-mono">+${r.employee_phone}</div>
+                        <div class="font-bold text-slate-900">${escapeHtml(r.employee_name)}</div>
+                        <div class="text-xs text-slate-500 font-mono">+${r.employee_phone}</div>
                     </td>
                     <td class="px-6 py-4">
-                        <div class="text-slate-300">${escapeHtml(r.location)}</div>
+                        <div class="text-slate-800 font-medium">${escapeHtml(r.location)}</div>
                         <div class="text-xs text-slate-500">${escapeHtml(r.department)}</div>
                     </td>
                     <td class="px-6 py-4 max-w-xs">
-                        <div class="text-xs font-semibold text-slate-300 truncate">${escapeHtml(r.category)} ➡️ ${escapeHtml(r.subcategory)}</div>
-                        <div class="text-xs text-slate-400 truncate mt-0.5">${escapeHtml(r.issue)}</div>
+                        <div class="text-xs font-bold text-slate-800 truncate">${escapeHtml(r.category)} ➡️ ${escapeHtml(r.subcategory)}</div>
+                        <div class="text-xs text-slate-500 truncate mt-0.5">${escapeHtml(r.issue)}</div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         ${getPriorityBadgeHtml(r.priority)}
@@ -494,10 +490,10 @@ async def render_dashboard_page():
                         ${getStatusBadgeHtml(r.status)}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
-                        <div class="text-sm text-slate-200 font-medium">${escapeHtml(r.assigned_admin)}</div>
+                        <div class="text-sm text-slate-800 font-semibold">${escapeHtml(r.assigned_admin)}</div>
                     </td>
                     <td class="px-6 py-4 text-right whitespace-nowrap">
-                        <button onclick='event.stopPropagation(); openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})' class="text-xs bg-slate-800 hover:bg-slate-700 text-blue-400 px-3 py-1.5 rounded-lg border border-slate-700 font-medium transition">
+                        <button onclick='event.stopPropagation(); openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})' class="text-xs bg-white hover:bg-slate-100 text-blue-600 px-3.5 py-1.5 rounded-lg border border-slate-300 font-semibold shadow-xs transition">
                             View Details
                         </button>
                     </td>
@@ -508,7 +504,7 @@ async def render_dashboard_page():
         }
 
         function filterTickets() {
-            const query = document.getElementById('search-input').value.toLowerCase().strip();
+            const query = document.getElementById('search-input').value.toLowerCase().trim();
             const statusFilter = document.getElementById('filter-status').value;
             const priorityFilter = document.getElementById('filter-priority').value;
 
