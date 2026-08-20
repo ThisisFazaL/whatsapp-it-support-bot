@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db, init_db_models, Ticket, async_session_factory
-from app.state_manager import is_employee_registered, get_user_state
+from app.state_manager import is_employee_registered, is_admin, get_user_state
 from app.handlers.admin_handler import handle_admin_command
 from app.handlers.resolution_handler import handle_resolution_confirmation
 from app.handlers.flow_handler import handle_flow
