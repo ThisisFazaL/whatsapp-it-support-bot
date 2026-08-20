@@ -12,11 +12,15 @@ logger = logging.getLogger("dashboard")
 
 router = APIRouter()
 
+SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
+
 def format_duration(seconds: float) -> str:
     """Formats time duration in seconds to human-readable string (e.g. 1h 25m)."""
-    if not seconds or seconds < 0:
-        return "N/A"
+    if seconds is None or seconds < 0:
+        return "--"
     mins = int(seconds // 60)
+    if mins < 1:
+        return "< 1m"
     if mins < 60:
         return f"{mins}m"
     hours = mins // 60
@@ -30,11 +34,16 @@ def format_duration(seconds: float) -> str:
 @router.get("/api/dashboard/data")
 async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     """
-    Returns complete production-level live metrics, support admin performance breakdown,
-    resolution times, category stats, and 100% full historical ticket records.
+    Returns complete production-level live metrics:
+    1. Support Admin performance ONLY for Kevin Chikati, Ellias Murenga, and Faisal Kassim.
+    2. Per-ticket exact resolution time duration.
+    3. Hierarchical Category -> Subcategory -> Issue Type breakdown tree.
     """
-    # Fetch all active support admins
-    admins_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
+    # Fetch only Kevin, Ellias, and Faisal
+    admins_stmt = select(SupportAdmin).where(
+        SupportAdmin.active == True,
+        SupportAdmin.phone.in_(SUPPORT_ADMIN_PHONES)
+    )
     admins_res = await db.execute(admins_stmt)
     support_admins = admins_res.scalars().all()
 
@@ -64,7 +73,8 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     assignments = asg_res.scalars().all()
     asg_map = {a.ticket_id: a.admin for a in assignments if a.admin}
 
-    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    now_utc = datetime.datetime.utcnow()
+    today_str = now_utc.strftime("%Y-%m-%d")
 
     records = []
     total_count = len(tickets)
@@ -75,9 +85,9 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     today_count = 0
 
     all_resolution_times = []
-    cat_counts = {}
+    category_tree_map = {}
 
-    # Initialize Admin Performance Stats Map
+    # Initialize Admin Performance Map ONLY for Kevin, Ellias, Faisal
     admin_stats_map = {}
     for sa in support_admins:
         admin_stats_map[sa.admin_id] = {
@@ -105,17 +115,37 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
         if c_date_str == today_str:
             today_count += 1
 
-        # Track Category Stats
-        cat_name = t.category.category_name if t.category else "Other / Custom"
-        cat_counts[cat_name] = cat_counts.get(cat_name, 0) + 1
+        # Hierarchical Category -> Subcategory -> Issue Tree Data
+        cat_name = t.category.category_name if t.category else "Other / Custom Support Request"
+        sub_name = t.subcategory.subcategory_name if t.subcategory else "General Maintenance"
+        issue_name = t.issue_type.issue_name if t.issue_type else "Custom Request"
 
-        # Calculate Ticket Resolution Duration
+        if cat_name not in category_tree_map:
+            category_tree_map[cat_name] = {"count": 0, "subcategories": {}}
+        category_tree_map[cat_name]["count"] += 1
+
+        if sub_name not in category_tree_map[cat_name]["subcategories"]:
+            category_tree_map[cat_name]["subcategories"][sub_name] = {"count": 0, "issues": {}}
+        category_tree_map[cat_name]["subcategories"][sub_name]["count"] += 1
+
+        if issue_name not in category_tree_map[cat_name]["subcategories"][sub_name]["issues"]:
+            category_tree_map[cat_name]["subcategories"][sub_name]["issues"][issue_name] = 0
+        category_tree_map[cat_name]["subcategories"][sub_name]["issues"][issue_name] += 1
+
+        # Per-Ticket Solving Time Calculation
         res_seconds = None
+        per_ticket_solving_time_str = "⏳ Active"
         if t.status_id in (3, 4) and t.created_at:
             end_time = t.closed_at or t.updated_at
             if end_time and end_time > t.created_at:
                 res_seconds = (end_time - t.created_at).total_seconds()
                 all_resolution_times.append(res_seconds)
+                per_ticket_solving_time_str = format_duration(res_seconds)
+            else:
+                per_ticket_solving_time_str = "< 1m"
+        elif t.created_at:
+            active_sec = (now_utc - t.created_at).total_seconds()
+            per_ticket_solving_time_str = f"⏳ Open ({format_duration(active_sec)})"
 
         # Track Admin Metrics
         admin = asg_map.get(t.ticket_id)
@@ -135,8 +165,6 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
         dept_name = emp.department.department_name if emp and emp.department else "General"
         loc_name = emp.location.location_name if emp and emp.location else "Headquarters"
 
-        sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
-        issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
         p_name = t.priority.priority_name if t.priority else "Medium"
         admin_name = admin.full_name if admin else "Unassigned"
         admin_phone = admin.phone if admin else ""
@@ -161,10 +189,10 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             "created_at": t.created_at.strftime("%Y-%m-%d %H:%M:%S") if t.created_at else "",
             "updated_at": t.updated_at.strftime("%Y-%m-%d %H:%M:%S") if t.updated_at else "",
             "closed_at": t.closed_at.strftime("%Y-%m-%d %H:%M:%S") if t.closed_at else "",
-            "resolution_time_formatted": format_duration(res_seconds) if res_seconds else "--"
+            "resolution_time_formatted": per_ticket_solving_time_str
         })
 
-    # Compile Admin Performance List
+    # Compile Admin Performance List (ONLY Kevin, Ellias, Faisal)
     admin_performance = []
     for a_id, astat in admin_stats_map.items():
         sec_list = astat["resolution_seconds_list"]
@@ -180,7 +208,23 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             "avg_resolution_formatted": format_duration(avg_sec) if avg_sec > 0 else "N/A"
         })
 
-    # Overall Mean Resolution Time
+    # Convert Category Tree Map to list
+    category_tree_list = []
+    for c_name, c_data in category_tree_map.items():
+        sub_list = []
+        for s_name, s_data in c_data["subcategories"].items():
+            iss_list = [{"issue_name": ik, "count": iv} for ik, iv in s_data["issues"].items()]
+            sub_list.append({
+                "subcategory_name": s_name,
+                "count": s_data["count"],
+                "issues": iss_list
+            })
+        category_tree_list.append({
+            "category_name": c_name,
+            "count": c_data["count"],
+            "subcategories": sub_list
+        })
+
     overall_avg_sec = sum(all_resolution_times) / len(all_resolution_times) if all_resolution_times else 0
 
     return {
@@ -196,7 +240,7 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             "overall_avg_resolution_time": format_duration(overall_avg_sec)
         },
         "admin_performance": admin_performance,
-        "category_stats": [{"category": k, "count": v} for k, v in cat_counts.items()],
+        "category_tree": category_tree_list,
         "records": records,
         "server_time": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     }
@@ -204,14 +248,14 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
 @router.get("/dashboard", response_class=HTMLResponse)
 async def render_dashboard_page():
     """
-    Renders a world-class production white-themed Live Web Dashboard UI for Executive Ticket Tracking.
+    Renders an ultra-clean, professional white-themed Live Web Dashboard UI for Executive Ticket Tracking.
     """
     html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tagoneswa IT Support - Executive Production Dashboard</title>
+    <title>Tagoneswa IT Support - Executive Live Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome CDN -->
@@ -250,7 +294,7 @@ async def render_dashboard_page():
                             Live System Operational
                         </span>
                     </h1>
-                    <p class="text-xs text-slate-500">Production Real-Time Ticket Tracking & Support Admin Workload Portal</p>
+                    <p class="text-xs text-slate-500">Real-Time Ticket Tracking & Support Admin Performance Portal</p>
                 </div>
             </div>
             
@@ -286,7 +330,7 @@ async def render_dashboard_page():
                     <span class="text-3xl font-black text-slate-900" id="stat-total">0</span>
                     <span class="ml-2 text-xs text-slate-500">all-time</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-400">Complete system records</div>
+                <div class="mt-2 text-xs text-slate-400">Complete database records</div>
             </div>
 
             <!-- Pending Action -->
@@ -334,29 +378,29 @@ async def render_dashboard_page():
                 <div class="mt-2 text-xs text-slate-400">Created in last 24h</div>
             </div>
 
-            <!-- Avg Resolution Time -->
+            <!-- Avg Resolution Speed -->
             <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Avg Resolution Speed</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Avg Solving Speed</span>
                     <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-stopwatch text-lg"></i></div>
                 </div>
                 <div class="mt-3 flex items-baseline">
                     <span class="text-2xl font-black text-blue-700" id="stat-avg-time">--</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-500">Mean time creation ➔ resolution</div>
+                <div class="mt-2 text-xs text-slate-500">Mean duration to resolve</div>
             </div>
         </div>
 
         <!-- Navigation Tabs -->
         <div class="border-b border-slate-200 flex space-x-8 text-sm font-semibold">
             <button onclick="switchTab('directory')" id="tab-btn-directory" class="tab-btn active pb-3 transition flex items-center gap-2">
-                <i class="fa-solid fa-list-check"></i> Live Ticket Directory
+                <i class="fa-solid fa-list-check"></i> Live Ticket Directory & Per-Ticket Solving Time
             </button>
             <button onclick="switchTab('admins')" id="tab-btn-admins" class="tab-btn pb-3 text-slate-500 hover:text-slate-900 transition flex items-center gap-2">
-                <i class="fa-solid fa-user-shield"></i> Support Admin Workload & Performance
+                <i class="fa-solid fa-user-shield"></i> Support Admins Performance (Kevin, Ellias, Faisal)
             </button>
             <button onclick="switchTab('insights')" id="tab-btn-insights" class="tab-btn pb-3 text-slate-500 hover:text-slate-900 transition flex items-center gap-2">
-                <i class="fa-solid fa-chart-bar"></i> Issue Categories Breakdown
+                <i class="fa-solid fa-sitemap"></i> Issue Category & Subcategory Breakdown
             </button>
         </div>
 
@@ -414,12 +458,13 @@ async def render_dashboard_page():
                                 <th class="px-6 py-3.5">Priority</th>
                                 <th class="px-6 py-3.5">Status</th>
                                 <th class="px-6 py-3.5">Assigned Admin</th>
+                                <th class="px-6 py-3.5">Solving Time</th>
                                 <th class="px-6 py-3.5 text-right">Action</th>
                             </tr>
                         </thead>
                         <tbody id="tickets-table-body" class="divide-y divide-slate-100">
                             <tr>
-                                <td colspan="8" class="text-center py-12 text-slate-400">
+                                <td colspan="9" class="text-center py-12 text-slate-400">
                                     <i class="fa-solid fa-spinner fa-spin text-2xl mb-2 text-blue-600"></i>
                                     <div>Loading live ticket database...</div>
                                 </td>
@@ -430,13 +475,13 @@ async def render_dashboard_page():
             </div>
         </div>
 
-        <!-- TAB 2: SUPPORT ADMIN PERFORMANCE & WORKLOAD -->
+        <!-- TAB 2: SUPPORT ADMINS PERFORMANCE (Kevin, Ellias, Faisal ONLY) -->
         <div id="tab-admins" class="hidden space-y-6">
             <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
                 <div class="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex items-center justify-between">
                     <div>
-                        <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Support Admin Workload & Resolution Speed</h3>
-                        <p class="text-xs text-slate-500 mt-0.5">Real-time pending tickets count and mean resolution duration per admin</p>
+                        <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">IT Support Admins Workload & Speed</h3>
+                        <p class="text-xs text-slate-500 mt-0.5">Tracking performance for assigned Support Admins: Kevin Chikati, Ellias Murenga, and Faisal Kassim</p>
                     </div>
                 </div>
                 <div class="overflow-x-auto">
@@ -444,7 +489,7 @@ async def render_dashboard_page():
                         <thead class="text-xs uppercase bg-slate-100/80 text-slate-500 border-b border-slate-200 font-bold">
                             <tr>
                                 <th class="px-6 py-3.5">Support Admin Name</th>
-                                <th class="px-6 py-3.5">Phone Number</th>
+                                <th class="px-6 py-3.5">WhatsApp Contact</th>
                                 <th class="px-6 py-3.5 text-center">🟡 Pending Tickets</th>
                                 <th class="px-6 py-3.5 text-center">🟢 Resolved Tickets</th>
                                 <th class="px-6 py-3.5 text-center">Total Assigned</th>
@@ -459,15 +504,15 @@ async def render_dashboard_page():
             </div>
         </div>
 
-        <!-- TAB 3: CATEGORY INSIGHTS -->
+        <!-- TAB 3: CATEGORY & SUBCATEGORY DRILL-DOWN BREAKDOWN -->
         <div id="tab-insights" class="hidden space-y-6">
             <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
                 <div>
-                    <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Top Reported Issue Categories</h3>
-                    <p class="text-xs text-slate-500 mt-0.5">Frequency distribution of IT & Facility requests</p>
+                    <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Hierarchical Category, Subcategory & Issue Breakdown</h3>
+                    <p class="text-xs text-slate-500 mt-0.5">Click any main Category to expand its Subcategories and specific Issue types</p>
                 </div>
-                <div id="category-bars-container" class="space-y-4">
-                    <!-- Dynamic Bars -->
+                <div id="category-tree-container" class="space-y-4">
+                    <!-- Dynamic Accordions -->
                 </div>
             </div>
         </div>
@@ -529,8 +574,8 @@ async def render_dashboard_page():
                     <span id="m-status-badge">--</span>
                 </div>
                 <div>
-                    <span class="text-slate-500 block font-medium">Resolution Time:</span>
-                    <strong class="text-emerald-700 text-sm font-bold" id="m-res-time">--</strong>
+                    <span class="text-slate-500 block font-medium">Per-Ticket Solving Time:</span>
+                    <strong class="text-emerald-700 text-sm font-bold font-mono" id="m-res-time">--</strong>
                 </div>
             </div>
 
@@ -548,7 +593,7 @@ async def render_dashboard_page():
     <script>
         let allRecords = [];
         let adminStats = [];
-        let categoryStats = [];
+        let categoryTree = [];
 
         async function fetchDashboardData() {
             const refreshIcon = document.getElementById('refresh-icon');
@@ -560,13 +605,13 @@ async def render_dashboard_page():
                 
                 allRecords = data.records || [];
                 adminStats = data.admin_performance || [];
-                categoryStats = data.category_stats || [];
+                categoryTree = data.category_tree || [];
 
                 updateStats(data.summary || {});
                 renderAdminTable(adminStats);
-                renderCategoryInsights(categoryStats, data.summary.total_tickets || 1);
+                renderCategoryTree(categoryTree, data.summary.total_tickets || 1);
 
-                // CRITICAL FIX: Retain active search query and filter selections across auto-refreshes!
+                // Preserve search input & filter selections across auto-refreshes!
                 filterTickets();
                 
                 document.getElementById('last-updated-time').innerText = new Date().toLocaleTimeString();
@@ -620,26 +665,58 @@ async def render_dashboard_page():
             tbody.innerHTML = html;
         }
 
-        function renderCategoryInsights(catStats, totalTickets) {
-            const container = document.getElementById('category-bars-container');
-            if (!catStats || catStats.length === 0) {
-                container.innerHTML = `<div class="text-slate-400 text-sm">No category stats recorded yet.</div>`;
+        function renderCategoryTree(tree, totalTickets) {
+            const container = document.getElementById('category-tree-container');
+            if (!tree || tree.length === 0) {
+                container.innerHTML = `<div class="text-slate-400 text-sm">No category tree stats recorded yet.</div>`;
                 return;
             }
 
             let html = '';
-            catStats.sort((a, b) => b.count - a.count).forEach(c => {
-                const pct = Math.round((c.count / totalTickets) * 100);
+            tree.sort((a, b) => b.count - a.count).forEach((cat, idx) => {
+                const catPct = Math.round((cat.count / totalTickets) * 100);
+
+                let subHtml = '';
+                cat.subcategories.sort((a, b) => b.count - a.count).forEach(sub => {
+                    let issHtml = '';
+                    sub.issues.forEach(iss => {
+                        issHtml += `
+                        <div class="flex items-center justify-between text-xs text-slate-600 pl-4 py-1 border-l-2 border-slate-200">
+                            <span>📌 ${escapeHtml(iss.issue_name)}</span>
+                            <span class="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded">${iss.count} tickets</span>
+                        </div>
+                        `;
+                    });
+
+                    subHtml += `
+                    <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
+                        <div class="flex items-center justify-between text-sm font-bold text-slate-800">
+                            <span>📂 Subcategory: ${escapeHtml(sub.subcategory_name)}</span>
+                            <span class="text-xs bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full">${sub.count} tickets</span>
+                        </div>
+                        <div class="space-y-1 pt-1">
+                            ${issHtml}
+                        </div>
+                    </div>
+                    `;
+                });
+
                 html += `
-                <div class="space-y-1.5">
-                    <div class="flex justify-between text-xs font-bold text-slate-700">
-                        <span>${escapeHtml(c.category)}</span>
-                        <span>${c.count} tickets (${pct}%)</span>
+                <details class="group bg-white border border-slate-200 rounded-2xl p-4 shadow-xs" ${idx === 0 ? 'open' : ''}>
+                    <summary class="flex items-center justify-between font-bold text-slate-900 cursor-pointer list-none">
+                        <div class="flex items-center space-x-3">
+                            <span class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-folder-open"></i></span>
+                            <span class="text-base">${escapeHtml(cat.category_name)}</span>
+                        </div>
+                        <div class="flex items-center space-x-4">
+                            <span class="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full">${cat.count} total tickets (${catPct}%)</span>
+                            <i class="fa-solid fa-chevron-down text-slate-400 group-open:rotate-180 transition-transform"></i>
+                        </div>
+                    </summary>
+                    <div class="mt-4 pt-4 border-t border-slate-100 space-y-3">
+                        ${subHtml}
                     </div>
-                    <div class="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
-                        <div class="bg-blue-600 h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
-                    </div>
-                </div>
+                </details>
                 `;
             });
             container.innerHTML = html;
@@ -665,7 +742,7 @@ async def render_dashboard_page():
             document.getElementById('visible-count').innerText = records.length;
 
             if (records.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 text-slate-400">No ticket records found matching criteria.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="9" class="text-center py-12 text-slate-400">No ticket records found matching criteria.</td></tr>`;
                 return;
             }
 
@@ -698,6 +775,9 @@ async def render_dashboard_page():
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <div class="text-sm text-slate-800 font-semibold">${escapeHtml(r.assigned_admin)}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap font-mono font-bold text-xs text-slate-800">
+                        ${r.resolution_time_formatted}
                     </td>
                     <td class="px-6 py-4 text-right whitespace-nowrap">
                         <button onclick='event.stopPropagation(); openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})' class="text-xs bg-white hover:bg-slate-100 text-blue-600 px-3.5 py-1.5 rounded-lg border border-slate-300 font-semibold shadow-xs transition">
