@@ -81,16 +81,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+from fastapi.responses import FileResponse, RedirectResponse
+
 app.include_router(dashboard_router)
 
 @app.get("/")
 async def root():
-    return {
-        "service": "WhatsApp IT Support Chatbot API",
-        "status": "running",
-        "webhook_endpoint": "/webhook/meta-whatsapp",
-        "docs": "/docs"
-    }
+    return RedirectResponse(url="/dashboard")
 
 @app.get("/health")
 async def health_check():

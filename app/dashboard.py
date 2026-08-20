@@ -120,7 +120,6 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     }
 
 @router.get("/dashboard", response_class=HTMLResponse)
-@router.get("/", response_class=HTMLResponse)
 async def render_dashboard_page():
     """
     Renders a modern, real-time Live Web Dashboard UI for Executive Ticket Tracking.
