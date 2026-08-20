@@ -227,7 +227,8 @@ async def process_webhook_payload(body: dict):
                 employee=employee,
                 message_text=message_text,
                 state=state,
-                image_id=image_id
+                image_id=image_id,
+                sender_phone=sender_phone
             )
 
         except Exception as e:

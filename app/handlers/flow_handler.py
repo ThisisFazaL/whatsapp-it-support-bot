@@ -66,9 +66,12 @@ async def handle_flow(
     employee: Employee,
     message_text: str,
     state: ConversationState,
-    image_id: str = None
+    image_id: str = None,
+    sender_phone: str = None
 ):
-    phone = employee.phone
+    phone = employee.phone if employee else sender_phone
+    if not phone:
+        return
     text_clean = message_text.strip().lower()
     choice_num = extract_numeric_choice(message_text)
 

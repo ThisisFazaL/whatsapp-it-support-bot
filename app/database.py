@@ -270,15 +270,27 @@ async def init_db_models():
                     ))
         await session.commit()
 
-        # Check Employees
-        res = await session.execute(select(Employee))
-        if not res.scalars().all():
-            emps = [
-                Employee(employee_id=1, employee_code="EMP1001", full_name="John Doe", phone="919876543210", email="john.doe@company.com", department_id=2, location_id=1, active=True),
-                Employee(employee_id=2, employee_code="EMP1002", full_name="Jane Smith", phone="15556729057", email="jane.smith@company.com", department_id=1, location_id=1, active=True),
-                Employee(employee_id=3, employee_code="EMP1003", full_name="Robert Johnson", phone="919876543211", email="robert.j@company.com", department_id=2, location_id=2, active=True),
-                Employee(employee_id=4, employee_code="EMP1004", full_name="Fazal Saiyed", phone="919265368695", email="fazal@company.com", department_id=1, location_id=1, active=True),
-            ]
-            session.add_all(emps)
+        # Guarantee 4 Support Admins & Master Admin exist in employees table
+        employee_sync_data = [
+            {"name": "Fazal Saiyed (Master Admin)", "phone": "919265368695", "code": "ADM9001"},
+            {"name": "Kevin Chikati", "phone": "263718627526", "code": "ADM9002"},
+            {"name": "Ellias Murenga", "phone": "263788843579", "code": "ADM9003"},
+            {"name": "Faisal Kassim", "phone": "263780100503", "code": "ADM9004"},
+        ]
 
+        for ed in employee_sync_data:
+            e_res = await session.execute(select(Employee).where(Employee.phone == ed["phone"]))
+            existing_emp = e_res.scalars().first()
+            if existing_emp:
+                existing_emp.full_name = ed["name"]
+                existing_emp.active = True
+            else:
+                session.add(Employee(
+                    employee_code=ed["code"],
+                    full_name=ed["name"],
+                    phone=ed["phone"],
+                    department_id=1,
+                    location_id=1,
+                    active=True
+                ))
         await session.commit()
