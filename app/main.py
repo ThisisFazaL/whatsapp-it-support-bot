@@ -180,9 +180,14 @@ async def process_webhook_payload(body: dict):
                 await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
                 return
 
-            # Step 1: Employee Registration Check
+            # Check if user is an active SupportAdmin or ExecutiveObserver
+            admin = await is_admin(db, sender_phone)
+            from app.config import settings
+            is_observer = sender_phone in settings.executive_observer_phones
+
+            # Step 1: Employee Registration Check (Support Admins & Observers bypass restriction)
             employee = await is_employee_registered(db, sender_phone)
-            if not employee:
+            if not employee and not admin and not is_observer:
                 logger.warning(f"Unregistered phone number attempted access: {sender_phone}")
                 warning_msg = (
                     f"🚫 *Access Restricted*\n\n"
@@ -192,12 +197,13 @@ async def process_webhook_payload(body: dict):
                 await meta_api.send_text_message(sender_phone, warning_msg)
                 return
 
-            # Step 2: "My Tickets" Command Check
-            isMyTickets = await handle_my_tickets(db, employee, message_text)
-            if isMyTickets:
-                return
+            # Step 2: "My Tickets" Command Check (if employee record exists)
+            if employee:
+                isMyTickets = await handle_my_tickets(db, employee, message_text)
+                if isMyTickets:
+                    return
 
-            # Step 3: Admin Command Check (e.g. 'resolve TKT-...')
+            # Step 3: Admin Command Check (e.g. 'resolve TKT-...' or 'Hi' Admin Portal)
             isAdminCmd = await handle_admin_command(db, sender_phone, message_text)
             if isAdminCmd:
                 return
