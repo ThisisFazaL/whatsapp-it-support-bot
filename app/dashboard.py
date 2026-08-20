@@ -12,11 +12,33 @@ logger = logging.getLogger("dashboard")
 
 router = APIRouter()
 
+def format_duration(seconds: float) -> str:
+    """Formats time duration in seconds to human-readable string (e.g. 1h 25m)."""
+    if not seconds or seconds < 0:
+        return "N/A"
+    mins = int(seconds // 60)
+    if mins < 60:
+        return f"{mins}m"
+    hours = mins // 60
+    rem_mins = mins % 60
+    if hours < 24:
+        return f"{hours}h {rem_mins}m"
+    days = hours // 24
+    rem_hours = hours % 24
+    return f"{days}d {rem_hours}h"
+
 @router.get("/api/dashboard/data")
 async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     """
-    Returns complete live database ticket metrics and 100% full records of all historical tickets.
+    Returns complete production-level live metrics, support admin performance breakdown,
+    resolution times, category stats, and 100% full historical ticket records.
     """
+    # Fetch all active support admins
+    admins_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
+    admins_res = await db.execute(admins_stmt)
+    support_admins = admins_res.scalars().all()
+
+    # Fetch all tickets ordered by newest first
     stmt = (
         select(Ticket)
         .options(
@@ -33,6 +55,7 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     res = await db.execute(stmt)
     tickets = res.scalars().all()
 
+    # Fetch all ticket assignments
     asg_stmt = (
         select(TicketAssignment)
         .options(selectinload(TicketAssignment.admin))
@@ -51,6 +74,22 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     closed_count = 0
     today_count = 0
 
+    all_resolution_times = []
+    cat_counts = {}
+
+    # Initialize Admin Performance Stats Map
+    admin_stats_map = {}
+    for sa in support_admins:
+        admin_stats_map[sa.admin_id] = {
+            "admin_id": sa.admin_id,
+            "full_name": sa.full_name,
+            "phone": sa.phone,
+            "pending_count": 0,
+            "resolved_count": 0,
+            "total_assigned": 0,
+            "resolution_seconds_list": []
+        }
+
     for t in tickets:
         status_name = t.status.status_name if t.status else "Open"
         if t.status_id == 1:
@@ -66,17 +105,39 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
         if c_date_str == today_str:
             today_count += 1
 
+        # Track Category Stats
+        cat_name = t.category.category_name if t.category else "Other / Custom"
+        cat_counts[cat_name] = cat_counts.get(cat_name, 0) + 1
+
+        # Calculate Ticket Resolution Duration
+        res_seconds = None
+        if t.status_id in (3, 4) and t.created_at:
+            end_time = t.closed_at or t.updated_at
+            if end_time and end_time > t.created_at:
+                res_seconds = (end_time - t.created_at).total_seconds()
+                all_resolution_times.append(res_seconds)
+
+        # Track Admin Metrics
+        admin = asg_map.get(t.ticket_id)
+        if admin and admin.admin_id in admin_stats_map:
+            astat = admin_stats_map[admin.admin_id]
+            astat["total_assigned"] += 1
+            if t.status_id in (1, 2):
+                astat["pending_count"] += 1
+            elif t.status_id in (3, 4):
+                astat["resolved_count"] += 1
+                if res_seconds is not None:
+                    astat["resolution_seconds_list"].append(res_seconds)
+
         emp = t.employee
         emp_name = emp.full_name if emp else "Unknown"
         emp_phone = emp.phone if emp else ""
         dept_name = emp.department.department_name if emp and emp.department else "General"
         loc_name = emp.location.location_name if emp and emp.location else "Headquarters"
 
-        cat_name = t.category.category_name if t.category else "N/A"
         sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
         issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
         p_name = t.priority.priority_name if t.priority else "Medium"
-        admin = asg_map.get(t.ticket_id)
         admin_name = admin.full_name if admin else "Unassigned"
         admin_phone = admin.phone if admin else ""
 
@@ -99,8 +160,28 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             "admin_phone": admin_phone,
             "created_at": t.created_at.strftime("%Y-%m-%d %H:%M:%S") if t.created_at else "",
             "updated_at": t.updated_at.strftime("%Y-%m-%d %H:%M:%S") if t.updated_at else "",
-            "closed_at": t.closed_at.strftime("%Y-%m-%d %H:%M:%S") if t.closed_at else ""
+            "closed_at": t.closed_at.strftime("%Y-%m-%d %H:%M:%S") if t.closed_at else "",
+            "resolution_time_formatted": format_duration(res_seconds) if res_seconds else "--"
         })
+
+    # Compile Admin Performance List
+    admin_performance = []
+    for a_id, astat in admin_stats_map.items():
+        sec_list = astat["resolution_seconds_list"]
+        avg_sec = sum(sec_list) / len(sec_list) if sec_list else 0
+        admin_performance.append({
+            "admin_id": astat["admin_id"],
+            "full_name": astat["full_name"],
+            "phone": astat["phone"],
+            "pending_count": astat["pending_count"],
+            "resolved_count": astat["resolved_count"],
+            "total_assigned": astat["total_assigned"],
+            "avg_resolution_seconds": avg_sec,
+            "avg_resolution_formatted": format_duration(avg_sec) if avg_sec > 0 else "N/A"
+        })
+
+    # Overall Mean Resolution Time
+    overall_avg_sec = sum(all_resolution_times) / len(all_resolution_times) if all_resolution_times else 0
 
     return {
         "summary": {
@@ -111,8 +192,11 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             "resolved_tickets": resolved_count,
             "closed_tickets": closed_count,
             "completed_total": resolved_count + closed_count,
-            "today_tickets": today_count
+            "today_tickets": today_count,
+            "overall_avg_resolution_time": format_duration(overall_avg_sec)
         },
+        "admin_performance": admin_performance,
+        "category_stats": [{"category": k, "count": v} for k, v in cat_counts.items()],
         "records": records,
         "server_time": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     }
@@ -120,14 +204,14 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
 @router.get("/dashboard", response_class=HTMLResponse)
 async def render_dashboard_page():
     """
-    Renders an ultra-clean, professional white-themed Live Web Dashboard UI for Executive Ticket Tracking.
+    Renders a world-class production white-themed Live Web Dashboard UI for Executive Ticket Tracking.
     """
     html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tagoneswa IT Support - Live Executive Tracking Dashboard</title>
+    <title>Tagoneswa IT Support - Executive Production Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome CDN -->
@@ -145,12 +229,14 @@ async def render_dashboard_page():
         .badge-high { background-color: #FFEDD5; color: #C2410C; border: 1px solid #FDBA74; }
         .badge-medium { background-color: #FEF9C3; color: #A16207; border: 1px solid #FDE047; }
         .badge-low { background-color: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; }
+
+        .tab-btn.active { border-bottom: 2px solid #2563EB; color: #2563EB; font-weight: 700; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
 
-    <!-- Clean Header Navbar -->
-    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+    <!-- Header Navbar -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div class="flex items-center space-x-3">
                 <div class="bg-blue-600 text-white p-2.5 rounded-xl shadow-md shadow-blue-500/20">
@@ -164,12 +250,16 @@ async def render_dashboard_page():
                             Live System Operational
                         </span>
                     </h1>
-                    <p class="text-xs text-slate-500">Real-Time Ticket Tracking & Executive Analytics Portal</p>
+                    <p class="text-xs text-slate-500">Production Real-Time Ticket Tracking & Support Admin Workload Portal</p>
                 </div>
             </div>
             
             <div class="flex items-center space-x-3">
-                <button onclick="fetchDashboardData()" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shadow-sm transition">
+                <button onclick="exportToCSV()" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition">
+                    <i class="fa-solid fa-file-csv text-emerald-600 text-sm"></i>
+                    <span>Export CSV</span>
+                </button>
+                <button onclick="fetchDashboardData()" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 shadow-xs transition">
                     <i class="fa-solid fa-arrows-rotate text-blue-600" id="refresh-icon"></i>
                     <span>Refresh Data</span>
                 </button>
@@ -187,27 +277,27 @@ async def render_dashboard_page():
         <!-- Executive Summary KPI Cards -->
         <div class="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-6">
             <!-- Total All-Time -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Total All-Time</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Total Tickets</span>
                     <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-ticket text-lg"></i></div>
                 </div>
                 <div class="mt-3 flex items-baseline">
                     <span class="text-3xl font-black text-slate-900" id="stat-total">0</span>
-                    <span class="ml-2 text-xs text-slate-500">tickets</span>
+                    <span class="ml-2 text-xs text-slate-500">all-time</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-400">Complete database records</div>
+                <div class="mt-2 text-xs text-slate-400">Complete system records</div>
             </div>
 
             <!-- Pending Action -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
                     <span class="text-xs font-bold uppercase tracking-wider text-amber-600">Pending Action</span>
                     <div class="p-2 bg-amber-50 text-amber-600 rounded-lg"><i class="fa-solid fa-clock-rotate-left text-lg"></i></div>
                 </div>
                 <div class="mt-3 flex items-baseline">
                     <span class="text-3xl font-black text-amber-600" id="stat-pending">0</span>
-                    <span class="ml-2 text-xs text-slate-500">active</span>
+                    <span class="ml-2 text-xs text-slate-500">unresolved</span>
                 </div>
                 <div class="mt-2 text-xs text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
                     <span>Open: <strong id="stat-open" class="text-slate-800">0</strong></span>
@@ -216,7 +306,7 @@ async def render_dashboard_page():
             </div>
 
             <!-- Resolved / Completed -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
                     <span class="text-xs font-bold uppercase tracking-wider text-emerald-600">Resolved / Closed</span>
                     <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><i class="fa-solid fa-circle-check text-lg"></i></div>
@@ -232,7 +322,7 @@ async def render_dashboard_page():
             </div>
 
             <!-- Today's New -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition">
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
                     <span class="text-xs font-bold uppercase tracking-wider text-purple-600">Today's New</span>
                     <div class="p-2 bg-purple-50 text-purple-600 rounded-lg"><i class="fa-solid fa-calendar-day text-lg"></i></div>
@@ -241,88 +331,144 @@ async def render_dashboard_page():
                     <span class="text-3xl font-black text-purple-600" id="stat-today">0</span>
                     <span class="ml-2 text-xs text-slate-500">today</span>
                 </div>
-                <div class="mt-2 text-xs text-slate-400">Created in last 24 hours</div>
+                <div class="mt-2 text-xs text-slate-400">Created in last 24h</div>
             </div>
 
-            <!-- Resolution Rate -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition col-span-2 sm:col-span-1">
+            <!-- Avg Resolution Time -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Completion Rate</span>
-                    <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-chart-pie text-lg"></i></div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Avg Resolution Speed</span>
+                    <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-stopwatch text-lg"></i></div>
                 </div>
                 <div class="mt-3 flex items-baseline">
-                    <span class="text-3xl font-black text-blue-600" id="stat-rate">0%</span>
+                    <span class="text-2xl font-black text-blue-700" id="stat-avg-time">--</span>
                 </div>
-                <div class="w-full bg-slate-100 h-2 rounded-full mt-3 overflow-hidden">
-                    <div id="rate-bar" class="bg-blue-600 h-full transition-all duration-500" style="width: 0%"></div>
+                <div class="mt-2 text-xs text-slate-500">Mean time creation ➔ resolution</div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="border-b border-slate-200 flex space-x-8 text-sm font-semibold">
+            <button onclick="switchTab('directory')" id="tab-btn-directory" class="tab-btn active pb-3 transition flex items-center gap-2">
+                <i class="fa-solid fa-list-check"></i> Live Ticket Directory
+            </button>
+            <button onclick="switchTab('admins')" id="tab-btn-admins" class="tab-btn pb-3 text-slate-500 hover:text-slate-900 transition flex items-center gap-2">
+                <i class="fa-solid fa-user-shield"></i> Support Admin Workload & Performance
+            </button>
+            <button onclick="switchTab('insights')" id="tab-btn-insights" class="tab-btn pb-3 text-slate-500 hover:text-slate-900 transition flex items-center gap-2">
+                <i class="fa-solid fa-chart-bar"></i> Issue Categories Breakdown
+            </button>
+        </div>
+
+        <!-- TAB 1: LIVE TICKET DIRECTORY -->
+        <div id="tab-directory" class="space-y-6">
+            <!-- Search & Filter Controls -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <!-- Search Input -->
+                    <div class="relative flex-1">
+                        <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <input type="text" id="search-input" onkeyup="filterTickets()" placeholder="Search by Ticket #, Employee Name, Phone, Category, Issue description, Admin..." 
+                               class="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition">
+                    </div>
+
+                    <!-- Filters -->
+                    <div class="flex flex-wrap items-center gap-3">
+                        <select id="filter-status" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
+                            <option value="ALL">All Statuses</option>
+                            <option value="Open">🟡 Open</option>
+                            <option value="In Progress">🔵 In Progress</option>
+                            <option value="Resolved">🟢 Resolved</option>
+                            <option value="Closed">⚪ Closed</option>
+                        </select>
+
+                        <select id="filter-priority" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
+                            <option value="ALL">All Priorities</option>
+                            <option value="Urgent">🔥 Urgent</option>
+                            <option value="High">🚨 High</option>
+                            <option value="Medium">⚡ Medium</option>
+                            <option value="Low">🔹 Low</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Historical Ticket Table -->
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
+                    <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-database text-blue-600"></i>
+                        Historical Ticket Records
+                        <span class="text-xs text-slate-500 font-normal capitalize">(Showing <span id="visible-count" class="font-bold text-slate-800">0</span> records)</span>
+                    </h3>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-700">
+                        <thead class="text-xs uppercase bg-slate-100/80 text-slate-500 border-b border-slate-200 font-bold">
+                            <tr>
+                                <th class="px-6 py-3.5">Ticket #</th>
+                                <th class="px-6 py-3.5">Employee & Contact</th>
+                                <th class="px-6 py-3.5">Location / Dept</th>
+                                <th class="px-6 py-3.5">Category & Issue</th>
+                                <th class="px-6 py-3.5">Priority</th>
+                                <th class="px-6 py-3.5">Status</th>
+                                <th class="px-6 py-3.5">Assigned Admin</th>
+                                <th class="px-6 py-3.5 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tickets-table-body" class="divide-y divide-slate-100">
+                            <tr>
+                                <td colspan="8" class="text-center py-12 text-slate-400">
+                                    <i class="fa-solid fa-spinner fa-spin text-2xl mb-2 text-blue-600"></i>
+                                    <div>Loading live ticket database...</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
 
-        <!-- Search & Filter Controls -->
-        <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-4">
-            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <!-- Search Input -->
-                <div class="relative flex-1">
-                    <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
-                    <input type="text" id="search-input" onkeyup="filterTickets()" placeholder="Search by Ticket #, Employee Name, Phone, Category, Issue description..." 
-                           class="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition">
+        <!-- TAB 2: SUPPORT ADMIN PERFORMANCE & WORKLOAD -->
+        <div id="tab-admins" class="hidden space-y-6">
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div class="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Support Admin Workload & Resolution Speed</h3>
+                        <p class="text-xs text-slate-500 mt-0.5">Real-time pending tickets count and mean resolution duration per admin</p>
+                    </div>
                 </div>
-
-                <!-- Filters -->
-                <div class="flex flex-wrap items-center gap-3">
-                    <select id="filter-status" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
-                        <option value="ALL">All Statuses</option>
-                        <option value="Open">🟡 Open</option>
-                        <option value="In Progress">🔵 In Progress</option>
-                        <option value="Resolved">🟢 Resolved</option>
-                        <option value="Closed">⚪ Closed</option>
-                    </select>
-
-                    <select id="filter-priority" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
-                        <option value="ALL">All Priorities</option>
-                        <option value="Urgent">🔥 Urgent</option>
-                        <option value="High">🚨 High</option>
-                        <option value="Medium">⚡ Medium</option>
-                        <option value="Low">🔹 Low</option>
-                    </select>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-700">
+                        <thead class="text-xs uppercase bg-slate-100/80 text-slate-500 border-b border-slate-200 font-bold">
+                            <tr>
+                                <th class="px-6 py-3.5">Support Admin Name</th>
+                                <th class="px-6 py-3.5">Phone Number</th>
+                                <th class="px-6 py-3.5 text-center">🟡 Pending Tickets</th>
+                                <th class="px-6 py-3.5 text-center">🟢 Resolved Tickets</th>
+                                <th class="px-6 py-3.5 text-center">Total Assigned</th>
+                                <th class="px-6 py-3.5 text-right">Avg Resolution Speed</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admins-table-body" class="divide-y divide-slate-100">
+                            <!-- Dynamic Admin Rows -->
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
 
-        <!-- Historical Ticket Table -->
-        <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-            <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
-                <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                    <i class="fa-solid fa-list-check text-blue-600"></i>
-                    Historical Ticket Records
-                    <span class="text-xs text-slate-500 font-normal capitalize">(Showing <span id="visible-count" class="font-bold text-slate-800">0</span> records)</span>
-                </h3>
-            </div>
-
-            <div class="overflow-x-auto">
-                <table class="w-full text-left text-sm text-slate-700">
-                    <thead class="text-xs uppercase bg-slate-100/80 text-slate-500 border-b border-slate-200 font-bold">
-                        <tr>
-                            <th class="px-6 py-3.5">Ticket #</th>
-                            <th class="px-6 py-3.5">Employee & Contact</th>
-                            <th class="px-6 py-3.5">Location / Dept</th>
-                            <th class="px-6 py-3.5">Category & Issue</th>
-                            <th class="px-6 py-3.5">Priority</th>
-                            <th class="px-6 py-3.5">Status</th>
-                            <th class="px-6 py-3.5">Assigned Admin</th>
-                            <th class="px-6 py-3.5 text-right">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tickets-table-body" class="divide-y divide-slate-100">
-                        <tr>
-                            <td colspan="8" class="text-center py-12 text-slate-400">
-                                <i class="fa-solid fa-spinner fa-spin text-2xl mb-2 text-blue-600"></i>
-                                <div>Loading live ticket database...</div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
+        <!-- TAB 3: CATEGORY INSIGHTS -->
+        <div id="tab-insights" class="hidden space-y-6">
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
+                <div>
+                    <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Top Reported Issue Categories</h3>
+                    <p class="text-xs text-slate-500 mt-0.5">Frequency distribution of IT & Facility requests</p>
+                </div>
+                <div id="category-bars-container" class="space-y-4">
+                    <!-- Dynamic Bars -->
+                </div>
             </div>
         </div>
 
@@ -373,7 +519,7 @@ async def render_dashboard_page():
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-4 text-xs border-t border-slate-100 pt-4">
+            <div class="grid grid-cols-3 gap-4 text-xs border-t border-slate-100 pt-4">
                 <div>
                     <span class="text-slate-500 block font-medium">Assigned Support Admin:</span>
                     <strong class="text-blue-700 text-sm font-bold" id="m-admin">--</strong>
@@ -382,13 +528,17 @@ async def render_dashboard_page():
                     <span class="text-slate-500 block font-medium">Current Status:</span>
                     <span id="m-status-badge">--</span>
                 </div>
+                <div>
+                    <span class="text-slate-500 block font-medium">Resolution Time:</span>
+                    <strong class="text-emerald-700 text-sm font-bold" id="m-res-time">--</strong>
+                </div>
             </div>
 
             <div id="m-photo-container" class="hidden border-t border-slate-100 pt-4">
                 <span class="text-xs font-semibold text-slate-500 block mb-2">WhatsApp Photo Attachment:</span>
                 <div class="text-xs font-mono bg-amber-50 p-3 rounded-xl border border-amber-200 text-amber-900 flex items-center justify-between">
                     <span>Meta Image ID: <strong id="m-photo-id" class="text-amber-700">--</strong></span>
-                    <span class="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-sans font-semibold">Attached</span>
+                    <span class="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-sans font-semibold">Attached in Chat</span>
                 </div>
             </div>
         </div>
@@ -397,6 +547,8 @@ async def render_dashboard_page():
     <!-- JavaScript Data Handler -->
     <script>
         let allRecords = [];
+        let adminStats = [];
+        let categoryStats = [];
 
         async function fetchDashboardData() {
             const refreshIcon = document.getElementById('refresh-icon');
@@ -407,8 +559,15 @@ async def render_dashboard_page():
                 const data = await res.json();
                 
                 allRecords = data.records || [];
+                adminStats = data.admin_performance || [];
+                categoryStats = data.category_stats || [];
+
                 updateStats(data.summary || {});
-                renderTable(allRecords);
+                renderAdminTable(adminStats);
+                renderCategoryInsights(categoryStats, data.summary.total_tickets || 1);
+
+                // CRITICAL FIX: Retain active search query and filter selections across auto-refreshes!
+                filterTickets();
                 
                 document.getElementById('last-updated-time').innerText = new Date().toLocaleTimeString();
             } catch (err) {
@@ -429,13 +588,61 @@ async def render_dashboard_page():
             document.getElementById('stat-closed').innerText = summary.closed_tickets || 0;
 
             document.getElementById('stat-today').innerText = summary.today_tickets || 0;
+            document.getElementById('stat-avg-time').innerText = summary.overall_avg_resolution_time || '--';
+        }
 
-            const total = summary.total_tickets || 0;
-            const completed = summary.completed_total || 0;
-            const rate = total > 0 ? Math.round((completed / total) * 100) : 0;
-            
-            document.getElementById('stat-rate').innerText = rate + '%';
-            document.getElementById('rate-bar').style.width = rate + '%';
+        function renderAdminTable(admins) {
+            const tbody = document.getElementById('admins-table-body');
+            if (!admins || admins.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-8 text-slate-400">No active support admin stats found.</td></tr>`;
+                return;
+            }
+
+            let html = '';
+            admins.forEach(a => {
+                const pendingBadge = a.pending_count > 0 
+                    ? `<span class="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">${a.pending_count} Active</span>`
+                    : `<span class="px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-500">0 Pending</span>`;
+
+                html += `
+                <tr class="hover:bg-slate-50 transition">
+                    <td class="px-6 py-4 font-bold text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-user-gear text-blue-600"></i> ${escapeHtml(a.full_name)}
+                    </td>
+                    <td class="px-6 py-4 font-mono text-slate-600">+${a.phone}</td>
+                    <td class="px-6 py-4 text-center font-bold">${pendingBadge}</td>
+                    <td class="px-6 py-4 text-center font-bold text-emerald-600">${a.resolved_count}</td>
+                    <td class="px-6 py-4 text-center font-semibold text-slate-700">${a.total_assigned}</td>
+                    <td class="px-6 py-4 text-right font-mono font-bold text-blue-700">${a.avg_resolution_formatted}</td>
+                </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        }
+
+        function renderCategoryInsights(catStats, totalTickets) {
+            const container = document.getElementById('category-bars-container');
+            if (!catStats || catStats.length === 0) {
+                container.innerHTML = `<div class="text-slate-400 text-sm">No category stats recorded yet.</div>`;
+                return;
+            }
+
+            let html = '';
+            catStats.sort((a, b) => b.count - a.count).forEach(c => {
+                const pct = Math.round((c.count / totalTickets) * 100);
+                html += `
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs font-bold text-slate-700">
+                        <span>${escapeHtml(c.category)}</span>
+                        <span>${c.count} tickets (${pct}%)</span>
+                    </div>
+                    <div class="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                        <div class="bg-blue-600 h-full rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                    </div>
+                </div>
+                `;
+            });
+            container.innerHTML = html;
         }
 
         function getStatusBadgeHtml(status) {
@@ -467,7 +674,7 @@ async def render_dashboard_page():
                 const photoIcon = r.image_id ? `<span class="text-amber-500 ml-1.5" title="Photo Attachment Present"><i class="fa-solid fa-image"></i></span>` : '';
 
                 html += `
-                <tr class="hover:bg-slate-50/80 transition cursor-pointer" onclick='openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})'>
+                <tr class="hover:bg-slate-50 transition cursor-pointer" onclick='openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})'>
                     <td class="px-6 py-4 font-mono font-bold text-blue-600 whitespace-nowrap">
                         ${r.ticket_number}${photoIcon}
                     </td>
@@ -504,9 +711,13 @@ async def render_dashboard_page():
         }
 
         function filterTickets() {
-            const query = document.getElementById('search-input').value.toLowerCase().trim();
-            const statusFilter = document.getElementById('filter-status').value;
-            const priorityFilter = document.getElementById('filter-priority').value;
+            const queryInput = document.getElementById('search-input');
+            const statusSelect = document.getElementById('filter-status');
+            const prioritySelect = document.getElementById('filter-priority');
+
+            const query = queryInput ? queryInput.value.toLowerCase().trim() : '';
+            const statusFilter = statusSelect ? statusSelect.value : 'ALL';
+            const priorityFilter = prioritySelect ? prioritySelect.value : 'ALL';
 
             const filtered = allRecords.filter(r => {
                 const matchesQuery = !query || 
@@ -527,6 +738,16 @@ async def render_dashboard_page():
             renderTable(filtered);
         }
 
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active', 'text-blue-600'));
+            document.getElementById('tab-directory').classList.add('hidden');
+            document.getElementById('tab-admins').classList.add('hidden');
+            document.getElementById('tab-insights').classList.add('hidden');
+
+            document.getElementById('tab-btn-' + tabName).classList.add('active');
+            document.getElementById('tab-' + tabName).classList.remove('hidden');
+        }
+
         function openModal(r) {
             document.getElementById('m-ticket-num').innerText = r.ticket_number;
             document.getElementById('m-created-at').innerText = 'Created At: ' + r.created_at;
@@ -539,6 +760,7 @@ async def render_dashboard_page():
             document.getElementById('m-desc').innerText = r.description;
             document.getElementById('m-admin').innerText = r.assigned_admin + (r.admin_phone ? ' (+' + r.admin_phone + ')' : '');
             document.getElementById('m-status-badge').innerHTML = getStatusBadgeHtml(r.status);
+            document.getElementById('m-res-time').innerText = r.resolution_time_formatted || '--';
 
             const photoContainer = document.getElementById('m-photo-container');
             if (r.image_id) {
@@ -553,6 +775,23 @@ async def render_dashboard_page():
 
         function closeModal() {
             document.getElementById('detail-modal').classList.add('hidden');
+        }
+
+        function exportToCSV() {
+            if (!allRecords || allRecords.length === 0) return alert("No records available to export.");
+            
+            let csv = "Ticket #,Employee Name,Phone,Department,Location,Category,Subcategory,Issue,Priority,Status,Assigned Admin,Created At,Resolution Time,Description\\n";
+            allRecords.forEach(r => {
+                csv += `"${r.ticket_number}","${r.employee_name}","+${r.employee_phone}","${r.department}","${r.location}","${r.category}","${r.subcategory}","${r.issue}","${r.priority}","${r.status}","${r.assigned_admin}","${r.created_at}","${r.resolution_time_formatted}","${r.description.replace(/"/g, '""')}"\\n`;
+            });
+
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.setAttribute("download", `Tagoneswa_IT_Support_Tickets_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         function escapeHtml(str) {
