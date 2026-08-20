@@ -15,7 +15,7 @@ router = APIRouter()
 SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
 
 def format_duration(seconds: float) -> str:
-    """Formats time duration in seconds to human-readable string (e.g. 1h 25m)."""
+    """Formats time duration in seconds to clean string (e.g. 1h 25m)."""
     if seconds is None or seconds < 0:
         return "--"
     mins = int(seconds // 60)
@@ -34,10 +34,8 @@ def format_duration(seconds: float) -> str:
 @router.get("/api/dashboard/data")
 async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     """
-    Returns complete production-level live metrics:
-    1. Support Admin performance ONLY for Kevin Chikati, Ellias Murenga, and Faisal Kassim.
-    2. Per-ticket exact resolution time duration.
-    3. Hierarchical Category -> Subcategory -> Issue Type breakdown tree.
+    Returns complete live executive metrics, support admin SLA breakdown,
+    resolution times, and 100% full historical ticket records.
     """
     # Fetch only Kevin, Ellias, and Faisal
     admins_stmt = select(SupportAdmin).where(
@@ -116,9 +114,9 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             today_count += 1
 
         # Hierarchical Category -> Subcategory -> Issue Tree Data
-        cat_name = t.category.category_name if t.category else "Other / Custom Support Request"
-        sub_name = t.subcategory.subcategory_name if t.subcategory else "General Maintenance"
-        issue_name = t.issue_type.issue_name if t.issue_type else "Custom Request"
+        cat_name = t.category.category_name if t.category else "Other / Custom Request"
+        sub_name = t.subcategory.subcategory_name if t.subcategory else "General Facilities"
+        issue_name = t.issue_type.issue_name if t.issue_type else "Custom Support Issue"
 
         if cat_name not in category_tree_map:
             category_tree_map[cat_name] = {"count": 0, "subcategories": {}}
@@ -132,9 +130,9 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             category_tree_map[cat_name]["subcategories"][sub_name]["issues"][issue_name] = 0
         category_tree_map[cat_name]["subcategories"][sub_name]["issues"][issue_name] += 1
 
-        # Per-Ticket Solving Time Calculation
+        # Resolution Time Calculation
         res_seconds = None
-        per_ticket_solving_time_str = "⏳ Active"
+        per_ticket_solving_time_str = "Active"
         if t.status_id in (3, 4) and t.created_at:
             end_time = t.closed_at or t.updated_at
             if end_time and end_time > t.created_at:
@@ -145,7 +143,7 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
                 per_ticket_solving_time_str = "< 1m"
         elif t.created_at:
             active_sec = (now_utc - t.created_at).total_seconds()
-            per_ticket_solving_time_str = f"⏳ Open ({format_duration(active_sec)})"
+            per_ticket_solving_time_str = f"Open ({format_duration(active_sec)})"
 
         # Track Admin Metrics
         admin = asg_map.get(t.ticket_id)
@@ -255,7 +253,7 @@ async def render_dashboard_page():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tagoneswa IT Support - Executive Live Dashboard</title>
+    <title>Tagoneswa IT Support - Executive Analytics Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome CDN -->
@@ -294,7 +292,7 @@ async def render_dashboard_page():
                             Live System Operational
                         </span>
                     </h1>
-                    <p class="text-xs text-slate-500">Real-Time Ticket Tracking & Support Admin Performance Portal</p>
+                    <p class="text-xs text-slate-500">Executive Real-Time Ticket Tracking & Support Engineering Dashboard</p>
                 </div>
             </div>
             
@@ -381,7 +379,7 @@ async def render_dashboard_page():
             <!-- Avg Resolution Speed -->
             <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:shadow-md transition">
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Avg Solving Speed</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-blue-600">Avg Resolution Speed</span>
                     <div class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-stopwatch text-lg"></i></div>
                 </div>
                 <div class="mt-3 flex items-baseline">
@@ -391,20 +389,20 @@ async def render_dashboard_page():
             </div>
         </div>
 
-        <!-- Navigation Tabs -->
+        <!-- Professional Executive Navigation Tabs -->
         <div class="border-b border-slate-200 flex space-x-8 text-sm font-semibold">
             <button onclick="switchTab('directory')" id="tab-btn-directory" class="tab-btn active pb-3 transition flex items-center gap-2">
-                <i class="fa-solid fa-list-check"></i> Live Ticket Directory & Per-Ticket Solving Time
+                <i class="fa-solid fa-list-check"></i> Ticket Directory
             </button>
             <button onclick="switchTab('admins')" id="tab-btn-admins" class="tab-btn pb-3 text-slate-500 hover:text-slate-900 transition flex items-center gap-2">
-                <i class="fa-solid fa-user-shield"></i> Support Admins Performance (Kevin, Ellias, Faisal)
+                <i class="fa-solid fa-user-shield"></i> Admin SLA & Workload
             </button>
             <button onclick="switchTab('insights')" id="tab-btn-insights" class="tab-btn pb-3 text-slate-500 hover:text-slate-900 transition flex items-center gap-2">
-                <i class="fa-solid fa-sitemap"></i> Issue Category & Subcategory Breakdown
+                <i class="fa-solid fa-chart-pie"></i> Category Analytics
             </button>
         </div>
 
-        <!-- TAB 1: LIVE TICKET DIRECTORY -->
+        <!-- TAB 1: TICKET DIRECTORY -->
         <div id="tab-directory" class="space-y-6">
             <!-- Search & Filter Controls -->
             <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
@@ -458,7 +456,7 @@ async def render_dashboard_page():
                                 <th class="px-6 py-3.5">Priority</th>
                                 <th class="px-6 py-3.5">Status</th>
                                 <th class="px-6 py-3.5">Assigned Admin</th>
-                                <th class="px-6 py-3.5">Solving Time</th>
+                                <th class="px-6 py-3.5">Resolution Time</th>
                                 <th class="px-6 py-3.5 text-right">Action</th>
                             </tr>
                         </thead>
@@ -475,13 +473,13 @@ async def render_dashboard_page():
             </div>
         </div>
 
-        <!-- TAB 2: SUPPORT ADMINS PERFORMANCE (Kevin, Ellias, Faisal ONLY) -->
+        <!-- TAB 2: ADMIN SLA & WORKLOAD -->
         <div id="tab-admins" class="hidden space-y-6">
             <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
                 <div class="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex items-center justify-between">
                     <div>
-                        <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">IT Support Admins Workload & Speed</h3>
-                        <p class="text-xs text-slate-500 mt-0.5">Tracking performance for assigned Support Admins: Kevin Chikati, Ellias Murenga, and Faisal Kassim</p>
+                        <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">IT Support Engineers SLA & Workload</h3>
+                        <p class="text-xs text-slate-500 mt-0.5">Tracking performance for assigned Support Engineers: Kevin Chikati, Ellias Murenga, and Faisal Kassim</p>
                     </div>
                 </div>
                 <div class="overflow-x-auto">
@@ -504,12 +502,12 @@ async def render_dashboard_page():
             </div>
         </div>
 
-        <!-- TAB 3: CATEGORY & SUBCATEGORY DRILL-DOWN BREAKDOWN -->
+        <!-- TAB 3: CATEGORY ANALYTICS -->
         <div id="tab-insights" class="hidden space-y-6">
             <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
                 <div>
-                    <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Hierarchical Category, Subcategory & Issue Breakdown</h3>
-                    <p class="text-xs text-slate-500 mt-0.5">Click any main Category to expand its Subcategories and specific Issue types</p>
+                    <h3 class="text-sm font-bold text-slate-800 uppercase tracking-wider">Category, Subcategory & Issue Breakdown</h3>
+                    <p class="text-xs text-slate-500 mt-0.5">Click any Category header to expand its Subcategories and specific Issue types</p>
                 </div>
                 <div id="category-tree-container" class="space-y-4">
                     <!-- Dynamic Accordions -->
@@ -574,7 +572,7 @@ async def render_dashboard_page():
                     <span id="m-status-badge">--</span>
                 </div>
                 <div>
-                    <span class="text-slate-500 block font-medium">Per-Ticket Solving Time:</span>
+                    <span class="text-slate-500 block font-medium">Resolution Time:</span>
                     <strong class="text-emerald-700 text-sm font-bold font-mono" id="m-res-time">--</strong>
                 </div>
             </div>
@@ -594,6 +592,7 @@ async def render_dashboard_page():
         let allRecords = [];
         let adminStats = [];
         let categoryTree = [];
+        let openCategoryNames = new Set(); // Track expanded category accordions across auto-refreshes!
 
         async function fetchDashboardData() {
             const refreshIcon = document.getElementById('refresh-icon');
@@ -672,9 +671,22 @@ async def render_dashboard_page():
                 return;
             }
 
+            // Save currently open details element names before re-render
+            document.querySelectorAll('#category-tree-container details').forEach(d => {
+                const catTitle = d.getAttribute('data-cat-name');
+                if (catTitle) {
+                    if (d.open) openCategoryNames.add(catTitle);
+                    else openCategoryNames.delete(catTitle);
+                }
+            });
+
             let html = '';
             tree.sort((a, b) => b.count - a.count).forEach((cat, idx) => {
                 const catPct = Math.round((cat.count / totalTickets) * 100);
+                
+                // Keep open if previously opened by user OR first category by default
+                const isInitiallyOpen = (openCategoryNames.size === 0 && idx === 0) || openCategoryNames.has(cat.category_name);
+                const openAttr = isInitiallyOpen ? 'open' : '';
 
                 let subHtml = '';
                 cat.subcategories.sort((a, b) => b.count - a.count).forEach(sub => {
@@ -692,7 +704,7 @@ async def render_dashboard_page():
                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
                         <div class="flex items-center justify-between text-sm font-bold text-slate-800">
                             <span>📂 Subcategory: ${escapeHtml(sub.subcategory_name)}</span>
-                            <span class="text-xs bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full">${sub.count} tickets</span>
+                            <span class="text-xs bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full font-semibold">${sub.count} tickets</span>
                         </div>
                         <div class="space-y-1 pt-1">
                             ${issHtml}
@@ -702,7 +714,7 @@ async def render_dashboard_page():
                 });
 
                 html += `
-                <details class="group bg-white border border-slate-200 rounded-2xl p-4 shadow-xs" ${idx === 0 ? 'open' : ''}>
+                <details data-cat-name="${escapeHtml(cat.category_name)}" class="group bg-white border border-slate-200 rounded-2xl p-4 shadow-xs" ${openAttr} ontoggle="onAccordionToggle(this, '${escapeHtml(cat.category_name)}')">
                     <summary class="flex items-center justify-between font-bold text-slate-900 cursor-pointer list-none">
                         <div class="flex items-center space-x-3">
                             <span class="p-2 bg-blue-50 text-blue-600 rounded-lg"><i class="fa-solid fa-folder-open"></i></span>
@@ -720,6 +732,14 @@ async def render_dashboard_page():
                 `;
             });
             container.innerHTML = html;
+        }
+
+        function onAccordionToggle(el, catName) {
+            if (el.open) {
+                openCategoryNames.add(catName);
+            } else {
+                openCategoryNames.delete(catName);
+            }
         }
 
         function getStatusBadgeHtml(status) {
