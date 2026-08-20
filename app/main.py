@@ -19,6 +19,7 @@ from app.handlers.flow_handler import handle_flow
 from app.handlers.my_tickets_handler import handle_my_tickets
 from app.reports import send_daily_report_to_master
 from app.meta_api import meta_api
+from app.dashboard import router as dashboard_router
 
 logger = logging.getLogger("main")
 logging.basicConfig(level=logging.INFO)
@@ -79,6 +80,8 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+app.include_router(dashboard_router)
 
 @app.get("/")
 async def root():
