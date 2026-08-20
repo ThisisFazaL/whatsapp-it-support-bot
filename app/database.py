@@ -270,27 +270,36 @@ async def init_db_models():
                     ))
         await session.commit()
 
-        # Guarantee 4 Support Admins & Master Admin exist in employees table
-        employee_sync_data = [
-            {"name": "Fazal Saiyed (Master Admin)", "phone": "919265368695", "code": "ADM9001"},
-            {"name": "Kevin Chikati", "phone": "263718627526", "code": "ADM9002"},
-            {"name": "Ellias Murenga", "phone": "263788843579", "code": "ADM9003"},
-            {"name": "Faisal Kassim", "phone": "263780100503", "code": "ADM9004"},
-        ]
+        # Ensure Department "Sales" and Location "6 Austin Road Workington" exist
+        dept_res = await session.execute(select(Department).where(Department.department_name.ilike("%Sales%")))
+        sales_dept = dept_res.scalars().first()
+        if not sales_dept:
+            sales_dept = Department(department_name="Sales")
+            session.add(sales_dept)
+            await session.flush()
 
-        for ed in employee_sync_data:
-            e_res = await session.execute(select(Employee).where(Employee.phone == ed["phone"]))
-            existing_emp = e_res.scalars().first()
-            if existing_emp:
-                existing_emp.full_name = ed["name"]
-                existing_emp.active = True
-            else:
-                session.add(Employee(
-                    employee_code=ed["code"],
-                    full_name=ed["name"],
-                    phone=ed["phone"],
-                    department_id=1,
-                    location_id=1,
-                    active=True
-                ))
+        loc_res = await session.execute(select(Location).where(Location.location_name.ilike("%6 Austin Road%")))
+        austin_loc = loc_res.scalars().first()
+        if not austin_loc:
+            austin_loc = Location(location_name="6 Austin Road Workington")
+            session.add(austin_loc)
+            await session.flush()
+
+        # Update or Insert Patience Ndlovu
+        p_res = await session.execute(select(Employee).where(Employee.phone == "263780806954"))
+        patience = p_res.scalars().first()
+        if patience:
+            patience.full_name = "Patience Ndlovu"
+            patience.department_id = sales_dept.department_id
+            patience.location_id = austin_loc.location_id
+            patience.active = True
+        else:
+            session.add(Employee(
+                employee_code="EMP_PATIENCE",
+                full_name="Patience Ndlovu",
+                phone="263780806954",
+                department_id=sales_dept.department_id,
+                location_id=austin_loc.location_id,
+                active=True
+            ))
         await session.commit()
