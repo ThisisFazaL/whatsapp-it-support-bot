@@ -299,6 +299,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         current_asg = (await session.execute(asg_chk)).scalars().first()
         if not current_asg:
             session.add(TicketAssignment(ticket_id=ticket.ticket_id, admin_id=admin.admin_id))
+        else:
+            current_asg.admin_id = admin.admin_id
 
         ticket.status_id = 3 # Resolved
         ticket.updated_at = datetime.datetime.utcnow()

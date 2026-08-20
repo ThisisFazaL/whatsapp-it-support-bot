@@ -238,24 +238,37 @@ async def init_db_models():
         if not res.scalars().all():
             session.add_all([Location(location_id=1, location_name="Headquarters - Floor 3"), Location(location_id=2, location_name="Branch Office")])
 
-        # Check Support Admins
-        res = await session.execute(select(SupportAdmin))
-        if not res.scalars().all():
-            master_admin = SupportAdmin(admin_id=1, full_name="Fazal (Master Admin)", phone="919265368695", is_master_admin=True, active=True)
-            hw_admin = SupportAdmin(admin_id=2, full_name="Alex Rivera (Hardware Admin)", phone="919876543210", is_master_admin=False, active=True)
-            sw_admin = SupportAdmin(admin_id=3, full_name="Sarah Jenkins (Software Admin)", phone="15556729057", is_master_admin=False, active=True)
-            session.add_all([master_admin, hw_admin, sw_admin])
-            await session.flush()
+        # Guarantee 4 Support Admins are synced in PostgreSQL database on startup
+        admin_data = [
+            {"name": "Fazal Saiyed (Master Admin)", "phone": "919265368695", "is_master": True},
+            {"name": "Kevin Chikati", "phone": "263718627526", "is_master": False},
+            {"name": "Ellias Murenga", "phone": "263788843579", "is_master": False},
+            {"name": "Faisal Kassim", "phone": "263780100503", "is_master": False},
+        ]
 
-            # Mappings: Alex -> Hardware (1), Sarah -> Software (2)
-            session.add_all([
-                AdminCategoryMapping(admin_id=2, category_id=1),
-                AdminCategoryMapping(admin_id=3, category_id=2),
-                AdminCategoryMapping(admin_id=1, category_id=1),
-                AdminCategoryMapping(admin_id=1, category_id=2),
-                AdminCategoryMapping(admin_id=1, category_id=3),
-                AdminCategoryMapping(admin_id=1, category_id=4),
-            ])
+        for ad in admin_data:
+            a_res = await session.execute(select(SupportAdmin).where(SupportAdmin.phone == ad["phone"]))
+            existing_admin = a_res.scalars().first()
+            if existing_admin:
+                existing_admin.full_name = ad["name"]
+                existing_admin.active = True
+                existing_admin.is_master_admin = ad["is_master"]
+            else:
+                first_name = ad["name"].split()[0]
+                a_name_res = await session.execute(select(SupportAdmin).where(SupportAdmin.full_name.ilike(f"%{first_name}%")))
+                existing_by_name = a_name_res.scalars().first()
+                if existing_by_name:
+                    existing_by_name.phone = ad["phone"]
+                    existing_by_name.active = True
+                    existing_by_name.full_name = ad["name"]
+                else:
+                    session.add(SupportAdmin(
+                        full_name=ad["name"],
+                        phone=ad["phone"],
+                        is_master_admin=ad["is_master"],
+                        active=True
+                    ))
+        await session.commit()
 
         # Check Employees
         res = await session.execute(select(Employee))
