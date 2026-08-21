@@ -5,6 +5,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import Ticket, SupportAdmin, Employee, TicketStatus, TicketAssignment
 from app.state_manager import is_admin, set_user_state, clear_user_state
 from app.meta_api import meta_api
@@ -358,15 +359,28 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
         await meta_api.send_text_message(sender_phone, admin_msg)
 
+        # Send Alert to Master Admin Fazal
         if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
+            cat_name = ticket.category.category_name if ticket.category else "N/A"
+            sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
+            issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
+            emp_name = ticket.employee.full_name if ticket.employee else "N/A"
+            emp_phone = f" (+{ticket.employee.phone})" if ticket.employee else ""
+
             master_resolved = (
-                f"✅ *[MASTER ALERT] TICKET RESOLVED*\n\n"
+                f"✅ *[MASTER ALERT] TICKET RESOLVED* 🔵\n\n"
                 f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
-                f"👤 *Employee:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
+                f"👤 *Employee:* {emp_name}{emp_phone}\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"📝 *Description:* {ticket.description}\n\n"
                 f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
-                f"📊 *Status:* 🔵 RESOLVED"
+                f"📊 *Status:* 🔵 RESOLVED (Confirmation prompt sent to employee)"
             )
-            await meta_api.send_text_message(settings.master_admin_phone, master_resolved)
+            if ticket.image_id:
+                await meta_api.send_image_message(settings.master_admin_phone, ticket.image_id, caption=master_resolved)
+            else:
+                await meta_api.send_text_message(settings.master_admin_phone, master_resolved)
 
         observer_resolved = (
             f"✅ *[EXECUTIVE OBSERVER ALERT] TICKET RESOLVED*\n\n"

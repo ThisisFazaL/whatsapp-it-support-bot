@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import Ticket, TicketAssignment, SupportAdmin
 from app.state_manager import clear_user_state
 from app.meta_api import meta_api
@@ -25,10 +26,16 @@ async def handle_resolution_confirmation(
         await meta_api.send_text_message(sender_phone, "Ticket context missing. State reset.")
         return True
 
-    # Retrieve ticket details
+    # Retrieve ticket details with full relationships
     stmt = (
         select(Ticket)
-        .options(selectinload(Ticket.employee))
+        .options(
+            selectinload(Ticket.employee),
+            selectinload(Ticket.category),
+            selectinload(Ticket.subcategory),
+            selectinload(Ticket.issue_type),
+            selectinload(Ticket.priority)
+        )
         .where(Ticket.ticket_id == ticket_id)
     )
     res = await session.execute(stmt)
@@ -40,6 +47,24 @@ async def handle_resolution_confirmation(
         return True
 
     choice = message_text.strip().lower()
+
+    # Load ticket context details
+    cat_name = ticket.category.category_name if ticket.category else "N/A"
+    sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
+    issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
+    emp_name = ticket.employee.full_name if ticket.employee else "N/A"
+    emp_phone = f" (+{ticket.employee.phone})" if ticket.employee else ""
+
+    # Fetch assigned admin
+    assign_stmt = (
+        select(TicketAssignment)
+        .options(selectinload(TicketAssignment.admin))
+        .where(TicketAssignment.ticket_id == ticket.ticket_id)
+    )
+    assign_res = await session.execute(assign_stmt)
+    assignment = assign_res.scalars().first()
+    admin_name = assignment.admin.full_name if assignment and assignment.admin else "IT Support Team"
+    admin_phone = f" (+{assignment.admin.phone})" if assignment and assignment.admin else ""
 
     if choice in ("1", "confirm_close_ticket", "confirm & close", "✅ confirm & close", "close", "confirm"):
         # 1 = Close Ticket (status_id = 4)
@@ -56,27 +81,24 @@ async def handle_resolution_confirmation(
         )
 
         # Notify Assigned Admin
-        assign_stmt = (
-            select(TicketAssignment)
-            .options(selectinload(TicketAssignment.admin))
-            .where(TicketAssignment.ticket_id == ticket.ticket_id)
-        )
-        assign_res = await session.execute(assign_stmt)
-        assignment = assign_res.scalars().first()
         if assignment and assignment.admin:
             await meta_api.send_text_message(
                 assignment.admin.phone,
                 f"ℹ️ *Ticket Resolution Confirmed*\n\n"
-                f"Employee {ticket.employee.full_name} confirmed resolution for Ticket *{ticket_number}*. Ticket is now CLOSED."
+                f"Employee {emp_name} confirmed resolution for Ticket *{ticket_number}*. Ticket is now CLOSED."
             )
 
         # Notify Master Admin Fazal
         if settings.master_admin_phone:
             master_closed = (
-                f"🎉 *[MASTER ALERT] TICKET OFFICIALLY CLOSED*\n\n"
+                f"🎉 *[MASTER ALERT] TICKET OFFICIALLY CLOSED* ⚪\n\n"
                 f"🎫 *Ticket ID:* `{ticket_number}`\n"
-                f"👤 *Employee:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
-                f"📊 *Status:* ⚪ CLOSED (Resolution Confirmed by Employee)"
+                f"👤 *Employee:* {emp_name}{emp_phone}\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"📝 *Description:* {ticket.description}\n\n"
+                f"👤 *Resolved By:* {admin_name}{admin_phone}\n"
+                f"📊 *Status:* ⚪ CLOSED (Confirmed by Employee)"
             )
             await meta_api.send_text_message(settings.master_admin_phone, master_closed)
 
@@ -84,7 +106,10 @@ async def handle_resolution_confirmation(
         observer_closed = (
             f"🎉 *[EXECUTIVE OBSERVER ALERT] TICKET OFFICIALLY CLOSED*\n\n"
             f"🎫 *Ticket ID:* `{ticket_number}`\n"
-            f"👤 *Employee:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
+            f"👤 *Employee:* {emp_name}{emp_phone}\n"
+            f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+            f"⚙️ *Issue:* {issue_name}\n"
+            f"👤 *Resolved By:* {admin_name}{admin_phone}\n"
             f"📊 *Status:* ⚪ CLOSED (Confirmed by Employee)"
         )
 
@@ -108,19 +133,41 @@ async def handle_resolution_confirmation(
         )
 
         # Notify Assigned Admin
-        assign_stmt = (
-            select(TicketAssignment)
-            .options(selectinload(TicketAssignment.admin))
-            .where(TicketAssignment.ticket_id == ticket.ticket_id)
-        )
-        assign_res = await session.execute(assign_stmt)
-        assignment = assign_res.scalars().first()
         if assignment and assignment.admin:
             await meta_api.send_text_message(
                 assignment.admin.phone,
                 f"🚨 *Ticket Reopened*\n\n"
-                f"Employee {ticket.employee.full_name} requested to REOPEN Ticket *{ticket_number}*. Status changed back to **OPEN**."
+                f"Employee {emp_name} requested to REOPEN Ticket *{ticket_number}*. Status changed back to **OPEN**."
             )
+
+        # Notify Master Admin Fazal
+        if settings.master_admin_phone:
+            master_reopened = (
+                f"🚨 *[MASTER ALERT] TICKET REOPENED* 🔄\n\n"
+                f"🎫 *Ticket ID:* `{ticket_number}`\n"
+                f"👤 *Employee:* {emp_name}{emp_phone}\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"📝 *Description:* {ticket.description}\n\n"
+                f"👤 *Assigned Admin:* {admin_name}{admin_phone}\n"
+                f"📊 *Status:* 🟡 REOPENED (Needs Attention)"
+            )
+            await meta_api.send_text_message(settings.master_admin_phone, master_reopened)
+
+        # Notify Executive Observers
+        observer_reopened = (
+            f"🚨 *[EXECUTIVE OBSERVER ALERT] TICKET REOPENED*\n\n"
+            f"🎫 *Ticket ID:* `{ticket_number}`\n"
+            f"👤 *Employee:* {emp_name}{emp_phone}\n"
+            f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+            f"⚙️ *Issue:* {issue_name}\n"
+            f"👤 *Assigned Admin:* {admin_name}{admin_phone}\n"
+            f"📊 *Status:* 🟡 REOPENED (Needs Attention)"
+        )
+        for obs_phone in settings.executive_observer_phones:
+            if obs_phone != settings.master_admin_phone:
+                await meta_api.send_text_message(obs_phone, observer_reopened)
+
         return True
 
     else:

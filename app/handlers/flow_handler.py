@@ -1,9 +1,11 @@
 import datetime
 import random
+import re
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import (
     Category, Subcategory, IssueType, Priority, TicketStatus,
     Ticket, TicketAssignment, SupportAdmin, AdminCategoryMapping, Employee, ConversationState
