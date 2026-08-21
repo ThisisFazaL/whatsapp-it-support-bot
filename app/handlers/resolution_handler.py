@@ -91,6 +91,8 @@ async def handle_resolution_confirmation(
     admin_name = assignment.admin.full_name if assignment and assignment.admin else "Support Team"
     admin_phone = f" (+{assignment.admin.phone})" if assignment and assignment.admin else ""
 
+    t_num = ticket.ticket_number
+
     if choice in ("1", "confirm_close_ticket", "confirm & close", "✅ confirm & close", "close", "confirm"):
         # 1 = Close Ticket (status_id = 4)
         ticket.status_id = 4
@@ -102,7 +104,7 @@ async def handle_resolution_confirmation(
         # Notify Employee
         await meta_api.send_text_message(
             sender_phone,
-            f"🎉 *{domain_label} Ticket Closed*\n\nThank you for confirming! Ticket *{ticket_number}* is now officially **CLOSED**."
+            f"🎉 *{domain_label} Ticket Closed*\n\nThank you for confirming! Ticket *{t_num}* is now officially **CLOSED**."
         )
 
         # Notify Assigned Admin
@@ -110,14 +112,14 @@ async def handle_resolution_confirmation(
             await meta_api.send_text_message(
                 assignment.admin.phone,
                 f"ℹ️ *Ticket Resolution Confirmed*\n\n"
-                f"Employee {emp_name} confirmed resolution for {domain_label} Ticket *{ticket_number}*. Ticket is now CLOSED."
+                f"Employee {emp_name} confirmed resolution for {domain_label} Ticket *{t_num}*. Ticket is now CLOSED."
             )
 
         # Notify Master Admin Fazal
         if settings.master_admin_phone:
             master_closed = (
                 f"🎉 *[MASTER ALERT] TICKET OFFICIALLY CLOSED* ⚪\n\n"
-                f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
+                f"🎫 *Ticket ID:* `{t_num}` ({domain_label})\n"
                 f"👤 *Employee:* {emp_name}{emp_phone}\n"
                 f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                 f"⚙️ *Issue:* {issue_name}\n"
@@ -130,7 +132,7 @@ async def handle_resolution_confirmation(
         # Notify Executive Observers of Ticket Closed
         observer_closed = (
             f"🎉 *[EXECUTIVE OBSERVER ALERT] TICKET OFFICIALLY CLOSED*\n\n"
-            f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
+            f"🎫 *Ticket ID:* `{t_num}` ({domain_label})\n"
             f"👤 *Employee:* {emp_name}{emp_phone}\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
@@ -154,7 +156,7 @@ async def handle_resolution_confirmation(
         # Notify Employee
         await meta_api.send_text_message(
             sender_phone,
-            f"🔄 *{domain_label} Ticket Reopened*\n\nTicket *{ticket_number}* has been **REOPENED**. Our Support team has been notified and will assist you."
+            f"🔄 *{domain_label} Ticket Reopened*\n\nTicket *{t_num}* has been **REOPENED**. Our Support team has been notified and will assist you."
         )
 
         # Notify Assigned Admin
@@ -162,14 +164,14 @@ async def handle_resolution_confirmation(
             await meta_api.send_text_message(
                 assignment.admin.phone,
                 f"🚨 *Ticket Reopened*\n\n"
-                f"Employee {emp_name} requested to REOPEN {domain_label} Ticket *{ticket_number}*. Status changed back to **OPEN**."
+                f"Employee {emp_name} requested to REOPEN {domain_label} Ticket *{t_num}*. Status changed back to **OPEN**."
             )
 
         # Notify Master Admin Fazal
         if settings.master_admin_phone:
             master_reopened = (
                 f"🚨 *[MASTER ALERT] TICKET REOPENED* 🔄\n\n"
-                f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
+                f"🎫 *Ticket ID:* `{t_num}` ({domain_label})\n"
                 f"👤 *Employee:* {emp_name}{emp_phone}\n"
                 f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                 f"⚙️ *Issue:* {issue_name}\n"
@@ -182,7 +184,7 @@ async def handle_resolution_confirmation(
         # Notify Executive Observers
         observer_reopened = (
             f"🚨 *[EXECUTIVE OBSERVER ALERT] TICKET REOPENED*\n\n"
-            f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
+            f"🎫 *Ticket ID:* `{t_num}` ({domain_label})\n"
             f"👤 *Employee:* {emp_name}{emp_phone}\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
