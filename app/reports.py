@@ -102,6 +102,8 @@ async def generate_daily_master_report_data(session: AsyncSession):
         )
         asg_res = await session.execute(asg_stmt)
         for a in asg_res.scalars().all():
+            asg_map[a.ticket_id] = a.admin
+            asg_map[str(a.ticket_id)] = a.admin
             asg_map[f"IT_{a.ticket_id}"] = a.admin
 
     maint_ids = [t.ticket_id for t in maint_tickets]
@@ -113,6 +115,8 @@ async def generate_daily_master_report_data(session: AsyncSession):
         )
         m_asg_res = await session.execute(m_asg_stmt)
         for a in m_asg_res.scalars().all():
+            asg_map[a.ticket_id] = a.admin
+            asg_map[str(a.ticket_id)] = a.admin
             asg_map[f"MAINT_{a.ticket_id}"] = a.admin
 
     if not today_tickets:

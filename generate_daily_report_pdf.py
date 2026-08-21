@@ -31,6 +31,26 @@ STATUS_COLORS = {
     4: "#15803D"
 }
 
+def resolve_admin_for_ticket(ticket, asg_map):
+    """
+    Helper function to safely resolve SupportAdmin object from asg_map
+    using integer ID, string ID, or prefixed keys.
+    """
+    if not asg_map or not ticket:
+        return None
+    
+    t_id = getattr(ticket, "ticket_id", None)
+    t_num = getattr(ticket, "ticket_number", "")
+    
+    admin = (
+        asg_map.get(t_id)
+        or asg_map.get(str(t_id))
+        or asg_map.get(f"IT_{t_id}")
+        or asg_map.get(f"MAINT_{t_id}")
+        or asg_map.get(t_num)
+    )
+    return admin
+
 def create_daily_report_pdf(filename="Daily_IT_Support_Master_Report_Sample.pdf", today_tickets=None, asg_map=None):
     """
     Generates a dynamic PDF Executive Report built 100% from live database tickets.
@@ -163,7 +183,7 @@ def create_daily_report_pdf(filename="Daily_IT_Support_Master_Report_Sample.pdf"
     
     admin_stats = {}
     for t in today_tickets:
-        admin = asg_map.get(t.ticket_id)
+        admin = resolve_admin_for_ticket(t, asg_map)
         admin_name = admin.full_name if admin else "Unassigned"
         admin_phone = f"+{admin.phone}" if admin else "-"
 
@@ -237,7 +257,7 @@ def create_daily_report_pdf(filename="Daily_IT_Support_Master_Report_Sample.pdf"
         p_name = t.priority.priority_name if t.priority else "Medium"
         status_name = STATUS_NAMES.get(t.status_id, "Open")
         status_color = STATUS_COLORS.get(t.status_id, "#A16207")
-        admin_obj = asg_map.get(t.ticket_id)
+        admin_obj = resolve_admin_for_ticket(t, asg_map)
         admin_name = admin_obj.full_name if admin_obj else "Unassigned"
         desc = t.description[:50] + "..." if len(t.description) > 50 else t.description
 
@@ -248,7 +268,7 @@ def create_daily_report_pdf(filename="Daily_IT_Support_Master_Report_Sample.pdf"
             Paragraph(f"{emp_name}<br/><font color='#718096'>{dept_name}</font>", table_body_style),
             Paragraph(f"{cat_name} &#8594; {sub_name}<br/><i>{issue_name}</i>", table_body_style),
             Paragraph(f"<font color='{p_color}'><b>{p_name}</b></font>", table_body_style),
-            Paragraph(admin_name, table_body_style),
+            Paragraph(f"<b>{admin_name}</b>", table_body_style),
             Paragraph(f"<font color='{status_color}'><b>{status_name}</b></font>", table_body_style),
         ])
 

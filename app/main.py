@@ -94,12 +94,13 @@ async def health_check():
     return {"status": "healthy", "service": "whatsapp_it_support_bot"}
 
 @app.get("/daily-report.pdf")
-async def download_daily_report_pdf():
-    """Serves the latest Daily Master Executive Report PDF directly for Meta WhatsApp API."""
+async def download_daily_report_pdf(db: AsyncSession = Depends(get_db)):
+    """Serves the latest Daily Master Executive Report PDF directly generated from live database."""
     pdf_path = "Daily_IT_Support_Master_Report_Sample.pdf"
-    if not os.path.exists(pdf_path):
-        from generate_daily_report_pdf import create_daily_report_pdf
-        create_daily_report_pdf(pdf_path)
+    from app.reports import generate_daily_master_report_data
+    from generate_daily_report_pdf import create_daily_report_pdf
+    text_summary, today_tickets, asg_map = await generate_daily_master_report_data(db)
+    create_daily_report_pdf(pdf_path, today_tickets=today_tickets, asg_map=asg_map)
     return FileResponse(
         pdf_path,
         media_type="application/pdf",
