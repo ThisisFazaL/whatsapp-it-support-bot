@@ -7,60 +7,135 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import (
-    Category, Subcategory, IssueType, Priority, TicketStatus,
-    Ticket, TicketAssignment, SupportAdmin, AdminCategoryMapping, Employee, ConversationState
+    Category, Subcategory, IssueType, Priority, TicketStatus, Location,
+    Ticket, TicketAssignment, MaintenanceTicket, MaintenanceTicketAssignment,
+    SupportAdmin, AdminCategoryMapping, Employee, ConversationState
 )
 from app.state_manager import set_user_state, clear_user_state
 from app.meta_api import meta_api
 
 GLOBAL_RESET_KEYWORDS = {"hi", "hello", "menu", "reset", "cancel", "start"}
-SKIP_KEYWORDS = {"skip", "no", "none", "pass", "next"}
+SKIP_KEYWORDS = {"skip", "no", "none", "pass", "next", "btn_skip_photo"}
 
 def extract_numeric_choice(text: str) -> str:
     """Extracts first sequence of digits from text string (e.g. '1.', 'option 2' -> '1', '2')."""
     match = re.search(r"\d+", text.strip()) if text else None
     return match.group(0) if match else text.strip().lower()
 
-import re
-
-async def generate_ticket_number(session: AsyncSession) -> str:
-    """Generates a unique ticket number in format: TKT-YYYYMMDD-XXXXX"""
+async def generate_ticket_number(session: AsyncSession, domain: str = "IT") -> str:
+    """Generates a unique ticket number in format: TKT-YYYYMMDD-XXXXX or TKT-MNT-YYYYMMDD-XXXXX"""
+    prefix = "TKT-MNT" if domain == "MAINTENANCE" else "TKT"
     today_str = datetime.datetime.utcnow().strftime("%Y%m%d")
     stmt = select(func.count(Ticket.ticket_id))
     res = await session.execute(stmt)
     total_count = res.scalar() or 0
     
     seq_num = total_count + 1
-    ticket_num = f"TKT-{today_str}-{str(seq_num).zfill(5)}"
+    ticket_num = f"{prefix}-{today_str}-{str(seq_num).zfill(5)}"
     
     check_stmt = select(Ticket).where(Ticket.ticket_number == ticket_num)
     existing = (await session.execute(check_stmt)).scalars().first()
     if existing:
         random_suffix = str(random.randint(100, 999))
-        ticket_num = f"TKT-{today_str}-{str(seq_num).zfill(5)}{random_suffix}"
+        ticket_num = f"{prefix}-{today_str}-{str(seq_num).zfill(5)}{random_suffix}"
 
     return ticket_num
 
-async def send_categories_menu(session: AsyncSession, phone: str):
-    """Fetches categories and sends menu to user, updating state to awaiting_category."""
-    stmt = select(Category).where(Category.active == True).order_by(Category.category_id)
+async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee: Employee = None):
+    """
+    Starts ticket creation flow.
+    Checks if employee or admin is authorized for Maintenance. If dual-role, presents 2 Interactive Buttons.
+    """
+    is_maint_reporter = employee.is_maintenance_reporter if employee else False
+    
+    # Check phone directly in Employee table
+    if not is_maint_reporter and phone:
+        e_res = await session.execute(select(Employee).where(Employee.phone == phone))
+        emp_obj = e_res.scalars().first()
+        if emp_obj:
+            is_maint_reporter = emp_obj.is_maintenance_reporter
+
+    # Also check SupportAdmin table (Master Admin & Maintenance Admins always get dual-role choice)
+    if not is_maint_reporter and phone:
+        a_res = await session.execute(select(SupportAdmin).where(SupportAdmin.phone == phone))
+        adm_obj = a_res.scalars().first()
+        if adm_obj and (adm_obj.is_master_admin or adm_obj.is_maintenance_admin):
+            is_maint_reporter = True
+
+    if is_maint_reporter:
+        # Send 2 Interactive Buttons for Dual-Role selection
+        body = "👋 *Welcome to Support Portal*\n\nPlease select the type of ticket you would like to create:"
+        buttons = [
+            {"id": "btn_domain_it", "title": "💻 IT Support"},
+            {"id": "btn_domain_maint", "title": "🛠️ Maintenance"}
+        ]
+        await set_user_state(session, phone, "select_domain", {})
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text="⚙️ SELECT SUPPORT DOMAIN"
+        )
+    else:
+        # Standard IT Employee -> Proceed to Location Selection directly
+        await start_location_selection(session, phone, domain="IT")
+
+async def start_location_selection(session: AsyncSession, phone: str, domain: str = "IT"):
+    """Presents location selection numbered text list."""
+    stmt = select(Location).order_by(Location.location_id)
+    res = await session.execute(stmt)
+    locations = res.scalars().all()
+
+    loc_list = []
+    loc_map = {}
+    for idx, loc in enumerate(locations):
+        num_str = str(idx + 1)
+        loc_list.append(f"{num_str}. *{loc.location_name}*")
+        loc_map[num_str] = loc.location_id
+
+    # Add 'Other' option
+    other_idx = str(len(locations) + 1)
+    loc_list.append(f"{other_idx}. *Other (Type location)*")
+    loc_map[other_idx] = "OTHER"
+
+    loc_text = "\n".join(loc_list)
+    msg = (
+        f"🏢 *Select Location*\n\n"
+        f"Please select the location by replying with the corresponding number:\n\n"
+        f"{loc_text}"
+    )
+
+    data = {"domain": domain, "locations_map": loc_map}
+    await set_user_state(session, phone, "select_location", data)
+    await meta_api.send_text_message(phone, msg)
+
+async def send_categories_menu(session: AsyncSession, phone: str, domain: str = "IT", data: dict = None):
+    """Fetches categories by domain and sends menu to user, updating state to awaiting_category."""
+    norm_domain = (domain or "IT").upper()
+    stmt = select(Category).where(Category.domain.ilike(norm_domain), Category.active == True).order_by(Category.category_id)
     res = await session.execute(stmt)
     categories = res.scalars().all()
 
     if not categories:
-        await meta_api.send_text_message(phone, "No active IT support categories found. Please contact IT directly.")
-        return
+        # Fallback to IT domain if not found
+        stmt = select(Category).where(Category.domain.ilike("IT"), Category.active == True).order_by(Category.category_id)
+        categories = (await session.execute(stmt)).scalars().all()
 
-    cat_list_str = "\n".join([f"{idx+1}️⃣ *{cat.category_name}*" for idx, cat in enumerate(categories)])
+    cat_list_str = "\n".join([f"{idx+1}. *{cat.category_name}*" for idx, cat in enumerate(categories)])
+    domain_title = "🛠️ Building Maintenance" if norm_domain == "MAINTENANCE" else "💻 IT Support"
     msg = (
-        f"👋 *Welcome to IT Support Ticket Bot*\n\n"
+        f"📌 *Select {domain_title} Category*\n\n"
         f"Please select a category by replying with the corresponding number:\n\n"
         f"{cat_list_str}\n\n"
-        f"💡 _Reply 'my tickets' to view your active tickets, or 'reset' to start over._"
+        f"💡 _Reply 'reset' to start over._"
     )
 
     cat_map = {str(idx + 1): cat.category_id for idx, cat in enumerate(categories)}
-    await set_user_state(session, phone, "awaiting_category", {"categories_map": cat_map})
+    current_data = data or {}
+    current_data["domain"] = domain
+    current_data["categories_map"] = cat_map
+
+    await set_user_state(session, phone, "awaiting_category", current_data)
     await meta_api.send_text_message(phone, msg)
 
 async def handle_flow(
@@ -79,21 +154,68 @@ async def handle_flow(
 
     # Global Reset Check
     if text_clean in GLOBAL_RESET_KEYWORDS or not state or not state.current_step:
-        await send_categories_menu(session, phone)
+        await start_ticket_creation_flow(session, phone, employee)
         return
 
     step = state.current_step
     data = state.current_data or {}
+    domain = data.get("domain", "IT")
 
-    # STEP 1: Awaiting Category
-    if step == "awaiting_category":
+    # STEP 0: Select Domain (Dual-Role Buttons)
+    if step == "select_domain":
+        if "maint" in text_clean or "btn_domain_maint" in text_clean or choice_num == "2":
+            await start_location_selection(session, phone, domain="MAINTENANCE")
+        else:
+            await start_location_selection(session, phone, domain="IT")
+        return
+
+    # STEP 1: Select Location (Numbered Text List)
+    elif step == "select_location":
+        loc_map = data.get("locations_map", {})
+        selected_loc_id = loc_map.get(choice_num) or loc_map.get(text_clean)
+
+        if not selected_loc_id:
+            await meta_api.send_text_message(
+                phone,
+                "⚠️ *Invalid Option*: Please reply with a valid location number from the list (e.g. *1*, *2*)."
+            )
+            return
+
+        if selected_loc_id == "OTHER":
+            data["location_name"] = "Other Location"
+        else:
+            loc_obj = await session.get(Location, int(selected_loc_id))
+            data["location_id"] = int(selected_loc_id)
+            data["location_name"] = loc_obj.location_name if loc_obj else "On-Site"
+
+        # Ask for Specific Room / Area (New Prompt)
+        await set_user_state(session, phone, "awaiting_room_area", data)
+        await meta_api.send_text_message(
+            phone,
+            "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
+        )
+        return
+
+    # STEP 1.5: Awaiting Room / Area Text
+    elif step == "awaiting_room_area":
+        room_text = message_text.strip()
+        if len(room_text) < 2:
+            await meta_api.send_text_message(phone, "⚠️ Please type a valid room or area description:")
+            return
+
+        data["room_area"] = room_text
+        await send_categories_menu(session, phone, domain=domain, data=data)
+        return
+
+    # STEP 2: Awaiting Category
+    elif step == "awaiting_category":
         cat_map = data.get("categories_map", {})
         selected_cat_id = cat_map.get(choice_num) or cat_map.get(text_clean)
         
         if not selected_cat_id:
             await meta_api.send_text_message(
                 phone,
-                "⚠️ *Invalid Option*: Please reply with a valid category number from the menu (e.g. *1*, *2*)."
+                "⚠️ *Invalid Option*: Please reply with a valid category number from the menu."
             )
             return
 
@@ -106,14 +228,20 @@ async def handle_flow(
         subcategories = sub_res.scalars().all()
 
         if not subcategories:
-            await meta_api.send_text_message(phone, "No subcategories found for this category. Resetting state.")
-            await send_categories_menu(session, phone)
+            data["category_id"] = selected_cat_id
+            data["subcategory_id"] = None
+            data["issue_type_id"] = None
+            await set_user_state(session, phone, "awaiting_description", data)
+            await meta_api.send_text_message(
+                phone,
+                "📝 *Describe Your Issue*\n\nPlease type a brief description of the problem:"
+            )
             return
 
-        sub_list_str = "\n".join([f"{idx+1}️⃣ *{sub.subcategory_name}*" for idx, sub in enumerate(subcategories)])
+        sub_list_str = "\n".join([f"{idx+1}. *{sub.subcategory_name}*" for idx, sub in enumerate(subcategories)])
         msg = (
             f"📁 *Select Subcategory*\n\n"
-            f"Please choose a subcategory:\n\n"
+            f"Please choose a subcategory by replying with the number:\n\n"
             f"{sub_list_str}"
         )
 
@@ -125,7 +253,7 @@ async def handle_flow(
         await meta_api.send_text_message(phone, msg)
         return
 
-    # STEP 2: Awaiting Subcategory
+    # STEP 3: Awaiting Subcategory
     elif step == "awaiting_subcategory":
         sub_map = data.get("subcategories_map", {})
         selected_sub_id = sub_map.get(choice_num) or sub_map.get(text_clean)
@@ -151,14 +279,14 @@ async def handle_flow(
             await set_user_state(session, phone, "awaiting_description", data)
             await meta_api.send_text_message(
                 phone,
-                "📝 *Describe Your Issue*\n\nPlease type a brief description of the problem you are experiencing:"
+                "📝 *Describe Your Issue*\n\nPlease type a brief description of the problem:"
             )
             return
 
-        issue_list_str = "\n".join([f"{idx+1}️⃣ *{issue.issue_name}*" for idx, issue in enumerate(issues)])
+        issue_list_str = "\n".join([f"{idx+1}. *{issue.issue_name}*" for idx, issue in enumerate(issues)])
         msg = (
             f"🛠️ *Select Specific Issue*\n\n"
-            f"Please select the issue that best matches your problem:\n\n"
+            f"Please select the issue matching your problem:\n\n"
             f"{issue_list_str}"
         )
 
@@ -170,7 +298,7 @@ async def handle_flow(
         await meta_api.send_text_message(phone, msg)
         return
 
-    # STEP 3: Awaiting Issue Type
+    # STEP 4: Awaiting Issue Type
     elif step == "awaiting_issue":
         issue_map = data.get("issues_map", {})
         selected_issue_id = issue_map.get(choice_num) or issue_map.get(text_clean)
@@ -186,11 +314,11 @@ async def handle_flow(
         await set_user_state(session, phone, "awaiting_description", data)
         await meta_api.send_text_message(
             phone,
-            "📝 *Describe Your Issue*\n\nPlease reply with a brief description of your issue (e.g. error message, computer model, physical damage):"
+            "📝 *Describe Your Issue*\n\nPlease reply with a brief description of the problem:"
         )
         return
 
-    # STEP 4: Awaiting Description -> Ask for Optional Image
+    # STEP 5: Awaiting Description -> Send 3 Interactive Priority Buttons
     elif step == "awaiting_description":
         description = message_text.strip()
         if len(description) < 3 and not image_id:
@@ -201,76 +329,156 @@ async def handle_flow(
         if image_id:
             data["image_id"] = image_id
 
-        await set_user_state(session, phone, "awaiting_image", data)
-        await meta_api.send_text_message(
-            phone,
-            "🖼️ *Attach Photo of Issue (Optional)*\n\n"
-            "You can send a photo/image of the problem right now, or reply *'skip'* to proceed to priority selection:"
+        # Send 3 Interactive Priority Buttons
+        body = "🚨 *Select Priority Level*\n\nHow urgent is this issue?"
+        buttons = [
+            {"id": "btn_prio_low", "title": "🟢 Low"},
+            {"id": "btn_prio_med", "title": "🟡 Medium"},
+            {"id": "btn_prio_crit", "title": "🔴 Critical"}
+        ]
+        await set_user_state(session, phone, "select_priority", data)
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text="🚨 TICKET PRIORITY"
         )
         return
 
-    # STEP 4.5: Awaiting Image
+    # STEP 6: Select Priority (Buttons)
+    elif step == "select_priority":
+        p_id = 2 # Default Medium
+        if "low" in text_clean or "btn_prio_low" in text_clean or choice_num == "1":
+            p_id = 1
+        elif "crit" in text_clean or "btn_prio_crit" in text_clean or choice_num == "3":
+            p_id = 3
+        elif "med" in text_clean or "btn_prio_med" in text_clean or choice_num == "2":
+            p_id = 2
+
+        data["priority_id"] = p_id
+
+        # If MAINTENANCE domain, ask Safety Hazard Flag via 2 Interactive Buttons
+        if domain == "MAINTENANCE":
+            body = "⚠️ *Safety Hazard Check*\n\nIs this issue an URGENT SAFETY HAZARD?\n(e.g., exposed live electrical wire, active roof flooding, structural risk)"
+            buttons = [
+                {"id": "btn_hazard_yes", "title": "⚠️ Yes - Safety Hazard"},
+                {"id": "btn_hazard_no", "title": "🟢 No - Standard Issue"}
+            ]
+            await set_user_state(session, phone, "select_safety_hazard", data)
+            await meta_api.send_button_message(
+                to_phone=phone,
+                body_text=body,
+                buttons=buttons,
+                header_text="⚠️ SAFETY HAZARD FLAG"
+            )
+            return
+
+        # Otherwise go directly to photo step
+        await send_photo_attachment_prompt(session, phone, data)
+        return
+
+    # STEP 6.5: Select Safety Hazard (2 Buttons for Maintenance)
+    elif step == "select_safety_hazard":
+        is_hazard = "yes" in text_clean or "btn_hazard_yes" in text_clean or choice_num == "1"
+        data["is_safety_hazard"] = is_hazard
+
+        await send_photo_attachment_prompt(session, phone, data)
+        return
+
+    # STEP 7: Awaiting Image / Skip Button
     elif step == "awaiting_image":
         if image_id:
             data["image_id"] = image_id
         elif text_clean not in SKIP_KEYWORDS and len(text_clean) > 2:
             data["description"] = data.get("description", "") + " | " + message_text.strip()
 
-        p_stmt = select(Priority).order_by(Priority.priority_id)
-        p_res = await session.execute(p_stmt)
-        priorities = p_res.scalars().all()
-
-        p_list_str = "\n".join([f"{p.priority_id}️⃣ *{p.priority_name}*" for p in priorities])
-        msg = (
-            f"🚨 *Select Ticket Priority*\n\n"
-            f"How urgent is this issue?\n\n"
-            f"{p_list_str}"
-        )
-
-        p_map = {str(p.priority_id): p.priority_id for p in priorities}
-        data["priorities_map"] = p_map
-
-        await set_user_state(session, phone, "awaiting_priority", data)
-        await meta_api.send_text_message(phone, msg)
+        # Generate Final Ticket!
+        await finalize_ticket_creation(session, phone, employee, data)
         return
 
-    # STEP 5: Awaiting Priority -> Generate Ticket with Category-Based Admin Routing
-    elif step == "awaiting_priority":
-        p_map = data.get("priorities_map", {})
-        selected_priority_id = p_map.get(choice_num) or p_map.get(text_clean)
+async def send_photo_attachment_prompt(session: AsyncSession, phone: str, data: dict):
+    """Sends optional photo prompt with 1 Interactive 'Skip' Button."""
+    body = "🖼️ *Attach Photo (Optional)*\n\nYou can send a photo of the problem right now, or tap 'Skip' to submit:"
+    buttons = [
+        {"id": "btn_skip_photo", "title": "⏩ Skip Photo"}
+    ]
+    await set_user_state(session, phone, "awaiting_image", data)
+    await meta_api.send_button_message(
+        to_phone=phone,
+        body_text=body,
+        buttons=buttons,
+        header_text="📸 PHOTO ATTACHMENT"
+    )
 
-        if not selected_priority_id:
-            await meta_api.send_text_message(
-                phone,
-                "⚠️ *Invalid Option*: Please reply with a priority number (1 = Low, 2 = Medium, 3 = High, 4 = Urgent)."
-            )
-            return
+async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: Employee, data: dict):
+    """Creates ticket in database and routes alert to designated Support Admins."""
+    domain = data.get("domain", "IT")
+    category_id = data.get("category_id")
+    subcategory_id = data.get("subcategory_id")
+    issue_type_id = data.get("issue_type_id")
+    room_area = data.get("room_area", "N/A")
+    is_safety_hazard = data.get("is_safety_hazard", False)
+    description = data.get("description", "No description provided")
+    ticket_image_id = data.get("image_id")
+    priority_id = data.get("priority_id", 2)
+    loc_name = data.get("location_name", "On-Site")
 
-        priority_id = int(selected_priority_id)
-        category_id = data.get("category_id")
-        subcategory_id = data.get("subcategory_id")
-        issue_type_id = data.get("issue_type_id")
-        description = data.get("description", "No description provided")
-        ticket_image_id = data.get("image_id")
+    ticket_number = await generate_ticket_number(session, domain=domain)
 
-        ticket_number = await generate_ticket_number(session)
+    emp_id = employee.employee_id if employee else None
+    if not emp_id and phone:
+        e_res = await session.execute(select(Employee).where(Employee.phone == phone))
+        emp_obj = e_res.scalars().first()
+        emp_id = emp_obj.employee_id if emp_obj else None
 
-        new_ticket = Ticket(
+    if not emp_id:
+        emp_obj = Employee(full_name="Staff User", phone=phone, active=True)
+        session.add(emp_obj)
+        await session.flush()
+        emp_id = emp_obj.employee_id
+
+    if domain == "MAINTENANCE":
+        new_ticket = MaintenanceTicket(
             ticket_number=ticket_number,
-            employee_id=employee.employee_id,
+            employee_id=emp_id,
+            domain=domain,
             category_id=category_id,
             subcategory_id=subcategory_id,
             issue_type_id=issue_type_id,
+            room_area=room_area,
+            is_safety_hazard=is_safety_hazard,
             description=description,
             image_id=ticket_image_id,
             priority_id=priority_id,
             status_id=1 # Open
         )
-        session.add(new_ticket)
-        await session.flush()
+    else:
+        new_ticket = Ticket(
+            ticket_number=ticket_number,
+            employee_id=emp_id,
+            domain=domain,
+            category_id=category_id,
+            subcategory_id=subcategory_id,
+            issue_type_id=issue_type_id,
+            room_area=room_area,
+            is_safety_hazard=is_safety_hazard,
+            description=description,
+            image_id=ticket_image_id,
+            priority_id=priority_id,
+            status_id=1 # Open
+        )
+    session.add(new_ticket)
+    await session.flush()
 
-        # Subcategory-Level 1:1 Admin Routing Matrix
-        assigned_admin = None
+    # Route Maintenance Tickets to Maintenance Admins ONLY
+    assigned_admin = None
+    if domain == "MAINTENANCE":
+        maint_admin_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
+        maint_admins = (await session.execute(maint_admin_stmt)).scalars().all()
+        if maint_admins:
+            assigned_admin = maint_admins[0]
+    else:
+        # IT Ticket Routing logic
         if subcategory_id:
             sub_map_stmt = (
                 select(AdminCategoryMapping)
@@ -278,11 +486,10 @@ async def handle_flow(
                 .where(AdminCategoryMapping.subcategory_id == subcategory_id)
             )
             sub_mappings = (await session.execute(sub_map_stmt)).scalars().all()
-            active_sub_admins = [m.admin for m in sub_mappings if m.admin and m.admin.active]
+            active_sub_admins = [m.admin for m in sub_mappings if m.admin and m.admin.active and not m.admin.is_maintenance_admin]
             if active_sub_admins:
                 assigned_admin = active_sub_admins[0]
 
-        # Category-Level Fallback
         if not assigned_admin and category_id:
             cat_map_stmt = (
                 select(AdminCategoryMapping)
@@ -290,124 +497,107 @@ async def handle_flow(
                 .where(AdminCategoryMapping.category_id == category_id)
             )
             cat_mappings = (await session.execute(cat_map_stmt)).scalars().all()
-            active_cat_admins = [m.admin for m in cat_mappings if m.admin and m.admin.active]
+            active_cat_admins = [m.admin for m in cat_mappings if m.admin and m.admin.active and not m.admin.is_maintenance_admin]
             if active_cat_admins:
                 assigned_admin = active_cat_admins[0]
 
-        # Master Admin Fallback
-        if not assigned_admin:
-            master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
-            assigned_admin = (await session.execute(master_stmt)).scalars().first()
+    # Fallback to Master Admin if unassigned
+    if not assigned_admin:
+        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
+        assigned_admin = (await session.execute(master_stmt)).scalars().first()
 
-        # Fallback to any active admin
-        if not assigned_admin:
-            any_admin_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
-            assigned_admin = (await session.execute(any_admin_stmt)).scalars().first()
-
-        if assigned_admin:
+    if assigned_admin:
+        if domain == "MAINTENANCE":
+            assignment = MaintenanceTicketAssignment(
+                ticket_id=new_ticket.ticket_id,
+                admin_id=assigned_admin.admin_id
+            )
+        else:
             assignment = TicketAssignment(
                 ticket_id=new_ticket.ticket_id,
                 admin_id=assigned_admin.admin_id
             )
-            session.add(assignment)
+        session.add(assignment)
 
-        await session.commit()
+    await session.commit()
 
-        # Load entity details for context
-        cat_obj = await session.get(Category, category_id) if category_id else None
-        sub_obj = await session.get(Subcategory, subcategory_id) if subcategory_id else None
-        issue_obj = await session.get(IssueType, issue_type_id) if issue_type_id else None
-        p_obj = await session.get(Priority, priority_id) if priority_id else None
+    # Load details for notifications
+    cat_obj = await session.get(Category, category_id) if category_id else None
+    sub_obj = await session.get(Subcategory, subcategory_id) if subcategory_id else None
+    issue_obj = await session.get(IssueType, issue_type_id) if issue_type_id else None
+    p_obj = await session.get(Priority, priority_id) if priority_id else None
 
-        # Load employee location and department
-        emp_stmt = (
-            select(Employee)
-            .options(selectinload(Employee.department), selectinload(Employee.location))
-            .where(Employee.employee_id == employee.employee_id)
-        )
-        emp_detailed = (await session.execute(emp_stmt)).scalars().first()
-        dept_name = emp_detailed.department.department_name if emp_detailed and emp_detailed.department else "General"
-        loc_name = emp_detailed.location.location_name if emp_detailed and emp_detailed.location else "Headquarters"
+    await clear_user_state(session, phone)
 
-        await clear_user_state(session, phone)
+    hazard_notice = "\n⚠️ *SAFETY HAZARD:* 🚨 URGENT SAFETY HAZARD FLAG!" if is_safety_hazard else ""
+    domain_label = "🛠️ MAINTENANCE" if domain == "MAINTENANCE" else "💻 IT SUPPORT"
 
-        # Send Confirmation to Employee
-        img_notice = "\n🖼️ *Photo:* Attachment Included" if ticket_image_id else ""
-        emp_confirmation = (
-            f"✅ *Ticket Created Successfully!*\n\n"
-            f"🎫 *Ticket ID:* `{ticket_number}`\n"
-            f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'}\n"
-            f"📁 *Subcategory:* {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
-            f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
-            f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
-            f"📝 *Description:* {description}{img_notice}\n\n"
-            f"Our IT Support team has been notified on WhatsApp and will assist you shortly!"
-        )
-        await meta_api.send_text_message(phone, emp_confirmation)
+    # Send Confirmation to Reporter
+    emp_confirmation = (
+        f"✅ *{domain_label} TICKET CREATED!*\n\n"
+        f"🎫 *Ticket ID:* `{ticket_number}`\n"
+        f"🏢 *Location:* {loc_name} ({room_area})\n"
+        f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'}\n"
+        f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom Issue'}\n"
+        f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}{hazard_notice}\n"
+        f"📝 *Description:* {description}\n\n"
+        f"Our support team has been notified on WhatsApp and will assist shortly!"
+    )
+    await meta_api.send_text_message(phone, emp_confirmation)
 
-        # Send Interactive Alert with Full Photo Header & "Mark Resolved" Button to Assigned Support Admin
-        header = "🚨 NEW IT SUPPORT TICKET ASSIGNED"
-        body = (
-            f"🎫 *Ticket ID:* `{ticket_number}`\n"
-            f"👤 *Employee:* {employee.full_name}\n"
-            f"📞 *Phone:* +{employee.phone}\n"
-            f"🏢 *Office Location:* {loc_name}\n"
-            f"🏬 *Department:* {dept_name}\n\n"
-            f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
-            f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
-            f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
-            f"📝 *Description:* {description}"
-        )
-        footer = "Tap button below once fixed"
-        buttons = [
-            {
-                "id": f"resolve_{ticket_number}",
-                "title": "✅ Mark Resolved"
-            }
-        ]
+    # Send Alert with [ 🟢 Resolve Ticket ] Button to Assigned Support Admin
+    emp_name = employee.full_name if employee else "Staff Reporter"
+    emp_phone = employee.phone if employee else phone
 
-        if assigned_admin:
+    header = f"🚨 NEW {domain_label} TICKET"
+    body = (
+        f"🎫 *Ticket ID:* `{ticket_number}`\n"
+        f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+        f"🏢 *Location:* {loc_name}\n"
+        f"📍 *Room / Area:* {room_area}\n"
+        f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
+        f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
+        f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}{hazard_notice}\n"
+        f"📝 *Description:* {description}"
+    )
+    footer = "Tap button below to resolve"
+    buttons = [
+        {
+            "id": f"resolve_{ticket_number}",
+            "title": "🟢 Resolve Ticket"
+        }
+    ]
+
+    if domain == "MAINTENANCE":
+        maint_admins_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
+        all_maint_admins = (await session.execute(maint_admins_stmt)).scalars().all()
+        for m_adm in all_maint_admins:
             await meta_api.send_button_message(
-                to_phone=assigned_admin.phone,
+                to_phone=m_adm.phone,
                 body_text=body,
                 buttons=buttons,
                 header_text=header,
-                footer_text=footer,
+                footer_text="Tap button below to resolve (whoever resolves first claims ticket)",
                 image_id=ticket_image_id
             )
-
-        # Master Admin Fazal (Master Alert with Full Photo Header & Interactive Resolve Button)
-        if settings.master_admin_phone and (not assigned_admin or assigned_admin.phone != settings.master_admin_phone):
-            master_body = f"ℹ️ *[MASTER ALERT]* New Ticket `{ticket_number}` assigned to {assigned_admin.full_name if assigned_admin else 'Unassigned'}.\n\n" + body
-            await meta_api.send_button_message(
-                to_phone=settings.master_admin_phone,
-                body_text=master_body,
-                buttons=buttons,
-                header_text="🚨 MASTER TICKET ALERT",
-                footer_text="Master Admin: Tap button to resolve anytime",
-                image_id=ticket_image_id
-            )
-
-        # Broadcast Executive Observer Alerts to 5 Executives (with photo if present)
-        asg_name = assigned_admin.full_name if assigned_admin else "Unassigned"
-        asg_phone = f" (+{assigned_admin.phone})" if assigned_admin else ""
-        observer_notice = (
-            f"📢 *[EXECUTIVE OBSERVER ALERT] NEW TICKET CREATED* 🚨\n\n"
-            f"🎫 *Ticket ID:* `{ticket_number}`\n"
-            f"👤 *Employee:* {employee.full_name} (`+{employee.phone}`)\n"
-            f"🏢 *Location:* {loc_name} ({dept_name})\n"
-            f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
-            f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
-            f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}\n"
-            f"📝 *Description:* {description}\n\n"
-            f"👤 *Assigned Support Admin:* {asg_name}{asg_phone}"
+    elif assigned_admin:
+        await meta_api.send_button_message(
+            to_phone=assigned_admin.phone,
+            body_text=body,
+            buttons=buttons,
+            header_text=header,
+            footer_text=footer,
+            image_id=ticket_image_id
         )
 
-        for obs_phone in settings.executive_observer_phones:
-            if obs_phone != settings.master_admin_phone and (not assigned_admin or obs_phone != assigned_admin.phone):
-                if ticket_image_id:
-                    await meta_api.send_image_message(obs_phone, ticket_image_id, caption=observer_notice)
-                else:
-                    await meta_api.send_text_message(obs_phone, observer_notice)
-
-        return
+    # Send Alert to Master Admin if different
+    if settings.master_admin_phone:
+        master_body = f"ℹ️ *[MASTER ALERT]* New {domain_label} Ticket `{ticket_number}`.\n\n" + body
+        await meta_api.send_button_message(
+            to_phone=settings.master_admin_phone,
+            body_text=master_body,
+            buttons=buttons,
+            header_text=f"🚨 MASTER ALERT ({domain_label})",
+            footer_text="Master Admin: Tap button to resolve anytime",
+            image_id=ticket_image_id
+        )

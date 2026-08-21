@@ -31,6 +31,7 @@ class Employee(Base):
     email = Column(String(100), nullable=True)
     department_id = Column(Integer, ForeignKey("departments.department_id"), nullable=True)
     location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
+    is_maintenance_reporter = Column(Boolean, default=False)
     active = Column(Boolean, default=True)
 
     department = relationship("Department")
@@ -42,6 +43,7 @@ class SupportAdmin(Base):
     full_name = Column(String(100), nullable=False)
     phone = Column(String(20), unique=True, nullable=False)
     is_master_admin = Column(Boolean, default=False)
+    is_maintenance_admin = Column(Boolean, default=False)
     active = Column(Boolean, default=True)
 
     category_mappings = relationship("AdminCategoryMapping", back_populates="admin", cascade="all, delete-orphan")
@@ -61,6 +63,7 @@ class Category(Base):
     __tablename__ = "categories"
     category_id = Column(Integer, primary_key=True, autoincrement=True)
     category_name = Column(String(100), nullable=False)
+    domain = Column(String(20), default="IT") # "IT" or "MAINTENANCE"
     active = Column(Boolean, default=True)
     
     subcategories = relationship("Subcategory", back_populates="category", cascade="all, delete-orphan")
@@ -99,10 +102,14 @@ class Ticket(Base):
     ticket_id = Column(Integer, primary_key=True, autoincrement=True)
     ticket_number = Column(String(30), unique=True, nullable=False)
     employee_id = Column(Integer, ForeignKey("employees.employee_id"), nullable=False)
+    domain = Column(String(20), default="IT") # "IT" or "MAINTENANCE"
     category_id = Column(Integer, ForeignKey("categories.category_id"), nullable=True)
     subcategory_id = Column(Integer, ForeignKey("subcategories.subcategory_id"), nullable=True)
     issue_type_id = Column(Integer, ForeignKey("issue_types.issue_type_id"), nullable=True)
+    room_area = Column(String(150), nullable=True)
+    is_safety_hazard = Column(Boolean, default=False)
     description = Column(Text, nullable=False)
+    resolution_note = Column(Text, nullable=True)
     image_id = Column(String(100), nullable=True) # Optional Meta image attachment ID
     priority_id = Column(Integer, ForeignKey("priorities.priority_id"), default=2)
     status_id = Column(Integer, ForeignKey("ticket_status.status_id"), default=1)
@@ -126,6 +133,43 @@ class TicketAssignment(Base):
 
     admin = relationship("SupportAdmin")
     ticket = relationship("Ticket")
+
+class MaintenanceTicket(Base):
+    __tablename__ = "maintenance_tickets"
+    ticket_id = Column(Integer, primary_key=True, autoincrement=True)
+    ticket_number = Column(String(30), unique=True, nullable=False)
+    employee_id = Column(Integer, ForeignKey("employees.employee_id"), nullable=False)
+    domain = Column(String(20), default="MAINTENANCE")
+    category_id = Column(Integer, ForeignKey("categories.category_id"), nullable=True)
+    subcategory_id = Column(Integer, ForeignKey("subcategories.subcategory_id"), nullable=True)
+    issue_type_id = Column(Integer, ForeignKey("issue_types.issue_type_id"), nullable=True)
+    room_area = Column(String(150), nullable=True)
+    is_safety_hazard = Column(Boolean, default=False)
+    description = Column(Text, nullable=False)
+    resolution_note = Column(Text, nullable=True)
+    image_id = Column(String(100), nullable=True)
+    priority_id = Column(Integer, ForeignKey("priorities.priority_id"), default=2)
+    status_id = Column(Integer, ForeignKey("ticket_status.status_id"), default=1)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    closed_at = Column(DateTime, nullable=True)
+
+    employee = relationship("Employee")
+    category = relationship("Category")
+    subcategory = relationship("Subcategory")
+    issue_type = relationship("IssueType")
+    priority = relationship("Priority")
+    status = relationship("TicketStatus")
+
+class MaintenanceTicketAssignment(Base):
+    __tablename__ = "maintenance_ticket_assignments"
+    assignment_id = Column(Integer, primary_key=True, autoincrement=True)
+    ticket_id = Column(Integer, ForeignKey("maintenance_tickets.ticket_id"), nullable=False)
+    admin_id = Column(Integer, ForeignKey("support_admins.admin_id"), nullable=False)
+    assigned_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    admin = relationship("SupportAdmin")
+    ticket = relationship("MaintenanceTicket")
 
 class ConversationState(Base):
     __tablename__ = "conversation_state"

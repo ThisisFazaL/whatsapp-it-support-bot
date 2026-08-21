@@ -6,13 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
-from app.database import get_db, Ticket, TicketAssignment, SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus
+from app.database import (
+    get_db, Ticket, MaintenanceTicket, TicketAssignment, MaintenanceTicketAssignment,
+    SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus
+)
 
 logger = logging.getLogger("dashboard")
 
 router = APIRouter()
 
-SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
+SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503", "263780099291", "26377133602"}
 
 def format_duration(seconds: float) -> str:
     """Formats time duration in seconds to clean string (e.g. 1h 25m)."""
@@ -35,9 +38,9 @@ def format_duration(seconds: float) -> str:
 async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     """
     Returns complete live executive metrics, support admin SLA breakdown,
-    resolution times, and 100% full historical ticket records.
+    resolution times, and 100% full historical ticket records across IT & Maintenance tables.
     """
-    # Fetch only Kevin, Ellias, and Faisal
+    # Fetch active support admins
     admins_stmt = select(SupportAdmin).where(
         SupportAdmin.active == True,
         SupportAdmin.phone.in_(SUPPORT_ADMIN_PHONES)
@@ -45,8 +48,8 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
     admins_res = await db.execute(admins_stmt)
     support_admins = admins_res.scalars().all()
 
-    # Fetch all tickets ordered by newest first
-    stmt = (
+    # Fetch all IT tickets
+    it_stmt = (
         select(Ticket)
         .options(
             selectinload(Ticket.employee).selectinload(Employee.department),
@@ -57,19 +60,44 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             selectinload(Ticket.priority),
             selectinload(Ticket.status)
         )
-        .order_by(Ticket.ticket_id.desc())
     )
-    res = await db.execute(stmt)
-    tickets = res.scalars().all()
+    it_tickets = (await db.execute(it_stmt)).scalars().all()
 
-    # Fetch all ticket assignments
+    # Fetch all Maintenance tickets
+    maint_stmt = (
+        select(MaintenanceTicket)
+        .options(
+            selectinload(MaintenanceTicket.employee).selectinload(Employee.department),
+            selectinload(MaintenanceTicket.employee).selectinload(Employee.location),
+            selectinload(MaintenanceTicket.category),
+            selectinload(MaintenanceTicket.subcategory),
+            selectinload(MaintenanceTicket.issue_type),
+            selectinload(MaintenanceTicket.priority),
+            selectinload(MaintenanceTicket.status)
+        )
+    )
+    maint_tickets = (await db.execute(maint_stmt)).scalars().all()
+
+    # Fetch all IT ticket assignments
     asg_stmt = (
         select(TicketAssignment)
         .options(selectinload(TicketAssignment.admin))
     )
-    asg_res = await db.execute(asg_stmt)
-    assignments = asg_res.scalars().all()
-    asg_map = {a.ticket_id: a.admin for a in assignments if a.admin}
+    asgs = (await db.execute(asg_stmt)).scalars().all()
+    asg_map = {f"IT_{a.ticket_id}": a.admin for a in asgs if a.admin}
+
+    # Fetch all Maintenance ticket assignments
+    m_asg_stmt = (
+        select(MaintenanceTicketAssignment)
+        .options(selectinload(MaintenanceTicketAssignment.admin))
+    )
+    m_asgs = (await db.execute(m_asg_stmt)).scalars().all()
+    for ma in m_asgs:
+        if ma.admin:
+            asg_map[f"MAINT_{ma.ticket_id}"] = ma.admin
+
+    tickets = list(it_tickets) + list(maint_tickets)
+    tickets.sort(key=lambda t: t.created_at or datetime.datetime.min, reverse=True)
 
     now_utc = datetime.datetime.utcnow()
     today_str = now_utc.strftime("%Y-%m-%d")
@@ -146,7 +174,9 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
             per_ticket_solving_time_str = f"Open ({format_duration(active_sec)})"
 
         # Track Admin Metrics
-        admin = asg_map.get(t.ticket_id)
+        is_maint = getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number
+        asg_key = f"MAINT_{t.ticket_id}" if is_maint else f"IT_{t.ticket_id}"
+        admin = asg_map.get(asg_key)
         if admin and admin.admin_id in admin_stats_map:
             astat = admin_stats_map[admin.admin_id]
             astat["total_assigned"] += 1
@@ -170,6 +200,7 @@ async def get_dashboard_data(db: AsyncSession = Depends(get_db)):
         records.append({
             "ticket_id": t.ticket_id,
             "ticket_number": t.ticket_number,
+            "domain": "MAINTENANCE" if is_maint else "IT",
             "employee_name": emp_name,
             "employee_phone": emp_phone,
             "department": dept_name,
@@ -416,6 +447,12 @@ async def render_dashboard_page():
 
                     <!-- Filters -->
                     <div class="flex flex-wrap items-center gap-3">
+                        <select id="filter-domain" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
+                            <option value="ALL">All Support Domains</option>
+                            <option value="IT">💻 IT Support</option>
+                            <option value="MAINTENANCE">🛠️ Building Maintenance</option>
+                        </select>
+
                         <select id="filter-status" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
                             <option value="ALL">All Statuses</option>
                             <option value="Open">🟡 Open</option>
@@ -769,11 +806,14 @@ async def render_dashboard_page():
             let html = '';
             records.forEach(r => {
                 const photoIcon = r.image_id ? `<span class="text-amber-500 ml-1.5" title="Photo Attachment Present"><i class="fa-solid fa-image"></i></span>` : '';
+                const domainBadge = r.domain === 'MAINTENANCE' 
+                    ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 ml-1">🛠️ Maint</span>`
+                    : `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 ml-1">💻 IT</span>`;
 
                 html += `
                 <tr class="hover:bg-slate-50 transition cursor-pointer" onclick='openModal(${JSON.stringify(r).replace(/'/g, "&apos;")})'>
                     <td class="px-6 py-4 font-mono font-bold text-blue-600 whitespace-nowrap">
-                        ${r.ticket_number}${photoIcon}
+                        ${r.ticket_number}${domainBadge}${photoIcon}
                     </td>
                     <td class="px-6 py-4">
                         <div class="font-bold text-slate-900">${escapeHtml(r.employee_name)}</div>
@@ -812,10 +852,12 @@ async def render_dashboard_page():
 
         function filterTickets() {
             const queryInput = document.getElementById('search-input');
+            const domainSelect = document.getElementById('filter-domain');
             const statusSelect = document.getElementById('filter-status');
             const prioritySelect = document.getElementById('filter-priority');
 
             const query = queryInput ? queryInput.value.toLowerCase().trim() : '';
+            const domainFilter = domainSelect ? domainSelect.value : 'ALL';
             const statusFilter = statusSelect ? statusSelect.value : 'ALL';
             const priorityFilter = prioritySelect ? prioritySelect.value : 'ALL';
 
@@ -827,12 +869,14 @@ async def render_dashboard_page():
                     r.category.toLowerCase().includes(query) ||
                     r.issue.toLowerCase().includes(query) ||
                     r.description.toLowerCase().includes(query) ||
+                    (r.domain && r.domain.toLowerCase().includes(query)) ||
                     r.assigned_admin.toLowerCase().includes(query);
 
+                const matchesDomain = domainFilter === 'ALL' || r.domain === domainFilter;
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
                 const matchesPriority = priorityFilter === 'ALL' || r.priority === priorityFilter;
 
-                return matchesQuery && matchesStatus && matchesPriority;
+                return matchesQuery && matchesDomain && matchesStatus && matchesPriority;
             });
 
             renderTable(filtered);
