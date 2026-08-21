@@ -4,7 +4,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import Ticket, TicketAssignment, SupportAdmin
+from app.database import Ticket, MaintenanceTicket, TicketAssignment, MaintenanceTicketAssignment, SupportAdmin
 from app.state_manager import clear_user_state
 from app.meta_api import meta_api
 
@@ -16,28 +16,44 @@ async def handle_resolution_confirmation(
 ) -> bool:
     """
     Processes employee response when awaiting resolution confirmation.
+    Handles both IT tickets (Ticket table) and Building Maintenance tickets (MaintenanceTicket table).
     Returns True when processed.
     """
     ticket_id = current_data.get("ticket_id")
-    ticket_number = current_data.get("ticket_number")
+    ticket_number = current_data.get("ticket_number", "")
+    is_maint = current_data.get("is_maint", False) or "TKT-MNT" in ticket_number
 
     if not ticket_id:
         await clear_user_state(session, sender_phone)
         await meta_api.send_text_message(sender_phone, "Ticket context missing. State reset.")
         return True
 
-    # Retrieve ticket details with full relationships
-    stmt = (
-        select(Ticket)
-        .options(
-            selectinload(Ticket.employee),
-            selectinload(Ticket.category),
-            selectinload(Ticket.subcategory),
-            selectinload(Ticket.issue_type),
-            selectinload(Ticket.priority)
+    # Retrieve ticket details from appropriate table
+    if is_maint:
+        stmt = (
+            select(MaintenanceTicket)
+            .options(
+                selectinload(MaintenanceTicket.employee),
+                selectinload(MaintenanceTicket.category),
+                selectinload(MaintenanceTicket.subcategory),
+                selectinload(MaintenanceTicket.issue_type),
+                selectinload(MaintenanceTicket.priority)
+            )
+            .where(MaintenanceTicket.ticket_id == ticket_id)
         )
-        .where(Ticket.ticket_id == ticket_id)
-    )
+    else:
+        stmt = (
+            select(Ticket)
+            .options(
+                selectinload(Ticket.employee),
+                selectinload(Ticket.category),
+                selectinload(Ticket.subcategory),
+                selectinload(Ticket.issue_type),
+                selectinload(Ticket.priority)
+            )
+            .where(Ticket.ticket_id == ticket_id)
+        )
+
     res = await session.execute(stmt)
     ticket = res.scalars().first()
 
@@ -54,16 +70,25 @@ async def handle_resolution_confirmation(
     issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
     emp_name = ticket.employee.full_name if ticket.employee else "N/A"
     emp_phone = f" (+{ticket.employee.phone})" if ticket.employee else ""
+    domain_label = "Building Maintenance" if is_maint else "IT Support"
 
     # Fetch assigned admin
-    assign_stmt = (
-        select(TicketAssignment)
-        .options(selectinload(TicketAssignment.admin))
-        .where(TicketAssignment.ticket_id == ticket.ticket_id)
-    )
+    if is_maint:
+        assign_stmt = (
+            select(MaintenanceTicketAssignment)
+            .options(selectinload(MaintenanceTicketAssignment.admin))
+            .where(MaintenanceTicketAssignment.ticket_id == ticket.ticket_id)
+        )
+    else:
+        assign_stmt = (
+            select(TicketAssignment)
+            .options(selectinload(TicketAssignment.admin))
+            .where(TicketAssignment.ticket_id == ticket.ticket_id)
+        )
+
     assign_res = await session.execute(assign_stmt)
     assignment = assign_res.scalars().first()
-    admin_name = assignment.admin.full_name if assignment and assignment.admin else "IT Support Team"
+    admin_name = assignment.admin.full_name if assignment and assignment.admin else "Support Team"
     admin_phone = f" (+{assignment.admin.phone})" if assignment and assignment.admin else ""
 
     if choice in ("1", "confirm_close_ticket", "confirm & close", "✅ confirm & close", "close", "confirm"):
@@ -77,7 +102,7 @@ async def handle_resolution_confirmation(
         # Notify Employee
         await meta_api.send_text_message(
             sender_phone,
-            f"🎉 *Ticket Closed*\n\nThank you for confirming! Ticket *{ticket_number}* is now officially **CLOSED**."
+            f"🎉 *{domain_label} Ticket Closed*\n\nThank you for confirming! Ticket *{ticket_number}* is now officially **CLOSED**."
         )
 
         # Notify Assigned Admin
@@ -85,14 +110,14 @@ async def handle_resolution_confirmation(
             await meta_api.send_text_message(
                 assignment.admin.phone,
                 f"ℹ️ *Ticket Resolution Confirmed*\n\n"
-                f"Employee {emp_name} confirmed resolution for Ticket *{ticket_number}*. Ticket is now CLOSED."
+                f"Employee {emp_name} confirmed resolution for {domain_label} Ticket *{ticket_number}*. Ticket is now CLOSED."
             )
 
         # Notify Master Admin Fazal
         if settings.master_admin_phone:
             master_closed = (
                 f"🎉 *[MASTER ALERT] TICKET OFFICIALLY CLOSED* ⚪\n\n"
-                f"🎫 *Ticket ID:* `{ticket_number}`\n"
+                f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
                 f"👤 *Employee:* {emp_name}{emp_phone}\n"
                 f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                 f"⚙️ *Issue:* {issue_name}\n"
@@ -105,7 +130,7 @@ async def handle_resolution_confirmation(
         # Notify Executive Observers of Ticket Closed
         observer_closed = (
             f"🎉 *[EXECUTIVE OBSERVER ALERT] TICKET OFFICIALLY CLOSED*\n\n"
-            f"🎫 *Ticket ID:* `{ticket_number}`\n"
+            f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
             f"👤 *Employee:* {emp_name}{emp_phone}\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
@@ -129,7 +154,7 @@ async def handle_resolution_confirmation(
         # Notify Employee
         await meta_api.send_text_message(
             sender_phone,
-            f"🔄 *Ticket Reopened*\n\nTicket *{ticket_number}* has been **REOPENED**. Our IT Support team has been notified and will assist you."
+            f"🔄 *{domain_label} Ticket Reopened*\n\nTicket *{ticket_number}* has been **REOPENED**. Our Support team has been notified and will assist you."
         )
 
         # Notify Assigned Admin
@@ -137,14 +162,14 @@ async def handle_resolution_confirmation(
             await meta_api.send_text_message(
                 assignment.admin.phone,
                 f"🚨 *Ticket Reopened*\n\n"
-                f"Employee {emp_name} requested to REOPEN Ticket *{ticket_number}*. Status changed back to **OPEN**."
+                f"Employee {emp_name} requested to REOPEN {domain_label} Ticket *{ticket_number}*. Status changed back to **OPEN**."
             )
 
         # Notify Master Admin Fazal
         if settings.master_admin_phone:
             master_reopened = (
                 f"🚨 *[MASTER ALERT] TICKET REOPENED* 🔄\n\n"
-                f"🎫 *Ticket ID:* `{ticket_number}`\n"
+                f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
                 f"👤 *Employee:* {emp_name}{emp_phone}\n"
                 f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                 f"⚙️ *Issue:* {issue_name}\n"
@@ -157,7 +182,7 @@ async def handle_resolution_confirmation(
         # Notify Executive Observers
         observer_reopened = (
             f"🚨 *[EXECUTIVE OBSERVER ALERT] TICKET REOPENED*\n\n"
-            f"🎫 *Ticket ID:* `{ticket_number}`\n"
+            f"🎫 *Ticket ID:* `{ticket_number}` ({domain_label})\n"
             f"👤 *Employee:* {emp_name}{emp_phone}\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"

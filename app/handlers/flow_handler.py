@@ -26,18 +26,25 @@ async def generate_ticket_number(session: AsyncSession, domain: str = "IT") -> s
     """Generates a unique ticket number in format: TKT-YYYYMMDD-XXXXX or TKT-MNT-YYYYMMDD-XXXXX"""
     prefix = "TKT-MNT" if domain == "MAINTENANCE" else "TKT"
     today_str = datetime.datetime.utcnow().strftime("%Y%m%d")
-    stmt = select(func.count(Ticket.ticket_id))
-    res = await session.execute(stmt)
-    total_count = res.scalar() or 0
     
-    seq_num = total_count + 1
-    ticket_num = f"{prefix}-{today_str}-{str(seq_num).zfill(5)}"
-    
-    check_stmt = select(Ticket).where(Ticket.ticket_number == ticket_num)
-    existing = (await session.execute(check_stmt)).scalars().first()
+    if domain == "MAINTENANCE":
+        stmt = select(func.count(MaintenanceTicket.ticket_id))
+        res = await session.execute(stmt)
+        total_count = res.scalar() or 0
+        ticket_num = f"{prefix}-{today_str}-{str(total_count + 1).zfill(5)}"
+        check_stmt = select(MaintenanceTicket).where(MaintenanceTicket.ticket_number == ticket_num)
+        existing = (await session.execute(check_stmt)).scalars().first()
+    else:
+        stmt = select(func.count(Ticket.ticket_id))
+        res = await session.execute(stmt)
+        total_count = res.scalar() or 0
+        ticket_num = f"{prefix}-{today_str}-{str(total_count + 1).zfill(5)}"
+        check_stmt = select(Ticket).where(Ticket.ticket_number == ticket_num)
+        existing = (await session.execute(check_stmt)).scalars().first()
+
     if existing:
         random_suffix = str(random.randint(100, 999))
-        ticket_num = f"{prefix}-{today_str}-{str(seq_num).zfill(5)}{random_suffix}"
+        ticket_num = f"{prefix}-{today_str}-{str(total_count + 1).zfill(5)}{random_suffix}"
 
     return ticket_num
 
