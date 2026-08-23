@@ -86,7 +86,7 @@ async def generate_daily_master_report_data(session: AsyncSession):
         f"📊 *DAILY MASTER EXECUTIVE SUPPORT REPORT*\n"
         f"📅 *Date:* {today_str}\n\n"
         f"📈 *Summary Overview:*\n"
-        f"• Total Tasks Today: *{total_count}* (💻 IT: *{it_count}* | 🛠️ Maintenance: *{maint_count}*)\n"
+        f"• Total Tasks Today: *{total_count}* (💻 IT: *{it_count}* | 🏗️ Projects: *{maint_count}*)\n"
         f"• 🟡 Open: *{open_count}* | 🔵 In Progress: *{in_prog_count}* | 🟢 Fixed/Closed: *{resolved_count}*\n"
         f"• ⚠️ Urgent Safety Hazards: *{hazard_count}*\n"
         f"------------------------------------\n"
@@ -148,7 +148,7 @@ async def generate_daily_master_report_data(session: AsyncSession):
             status_str = STATUS_ICONS.get(t.status_id, "🟡 Open")
             p_name = t.priority.priority_name if t.priority else "Medium"
             desc = t.description[:60] + "..." if len(t.description) > 60 else t.description
-            domain_label = "🛠️ Maint" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
+            domain_label = "🏗️ Projects" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
             room_str = f" | 📍 {t.room_area}" if getattr(t, "room_area", None) else ""
             hazard_str = " | ⚠️ HAZARD" if getattr(t, "is_safety_hazard", False) else ""
             res_note_str = f"\n  🔧 _Resolution Note: {t.resolution_note}_" if getattr(t, "resolution_note", None) else ""

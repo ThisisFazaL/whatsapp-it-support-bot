@@ -112,7 +112,7 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
         cat_name = ticket.category.category_name if ticket.category else "N/A"
         sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
         issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
-        domain_title = "Building Maintenance" if is_maint else "IT Support"
+        domain_title = "Building Projects" if is_maint else "IT Support"
 
         emp_header = "🔔 TICKET RESOLUTION CONFIRMATION"
         emp_body = (
@@ -309,7 +309,7 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
             p_name = t.priority.priority_name if t.priority else "Medium"
             status_str = STATUS_NAMES.get(t.status_id, "🟡 Open")
-            domain_label = "🛠️ MAINTENANCE" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
+            domain_label = "🏗️ PROJECTS" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
             room_info = f"\n📍 *Room/Area:* {t.room_area}" if getattr(t, "room_area", None) else ""
             hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if getattr(t, "is_safety_hazard", False) else ""
 

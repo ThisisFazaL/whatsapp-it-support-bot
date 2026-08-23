@@ -450,7 +450,7 @@ async def render_dashboard_page():
                         <select id="filter-domain" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
                             <option value="ALL">All Support Domains</option>
                             <option value="IT">💻 IT Support</option>
-                            <option value="MAINTENANCE">🛠️ Building Maintenance</option>
+                            <option value="MAINTENANCE">🏗️ Building Projects</option>
                         </select>
 
                         <select id="filter-status" onchange="filterTickets()" class="bg-slate-50 border border-slate-300 text-slate-800 text-sm rounded-xl px-3.5 py-2.5 focus:outline-none focus:bg-white focus:border-blue-600 font-medium">
@@ -807,7 +807,7 @@ async def render_dashboard_page():
             records.forEach(r => {
                 const photoIcon = r.image_id ? `<span class="text-amber-500 ml-1.5" title="Photo Attachment Present"><i class="fa-solid fa-image"></i></span>` : '';
                 const domainBadge = r.domain === 'MAINTENANCE' 
-                    ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 ml-1">🛠️ Maint</span>`
+                    ? `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 ml-1">🏗️ Projects</span>`
                     : `<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-300 ml-1">💻 IT</span>`;
 
                 html += `

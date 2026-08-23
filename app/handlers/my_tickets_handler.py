@@ -76,7 +76,7 @@ async def handle_my_tickets(session: AsyncSession, employee: Employee, message_t
         p_name = t.priority.priority_name if t.priority else "Medium"
         status_str = STATUS_ICONS.get(t.status_id, "🟡 Open")
         created_str = t.created_at.strftime("%d %b %Y, %H:%M") if t.created_at else ""
-        domain_label = "🛠️ Maint" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
+        domain_label = "🏗️ Projects" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
         room_str = f" ({t.room_area})" if getattr(t, "room_area", None) else ""
         img_str = " 🖼️ *(Photo attached)*" if t.image_id else ""
 

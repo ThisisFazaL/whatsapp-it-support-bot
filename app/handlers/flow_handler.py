@@ -74,7 +74,7 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
         body = "👋 *Welcome to Support Portal*\n\nPlease select the type of ticket you would like to create:"
         buttons = [
             {"id": "btn_domain_it", "title": "💻 IT Support"},
-            {"id": "btn_domain_maint", "title": "🛠️ Maintenance"}
+            {"id": "btn_domain_maint", "title": "🏗️ Projects"}
         ]
         await set_user_state(session, phone, "select_domain", {})
         await meta_api.send_button_message(
@@ -84,8 +84,8 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             header_text="⚙️ SELECT SUPPORT DOMAIN"
         )
     else:
-        # Standard IT Employee -> Proceed to Location Selection directly
-        await start_location_selection(session, phone, domain="IT")
+        # Standard IT Employee -> Go straight to IT Categories Menu (No Location prompt for IT!)
+        await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
 
 async def start_location_selection(session: AsyncSession, phone: str, domain: str = "IT"):
     """Presents location selection numbered text list."""
@@ -129,7 +129,7 @@ async def send_categories_menu(session: AsyncSession, phone: str, domain: str = 
         categories = (await session.execute(stmt)).scalars().all()
 
     cat_list_str = "\n".join([f"{idx+1}. *{cat.category_name}*" for idx, cat in enumerate(categories)])
-    domain_title = "🛠️ Building Maintenance" if norm_domain == "MAINTENANCE" else "💻 IT Support"
+    domain_title = "🏗️ Building Projects" if norm_domain == "MAINTENANCE" else "💻 IT Support"
     msg = (
         f"📌 *Select {domain_title} Category*\n\n"
         f"Please select a category by replying with the corresponding number:\n\n"
@@ -170,10 +170,11 @@ async def handle_flow(
 
     # STEP 0: Select Domain (Dual-Role Buttons)
     if step == "select_domain":
-        if "maint" in text_clean or "btn_domain_maint" in text_clean or choice_num == "2":
+        if "maint" in text_clean or "btn_domain_maint" in text_clean or "project" in text_clean or choice_num == "2":
             await start_location_selection(session, phone, domain="MAINTENANCE")
         else:
-            await start_location_selection(session, phone, domain="IT")
+            # IT Support -> Skip Location Selection completely! Go straight to IT Categories Menu!
+            await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
         return
 
     # STEP 1: Select Location (Numbered Text List)
@@ -537,13 +538,14 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     await clear_user_state(session, phone)
 
     hazard_notice = "\n⚠️ *SAFETY HAZARD:* 🚨 URGENT SAFETY HAZARD FLAG!" if is_safety_hazard else ""
-    domain_label = "🛠️ MAINTENANCE" if domain == "MAINTENANCE" else "💻 IT SUPPORT"
+    domain_label = "🏗️ PROJECTS" if domain == "MAINTENANCE" else "💻 IT SUPPORT"
+    location_line = f"🏢 *Location:* {loc_name}" + (f" ({room_area})" if room_area else "") + "\n" if domain == "MAINTENANCE" and loc_name else ""
 
     # Send Confirmation to Reporter
     emp_confirmation = (
         f"✅ *{domain_label} TICKET CREATED!*\n\n"
         f"🎫 *Ticket ID:* `{ticket_number}`\n"
-        f"🏢 *Location:* {loc_name} ({room_area})\n"
+        f"{location_line}"
         f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'}\n"
         f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom Issue'}\n"
         f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}{hazard_notice}\n"
@@ -557,11 +559,11 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     emp_phone = employee.phone if employee else phone
 
     header = f"🚨 NEW {domain_label} TICKET"
+    loc_body = f"🏢 *Location:* {loc_name}\n📍 *Room / Area:* {room_area}\n" if domain == "MAINTENANCE" and loc_name else ""
     body = (
         f"🎫 *Ticket ID:* `{ticket_number}`\n"
         f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
-        f"🏢 *Location:* {loc_name}\n"
-        f"📍 *Room / Area:* {room_area}\n"
+        f"{loc_body}"
         f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
         f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
         f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}{hazard_notice}\n"
