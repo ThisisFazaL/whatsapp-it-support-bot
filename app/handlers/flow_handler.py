@@ -478,6 +478,12 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     session.add(new_ticket)
     await session.flush()
 
+    # Load details for routing & notifications
+    cat_obj = await session.get(Category, category_id) if category_id else None
+    sub_obj = await session.get(Subcategory, subcategory_id) if subcategory_id else None
+    issue_obj = await session.get(IssueType, issue_type_id) if issue_type_id else None
+    p_obj = await session.get(Priority, priority_id) if priority_id else None
+
     # Route Maintenance Tickets vs IT Tickets
     assigned_admin = None
     target_admins = []
@@ -496,35 +502,21 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
         footer = "Tap button below to resolve (whoever resolves first claims ticket)"
     else:
         # IT Ticket Routing:
-        # Check if category is specifically mapped to Faisal (e.g. CCTV, Access Control, Power/Electrical)
-        faisal_stmt = select(SupportAdmin).where(SupportAdmin.phone == "263780100503", SupportAdmin.active == True)
-        faisal_admin = (await session.execute(faisal_stmt)).scalars().first()
+        # Check if category is specifically for CCTV, Access Control, or Electrical
+        cat_name_str = (cat_obj.category_name if cat_obj else "").lower()
+        sub_name_str = (sub_obj.subcategory_name if sub_obj else "").lower()
+        faisal_keywords = ("cctv", "camera", "surveillance", "access control", "biometric", "turnstile", "electrical", "generator", "ups power")
+        is_faisal_cat = any(k in cat_name_str or k in sub_name_str for k in faisal_keywords)
 
-        is_faisal_cat = False
-        if subcategory_id:
-            sub_map_stmt = (
-                select(AdminCategoryMapping)
-                .options(selectinload(AdminCategoryMapping.admin))
-                .where(AdminCategoryMapping.subcategory_id == subcategory_id)
-            )
-            sub_mappings = (await session.execute(sub_map_stmt)).scalars().all()
-            if any(m.admin and m.admin.phone == "263780100503" for m in sub_mappings):
-                is_faisal_cat = True
-
-        if not is_faisal_cat and category_id:
-            cat_map_stmt = (
-                select(AdminCategoryMapping)
-                .options(selectinload(AdminCategoryMapping.admin))
-                .where(AdminCategoryMapping.category_id == category_id)
-            )
-            cat_mappings = (await session.execute(cat_map_stmt)).scalars().all()
-            if any(m.admin and m.admin.phone == "263780100503" for m in cat_mappings):
-                is_faisal_cat = True
-
-        if is_faisal_cat and faisal_admin:
+        if is_faisal_cat:
             # Route exclusively to Faisal
+            faisal_stmt = select(SupportAdmin).where(
+                (SupportAdmin.phone == "263780100503") | (SupportAdmin.phone.like("%780100503%")),
+                SupportAdmin.active == True
+            )
+            faisal_admin = (await session.execute(faisal_stmt)).scalars().first()
             assigned_admin = faisal_admin
-            target_admins = [faisal_admin]
+            target_admins = [faisal_admin] if faisal_admin else []
             buttons = [
                 {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
             ]
@@ -533,19 +525,18 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
             # Combined Kevin Chikati & Ellias Murenga category:
             # Notification goes to BOTH Kevin and Ellias with Claim button!
             kevin_ellias_stmt = select(SupportAdmin).where(
-                SupportAdmin.phone.in_(["263718627526", "263788843579"]),
+                SupportAdmin.phone.in_(["263718627526", "263788843579", "+263718627526", "+263788843579"]),
                 SupportAdmin.active == True
             )
-            target_admins = (await session.execute(kevin_ellias_stmt)).scalars().all()
+            target_admins = list((await session.execute(kevin_ellias_stmt)).scalars().all())
             
-            # If database doesn't have them yet, fallback to active non-maintenance admins
-            if not target_admins:
-                all_it_stmt = select(SupportAdmin).where(
-                    SupportAdmin.is_maintenance_admin == False,
-                    SupportAdmin.is_master_admin == False,
+            # Fallback if phone format differs: query by first name
+            if len(target_admins) < 2:
+                name_stmt = select(SupportAdmin).where(
+                    (SupportAdmin.full_name.ilike("%Kevin%")) | (SupportAdmin.full_name.ilike("%Ellias%")),
                     SupportAdmin.active == True
                 )
-                target_admins = (await session.execute(all_it_stmt)).scalars().all()
+                target_admins = list((await session.execute(name_stmt)).scalars().all())
 
             # Ticket remains unassigned until claimed
             assigned_admin = None
@@ -570,12 +561,6 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
         session.add(assignment)
 
     await session.commit()
-
-    # Load details for notifications
-    cat_obj = await session.get(Category, category_id) if category_id else None
-    sub_obj = await session.get(Subcategory, subcategory_id) if subcategory_id else None
-    issue_obj = await session.get(IssueType, issue_type_id) if issue_type_id else None
-    p_obj = await session.get(Priority, priority_id) if priority_id else None
 
     await clear_user_state(session, phone)
 

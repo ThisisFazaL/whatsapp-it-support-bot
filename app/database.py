@@ -359,3 +359,19 @@ async def init_db_models():
                 active=True
             ))
         await session.commit()
+
+        # Clean up legacy / incorrect AdminCategoryMapping rows
+        await session.execute(delete(AdminCategoryMapping))
+        await session.commit()
+
+        # Reset misassigned open tickets 53, 54, 55 so Kevin and Ellias can claim them
+        mis_asg_stmt = (
+            select(TicketAssignment)
+            .where(
+                TicketAssignment.ticket_id.in_([53, 54, 55])
+            )
+        )
+        mis_asgs = (await session.execute(mis_asg_stmt)).scalars().all()
+        for ma in mis_asgs:
+            await session.delete(ma)
+        await session.commit()
