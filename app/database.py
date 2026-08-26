@@ -278,9 +278,22 @@ async def init_db_models():
         if not res.scalars().all():
             session.add_all([Department(department_id=1, department_name="IT Support"), Department(department_id=2, department_name="Finance")])
         
+        # Guarantee exact 5 Project Locations are synced
+        desired_locations = [
+            "Tagoneswa Hardware",
+            "LG Plast",
+            "Shop 5",
+            "Shop 6",
+            "Kreckle Foods"
+        ]
         res = await session.execute(select(Location))
-        if not res.scalars().all():
-            session.add_all([Location(location_id=1, location_name="Headquarters - Floor 3"), Location(location_id=2, location_name="Branch Office")])
+        existing_locs = res.scalars().all()
+        existing_names = [l.location_name for l in existing_locs]
+        if existing_names != desired_locations:
+            await session.execute(delete(Location))
+            await session.flush()
+            for loc_name in desired_locations:
+                session.add(Location(location_name=loc_name))
 
         # Guarantee 4 Support Admins are synced in PostgreSQL database on startup
         admin_data = [
