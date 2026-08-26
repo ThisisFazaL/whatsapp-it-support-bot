@@ -502,14 +502,24 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
         footer = "Tap button below to resolve (whoever resolves first claims ticket)"
     else:
         # IT Ticket Routing:
-        # Check if category is specifically for CCTV, Access Control, or Electrical
         cat_name_str = (cat_obj.category_name if cat_obj else "").lower()
         sub_name_str = (sub_obj.subcategory_name if sub_obj else "").lower()
-        faisal_keywords = ("cctv", "camera", "surveillance", "access control", "biometric", "turnstile", "electrical", "generator", "ups power")
-        is_faisal_cat = any(k in cat_name_str or k in sub_name_str for k in faisal_keywords)
+
+        # Faisal Kassim handles:
+        # 1. Security & Access Control (CCTV, Cameras, Access Control, Automatic Gates, Turnstiles, Biometrics)
+        # 2. Electrical & Power Systems (Fittings, Wiring, Electronics, Power Supplies, Lights, Generator, UPS)
+        # 3. Other / Custom Support -> General Maintenance & Facilities (Desk/Chair repair, Drawers, Furniture, Office Facilities)
+        is_faisal_cat = (
+            any(k in cat_name_str for k in ["security", "access control", "electrical", "power", "custom support", "other / custom", "facilities"]) or
+            any(k in sub_name_str for k in [
+                "cctv", "camera", "surveillance", "access control", "gate", "turnstile", "biometric",
+                "electrical", "wiring", "fitting", "light", "electronics", "power supply", "generator", "ups",
+                "general maintenance", "facilities", "desk", "chair", "drawer", "furniture"
+            ])
+        ) and not any(it_k in cat_name_str for it_k in ["computing", "hardware", "software", "network", "connectivity", "account"])
 
         if is_faisal_cat:
-            # Route exclusively to Faisal
+            # Route exclusively to Faisal Kassim (+263 780 100 503)
             faisal_stmt = select(SupportAdmin).where(
                 (SupportAdmin.phone == "263780100503") | (SupportAdmin.phone.like("%780100503%")),
                 SupportAdmin.active == True
@@ -522,8 +532,8 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
             ]
             footer = "Tap button below to resolve"
         else:
-            # Combined Kevin Chikati & Ellias Murenga category:
-            # Notification goes to BOTH Kevin and Ellias with Claim button!
+            # Core IT Support (Computers, Laptops, Printers, Scanners, Peripherals, Wi-Fi, Internet, LAN, Outlook, Software, Passwords):
+            # Route to Combined Kevin Chikati (+263 718 627 526) & Ellias Murenga (+263 788 843 579) with Claim button!
             kevin_ellias_stmt = select(SupportAdmin).where(
                 SupportAdmin.phone.in_(["263718627526", "263788843579", "+263718627526", "+263788843579"]),
                 SupportAdmin.active == True

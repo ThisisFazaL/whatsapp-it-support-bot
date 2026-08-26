@@ -61,65 +61,6 @@ async def scheduled_daily_report_loop():
             logger.error(f"Error in scheduled daily report loop: {e}", exc_info=True)
             await asyncio.sleep(300)
 
-async def resend_unclaimed_tickets_to_kevin_and_ellias():
-    """Broadcasts open IT support tickets (like 53, 54, 55) to Kevin and Ellias with Claim button on startup."""
-    try:
-        await asyncio.sleep(3) # Wait for startup to settle
-        async with async_session_factory() as session:
-            it_admin_phones = ["263718627526", "263788843579"]
-            stmt = (
-                select(Ticket)
-                .options(
-                    selectinload(Ticket.employee),
-                    selectinload(Ticket.category),
-                    selectinload(Ticket.subcategory),
-                    selectinload(Ticket.issue_type),
-                    selectinload(Ticket.priority)
-                )
-                .where(
-                    Ticket.ticket_id.in_([53, 54, 55]),
-                    Ticket.status_id == 1
-                )
-                .order_by(Ticket.ticket_id.asc())
-            )
-            open_tickets = (await session.execute(stmt)).scalars().all()
-            for t in open_tickets:
-                emp_name = t.employee.full_name if t.employee else "Staff Reporter"
-                emp_phone = t.employee.phone if t.employee else ""
-                cat_name = t.category.category_name if t.category else "N/A"
-                sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
-                issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
-                p_name = t.priority.priority_name if t.priority else "Medium"
-
-                header = "🚨 NEW 💻 IT SUPPORT TICKET"
-                body = (
-                    f"🎫 *Ticket ID:* `{t.ticket_number}`\n"
-                    f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
-                    f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
-                    f"⚙️ *Issue:* {issue_name}\n"
-                    f"🚨 *Priority:* {p_name}\n"
-                    f"📝 *Description:* {t.description}"
-                )
-                buttons = [
-                    {"id": f"claim_{t.ticket_number}", "title": "✋ Claim Ticket"},
-                    {"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"}
-                ]
-                footer = "Tap 'Claim Ticket' to assign to yourself"
-
-                for phone in it_admin_phones:
-                    await meta_api.send_button_message(
-                        to_phone=phone,
-                        body_text=body,
-                        buttons=buttons,
-                        header_text=header,
-                        footer_text=footer,
-                        image_id=t.image_id
-                    )
-                    await asyncio.sleep(0.5)
-                logger.info(f"Re-broadcasted Ticket {t.ticket_number} to Kevin and Ellias successfully!")
-    except Exception as e:
-        logger.error(f"Error re-broadcasting unclaimed tickets: {e}", exc_info=True)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle startup and shutdown hooks."""
@@ -127,9 +68,6 @@ async def lifespan(app: FastAPI):
     await init_db_models()
     logger.info("Database initialized successfully.")
     
-    # Broadcast any pending open tickets to Kevin & Ellias
-    asyncio.create_task(resend_unclaimed_tickets_to_kevin_and_ellias())
-
     # Start 8 PM IST EOD report background task loop
     report_task = asyncio.create_task(scheduled_daily_report_loop())
     yield
