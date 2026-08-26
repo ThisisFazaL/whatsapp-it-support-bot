@@ -6,7 +6,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship, selectinload
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 
 from app.config import settings
 
