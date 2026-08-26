@@ -426,6 +426,111 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
         return True
 
+    # ----------------------------------------------------
+    # HANDLE CLAIM COMMAND: [ ✋ Claim Ticket ] or "claim TKT-..."
+    # ----------------------------------------------------
+    if claim_match:
+        if ticket.status_id in (3, 4):
+            status_name = "Resolved" if ticket.status_id == 3 else "Closed"
+            await meta_api.send_text_message(
+                sender_phone,
+                f"ℹ️ Ticket *{ticket.ticket_number}* is already marked as **{status_name}**."
+            )
+            return True
+
+        # Check existing assignment
+        if is_maint_ticket:
+            asg_chk = select(MaintenanceTicketAssignment).options(selectinload(MaintenanceTicketAssignment.admin)).where(MaintenanceTicketAssignment.ticket_id == ticket.ticket_id)
+            current_asg = (await session.execute(asg_chk)).scalars().first()
+        else:
+            asg_chk = select(TicketAssignment).options(selectinload(TicketAssignment.admin)).where(TicketAssignment.ticket_id == ticket.ticket_id)
+            current_asg = (await session.execute(asg_chk)).scalars().first()
+
+        # If already claimed by another admin
+        if current_asg and current_asg.admin_id and current_asg.admin_id != admin.admin_id:
+            already_admin_name = current_asg.admin.full_name if current_asg.admin else "another admin"
+            await meta_api.send_text_message(
+                sender_phone,
+                f"ℹ️ *Ticket Already Claimed*\n\nTicket *{ticket.ticket_number}* was already claimed by *{already_admin_name}*."
+            )
+            return True
+
+        # Assign ticket to this claiming admin
+        if not current_asg:
+            if is_maint_ticket:
+                session.add(MaintenanceTicketAssignment(ticket_id=ticket.ticket_id, admin_id=admin.admin_id))
+            else:
+                session.add(TicketAssignment(ticket_id=ticket.ticket_id, admin_id=admin.admin_id))
+        else:
+            current_asg.admin_id = admin.admin_id
+
+        # Update status to In Progress
+        ticket.status_id = 2 # In Progress
+        ticket.updated_at = datetime.datetime.utcnow()
+        await session.commit()
+
+        cat_name = ticket.category.category_name if ticket.category else "N/A"
+        sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
+        issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
+        emp_name = ticket.employee.full_name if ticket.employee else "Staff Reporter"
+        emp_phone = ticket.employee.phone if ticket.employee else ""
+
+        # 1. Confirm to claiming admin with interactive Resolve button
+        claim_confirm_msg = (
+            f"✅ *TICKET CLAIMED SUCCESSFULLY!*\n\n"
+            f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+            f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+            f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+            f"⚙️ *Issue:* {issue_name}\n"
+            f"📝 *Description:* {ticket.description}\n\n"
+            f"You are now the assigned support admin for this ticket. Tap below when completed:"
+        )
+        resolve_btns = [
+            {"id": f"resolve_{ticket.ticket_number}", "title": "🟢 Resolve Ticket"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=sender_phone,
+            body_text=claim_confirm_msg,
+            buttons=resolve_btns,
+            header_text="✅ TICKET ASSIGNED TO YOU",
+            footer_text="Tap button to resolve when done",
+            image_id=ticket.image_id
+        )
+
+        # 2. Notify other IT co-admins (Kevin & Ellias)
+        it_admin_phones = ["263718627526", "263788843579"]
+        for o_phone in it_admin_phones:
+            if o_phone != sender_phone:
+                co_notice = (
+                    f"ℹ️ *TICKET CLAIMED UPDATE*\n\n"
+                    f"Ticket *{ticket.ticket_number}* ({cat_name} ➡️ {sub_name}) has been claimed by *{admin.full_name}*."
+                )
+                await meta_api.send_text_message(o_phone, co_notice)
+
+        # 3. Notify Master Admin Fazal
+        if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
+            master_claim_msg = (
+                f"ℹ️ *[MASTER ALERT] TICKET CLAIMED*\n\n"
+                f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                f"👤 *Claimed By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
+                f"📊 *Status:* 🔵 IN PROGRESS"
+            )
+            await meta_api.send_text_message(settings.master_admin_phone, master_claim_msg)
+
+        # 4. Notify Reporter / Employee
+        if ticket.employee and ticket.employee.phone:
+            emp_update = (
+                f"👨‍💻 *IT Support Update*\n\n"
+                f"Your support ticket *{ticket.ticket_number}* has been claimed by IT Support Admin *{admin.full_name}* and is now **IN PROGRESS**."
+            )
+            await meta_api.send_text_message(ticket.employee.phone, emp_update)
+
+        return True
+
+    # ----------------------------------------------------
+    # HANDLE RESOLVE COMMAND: [ 🟢 Resolve Ticket ] or "resolve TKT-..."
+    # ----------------------------------------------------
     if resolve_match:
         if ticket.status_id in (3, 4):
             status_name = "Resolved" if ticket.status_id == 3 else "Closed"

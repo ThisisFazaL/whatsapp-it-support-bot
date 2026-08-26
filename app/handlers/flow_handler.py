@@ -478,15 +478,29 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     session.add(new_ticket)
     await session.flush()
 
-    # Route Maintenance Tickets to Maintenance Admins ONLY
+    # Route Maintenance Tickets vs IT Tickets
     assigned_admin = None
+    target_admins = []
+    buttons = []
+    footer = ""
+
     if domain == "MAINTENANCE":
         maint_admin_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
         maint_admins = (await session.execute(maint_admin_stmt)).scalars().all()
+        target_admins = maint_admins
         if maint_admins:
             assigned_admin = maint_admins[0]
+        buttons = [
+            {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
+        ]
+        footer = "Tap button below to resolve (whoever resolves first claims ticket)"
     else:
-        # IT Ticket Routing logic
+        # IT Ticket Routing:
+        # Check if category is specifically mapped to Faisal (e.g. CCTV, Access Control, Power/Electrical)
+        faisal_stmt = select(SupportAdmin).where(SupportAdmin.phone == "263780100503", SupportAdmin.active == True)
+        faisal_admin = (await session.execute(faisal_stmt)).scalars().first()
+
+        is_faisal_cat = False
         if subcategory_id:
             sub_map_stmt = (
                 select(AdminCategoryMapping)
@@ -494,26 +508,54 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
                 .where(AdminCategoryMapping.subcategory_id == subcategory_id)
             )
             sub_mappings = (await session.execute(sub_map_stmt)).scalars().all()
-            active_sub_admins = [m.admin for m in sub_mappings if m.admin and m.admin.active and not m.admin.is_maintenance_admin]
-            if active_sub_admins:
-                assigned_admin = active_sub_admins[0]
+            if any(m.admin and m.admin.phone == "263780100503" for m in sub_mappings):
+                is_faisal_cat = True
 
-        if not assigned_admin and category_id:
+        if not is_faisal_cat and category_id:
             cat_map_stmt = (
                 select(AdminCategoryMapping)
                 .options(selectinload(AdminCategoryMapping.admin))
                 .where(AdminCategoryMapping.category_id == category_id)
             )
             cat_mappings = (await session.execute(cat_map_stmt)).scalars().all()
-            active_cat_admins = [m.admin for m in cat_mappings if m.admin and m.admin.active and not m.admin.is_maintenance_admin]
-            if active_cat_admins:
-                assigned_admin = active_cat_admins[0]
+            if any(m.admin and m.admin.phone == "263780100503" for m in cat_mappings):
+                is_faisal_cat = True
 
-    # Fallback to Master Admin if unassigned
-    if not assigned_admin:
-        master_stmt = select(SupportAdmin).where(SupportAdmin.is_master_admin == True, SupportAdmin.active == True)
-        assigned_admin = (await session.execute(master_stmt)).scalars().first()
+        if is_faisal_cat and faisal_admin:
+            # Route exclusively to Faisal
+            assigned_admin = faisal_admin
+            target_admins = [faisal_admin]
+            buttons = [
+                {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
+            ]
+            footer = "Tap button below to resolve"
+        else:
+            # Combined Kevin Chikati & Ellias Murenga category:
+            # Notification goes to BOTH Kevin and Ellias with Claim button!
+            kevin_ellias_stmt = select(SupportAdmin).where(
+                SupportAdmin.phone.in_(["263718627526", "263788843579"]),
+                SupportAdmin.active == True
+            )
+            target_admins = (await session.execute(kevin_ellias_stmt)).scalars().all()
+            
+            # If database doesn't have them yet, fallback to active non-maintenance admins
+            if not target_admins:
+                all_it_stmt = select(SupportAdmin).where(
+                    SupportAdmin.is_maintenance_admin == False,
+                    SupportAdmin.is_master_admin == False,
+                    SupportAdmin.active == True
+                )
+                target_admins = (await session.execute(all_it_stmt)).scalars().all()
 
+            # Ticket remains unassigned until claimed
+            assigned_admin = None
+            buttons = [
+                {"id": f"claim_{ticket_number}", "title": "✋ Claim Ticket"},
+                {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
+            ]
+            footer = "Tap 'Claim Ticket' to assign to yourself"
+
+    # Add initial assignment in DB if an admin is pre-assigned (e.g. Faisal or Maintenance)
     if assigned_admin:
         if domain == "MAINTENANCE":
             assignment = MaintenanceTicketAssignment(
@@ -554,7 +596,7 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     )
     await meta_api.send_text_message(phone, emp_confirmation)
 
-    # Send Alert with [ 🟢 Resolve Ticket ] Button to Assigned Support Admin
+    # Send Alert with Claim / Resolve Buttons to target Support Admins
     emp_name = employee.full_name if employee else "Staff Reporter"
     emp_phone = employee.phone if employee else phone
 
@@ -569,29 +611,11 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
         f"🚨 *Priority:* {p_obj.priority_name if p_obj else 'Medium'}{hazard_notice}\n"
         f"📝 *Description:* {description}"
     )
-    footer = "Tap button below to resolve"
-    buttons = [
-        {
-            "id": f"resolve_{ticket_number}",
-            "title": "🟢 Resolve Ticket"
-        }
-    ]
 
-    if domain == "MAINTENANCE":
-        maint_admins_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
-        all_maint_admins = (await session.execute(maint_admins_stmt)).scalars().all()
-        for m_adm in all_maint_admins:
-            await meta_api.send_button_message(
-                to_phone=m_adm.phone,
-                body_text=body,
-                buttons=buttons,
-                header_text=header,
-                footer_text="Tap button below to resolve (whoever resolves first claims ticket)",
-                image_id=ticket_image_id
-            )
-    elif assigned_admin:
+    # Broadcast to all target admins (both Kevin & Ellias receive it!)
+    for t_adm in target_admins:
         await meta_api.send_button_message(
-            to_phone=assigned_admin.phone,
+            to_phone=t_adm.phone,
             body_text=body,
             buttons=buttons,
             header_text=header,
@@ -599,13 +623,16 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
             image_id=ticket_image_id
         )
 
-    # Send Alert to Master Admin if different
+    # Send Alert to Master Admin Fazal
     if settings.master_admin_phone:
         master_body = f"ℹ️ *[MASTER ALERT]* New {domain_label} Ticket `{ticket_number}`.\n\n" + body
+        master_buttons = [
+            {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
+        ]
         await meta_api.send_button_message(
             to_phone=settings.master_admin_phone,
             body_text=master_body,
-            buttons=buttons,
+            buttons=master_buttons,
             header_text=f"🚨 MASTER ALERT ({domain_label})",
             footer_text="Master Admin: Tap button to resolve anytime",
             image_id=ticket_image_id
