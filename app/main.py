@@ -68,6 +68,12 @@ async def lifespan(app: FastAPI):
     await init_db_models()
     logger.info("Database initialized successfully.")
     
+    try:
+        from process_ticket_cleanup_and_notify import cleanup_and_renumber
+        await cleanup_and_renumber()
+    except Exception as e:
+        logger.error(f"Error in cleanup_and_renumber startup task: {e}")
+
     # Start 8 PM IST EOD report background task loop
     report_task = asyncio.create_task(scheduled_daily_report_loop())
     yield
@@ -92,6 +98,13 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "whatsapp_it_support_bot"}
+
+@app.get("/trigger-ticket-cleanup")
+async def trigger_ticket_cleanup_endpoint():
+    """Removes test maintenance tickets 1-4, renumbers ticket 5 as TKT-MNT-20260827-00001 and sends alert to admins."""
+    from process_ticket_cleanup_and_notify import cleanup_and_renumber
+    await cleanup_and_renumber()
+    return {"status": "success", "message": "Test tickets deleted, ticket 5 renumbered to TKT-MNT-20260827-00001, and alerts sent to admins."}
 
 @app.get("/daily-report.pdf")
 async def download_daily_report_pdf(db: AsyncSession = Depends(get_db)):
