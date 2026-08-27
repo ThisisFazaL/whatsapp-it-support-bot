@@ -54,7 +54,9 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
     Checks if employee or admin is authorized for Maintenance. If dual-role, presents 2 Interactive Buttons.
     """
     is_maint_reporter = employee.is_maintenance_reporter if employee else False
-    
+    is_master = False
+    is_maint_admin = False
+
     # Check phone directly in Employee table
     if not is_maint_reporter and phone:
         e_res = await session.execute(select(Employee).where(Employee.phone == phone))
@@ -62,15 +64,27 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
         if emp_obj:
             is_maint_reporter = emp_obj.is_maintenance_reporter
 
-    # Also check SupportAdmin table (Master Admin & Maintenance Admins always get dual-role choice)
-    if not is_maint_reporter and phone:
+    # Check SupportAdmin table
+    if phone:
         a_res = await session.execute(select(SupportAdmin).where(SupportAdmin.phone == phone))
         adm_obj = a_res.scalars().first()
-        if adm_obj and (adm_obj.is_master_admin or adm_obj.is_maintenance_admin):
-            is_maint_reporter = True
+        if adm_obj:
+            is_master = adm_obj.is_master_admin
+            is_maint_admin = adm_obj.is_maintenance_admin
 
-    if is_maint_reporter:
-        # Send 2 Interactive Buttons for Dual-Role selection
+    if phone == settings.master_admin_phone or is_master:
+        # Master Admin -> Dual-Role Buttons
+        is_dual_role = True
+    elif is_maint_reporter or is_maint_admin:
+        # Check if user is also registered as IT staff (e.g. employee_code contains EMP or in IT dept)
+        # Dedicated Projects reporters (like Paidamoyo) go straight to Projects!
+        is_it_staff = employee and (employee.department_id == 1 or (employee.employee_code and "EMP" in employee.employee_code and not "MNT" in employee.employee_code))
+        is_dual_role = is_it_staff or is_maint_admin
+    else:
+        is_dual_role = False
+
+    if is_dual_role:
+        # Dual-Role User / Admin -> Send 2 Interactive Buttons
         body = "👋 *Welcome to Support Portal*\n\nPlease select the type of ticket you would like to create:"
         buttons = [
             {"id": "btn_domain_it", "title": "💻 IT Support"},
@@ -83,8 +97,11 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             buttons=buttons,
             header_text="⚙️ SELECT SUPPORT DOMAIN"
         )
+    elif is_maint_reporter:
+        # Dedicated Projects Reporter -> Go DIRECTLY to Building Projects location selection!
+        await start_location_selection(session, phone, domain="MAINTENANCE")
     else:
-        # Standard IT Employee -> Go straight to IT Categories Menu (No Location prompt for IT!)
+        # Standard IT Employee -> Go DIRECTLY to IT Categories Menu (No Location prompt for IT!)
         await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
 
 async def start_location_selection(session: AsyncSession, phone: str, domain: str = "IT"):
