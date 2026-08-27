@@ -494,15 +494,13 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     footer = ""
 
     if domain == "MAINTENANCE":
-        maint_admin_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
-        maint_admins = (await session.execute(maint_admin_stmt)).scalars().all()
-        target_admins = maint_admins
-        if maint_admins:
-            assigned_admin = maint_admins[0]
+        maint_admins_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
+        target_admins = list((await session.execute(maint_admins_stmt)).scalars().all())
+        assigned_admin = None
         buttons = [
-            {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
+            {"id": f"claim_{ticket_number}", "title": "🔵 Claim Ticket"}
         ]
-        footer = "Tap button below to resolve (whoever resolves first claims ticket)"
+        footer = "Tap button below to claim ticket"
     else:
         # IT Ticket Routing:
         cat_name_str = (cat_obj.category_name if cat_obj else "").lower()

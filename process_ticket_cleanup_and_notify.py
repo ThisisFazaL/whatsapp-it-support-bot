@@ -79,7 +79,7 @@ async def cleanup_and_renumber():
                     session.add(MaintenanceTicketAssignment(ticket_id=t_obj.ticket_id, admin_id=adm.admin_id))
             await session.commit()
 
-            # Prepare WhatsApp Alert
+            # Prepare WhatsApp Alert with [ 🔵 Claim Ticket ] button
             emp_name = t_obj.employee.full_name if t_obj.employee else "Staff Reporter"
             emp_phone = t_obj.employee.phone if t_obj.employee else "N/A"
             loc_name = t_obj.location.location_name if t_obj.location else (t_obj.location_name or "Tagoneswa Hardware")
@@ -103,20 +103,20 @@ async def cleanup_and_renumber():
                 f"🚨 *Priority:* {priority_name}{hazard_notice}\n"
                 f"📝 *Description:* {description}"
             )
-            footer = "Tap button below to resolve"
+            footer = "Tap button below to claim ticket"
             buttons = [
                 {
-                    "id": "resolve_TKT-MNT-20260827-00001",
-                    "title": "🟢 Resolve Ticket"
+                    "id": "claim_TKT-MNT-20260827-00001",
+                    "title": "🔵 Claim Ticket"
                 }
             ]
 
-            # Send to Stanclea and Omar Arizai
+            # Send to Projects Support Admins (Stanclea & Omar Arizai) & Master Admin
             admin_phones = [adm.phone for adm in maint_admins]
             if settings.master_admin_phone and settings.master_admin_phone not in admin_phones:
                 admin_phones.append(settings.master_admin_phone)
 
-            logger.info(f"Sending Ticket TKT-MNT-20260827-00001 alert to admins: {admin_phones}")
+            logger.info(f"Sending Ticket TKT-MNT-20260827-00001 alert with Claim Ticket button to admins: {admin_phones}")
             for p in admin_phones:
                 try:
                     if t_obj.image_id:
@@ -136,7 +136,7 @@ async def cleanup_and_renumber():
                             header_text=header,
                             footer_text=footer
                         )
-                    logger.info(f"✅ Alert sent successfully to +{p}")
+                    logger.info(f"✅ Alert with Claim button sent successfully to +{p}")
                 except Exception as e:
                     logger.error(f"Failed to send to +{p}: {e}")
 

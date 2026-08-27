@@ -497,15 +497,20 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             image_id=ticket.image_id
         )
 
-        # 2. Notify other IT co-admins (Kevin & Ellias)
-        it_admin_phones = ["263718627526", "263788843579"]
-        for o_phone in it_admin_phones:
-            if o_phone != sender_phone:
+        # 2. Notify co-admins in the same domain
+        if is_maint_ticket:
+            co_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
+        else:
+            co_stmt = select(SupportAdmin).where(SupportAdmin.active == True, SupportAdmin.is_maintenance_admin == False)
+
+        co_admins = (await session.execute(co_stmt)).scalars().all()
+        for ca in co_admins:
+            if ca.phone != sender_phone and ca.phone != settings.master_admin_phone:
                 co_notice = (
                     f"ℹ️ *TICKET CLAIMED UPDATE*\n\n"
                     f"Ticket *{ticket.ticket_number}* ({cat_name} ➡️ {sub_name}) has been claimed by *{admin.full_name}*."
                 )
-                await meta_api.send_text_message(o_phone, co_notice)
+                await meta_api.send_text_message(ca.phone, co_notice)
 
         # 3. Notify Master Admin Fazal
         if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
@@ -519,10 +524,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             await meta_api.send_text_message(settings.master_admin_phone, master_claim_msg)
 
         # 4. Notify Reporter / Employee
+        domain_title = "Building Projects" if is_maint_ticket else "IT Support"
         if ticket.employee and ticket.employee.phone:
             emp_update = (
-                f"👨‍💻 *IT Support Update*\n\n"
-                f"Your support ticket *{ticket.ticket_number}* has been claimed by IT Support Admin *{admin.full_name}* and is now **IN PROGRESS**."
+                f"👨‍💻 *{domain_title} Support Update*\n\n"
+                f"Your support ticket *{ticket.ticket_number}* has been claimed by Support Admin *{admin.full_name}* and is now **IN PROGRESS**."
             )
             await meta_api.send_text_message(ticket.employee.phone, emp_update)
 
