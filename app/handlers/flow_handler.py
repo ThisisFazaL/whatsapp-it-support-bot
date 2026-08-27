@@ -72,19 +72,8 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             is_master = adm_obj.is_master_admin
             is_maint_admin = adm_obj.is_maintenance_admin
 
-    if phone == settings.master_admin_phone or is_master:
-        # Master Admin -> Dual-Role Buttons
-        is_dual_role = True
-    elif is_maint_reporter or is_maint_admin:
-        # Check if user is also registered as IT staff (e.g. employee_code contains EMP or in IT dept)
-        # Dedicated Projects reporters (like Paidamoyo) go straight to Projects!
-        is_it_staff = employee and (employee.department_id == 1 or (employee.employee_code and "EMP" in employee.employee_code and not "MNT" in employee.employee_code))
-        is_dual_role = is_it_staff or is_maint_admin
-    else:
-        is_dual_role = False
-
-    if is_dual_role:
-        # Dual-Role User / Admin -> Send 2 Interactive Buttons
+    if is_maint_reporter or is_maint_admin or is_master or phone == settings.master_admin_phone:
+        # All Authorized Projects Reporters (Paida, Fazal, Arif, Zayn, Faizan) are Dual-Role Users
         body = "👋 *Welcome to Support Portal*\n\nPlease select the type of ticket you would like to create:"
         buttons = [
             {"id": "btn_domain_it", "title": "💻 IT Support"},
@@ -97,9 +86,6 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             buttons=buttons,
             header_text="⚙️ SELECT SUPPORT DOMAIN"
         )
-    elif is_maint_reporter:
-        # Dedicated Projects Reporter -> Go DIRECTLY to Building Projects location selection!
-        await start_location_selection(session, phone, domain="MAINTENANCE")
     else:
         # Standard IT Employee -> Go DIRECTLY to IT Categories Menu (No Location prompt for IT!)
         await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
