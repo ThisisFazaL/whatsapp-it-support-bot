@@ -278,13 +278,15 @@ async def init_db_models():
         if not res.scalars().all():
             session.add_all([Department(department_id=1, department_name="IT Support"), Department(department_id=2, department_name="Finance")])
         
-        # Guarantee exact 5 Project Locations are synced safely without breaking foreign keys
+        # Guarantee exact 7 Project Locations are synced safely without breaking foreign keys
         desired_locations = [
             "Tagoneswa Hardware",
             "LG Plast",
             "Shop 5",
             "Shop 6",
-            "Kreckle Foods"
+            "Kreckle Foods",
+            "19 Mcloughlin Kensington",
+            "12 Divine Milton Park"
         ]
         res = await session.execute(select(Location).order_by(Location.location_id))
         existing_locs = res.scalars().all()
