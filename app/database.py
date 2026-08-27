@@ -358,6 +358,39 @@ async def init_db_models():
                 location_id=austin_loc.location_id,
                 active=True
             ))
+        # Guarantee Authorized Building Projects Reporters are synced
+        maint_reporters_data = [
+            {"name": "Fazal Saiyed", "phone": "919265368695"},
+            {"name": "Arif", "phone": "263732786786"},
+            {"name": "Zayn", "phone": "263713866223"},
+            {"name": "Faizan Patel", "phone": "263778405964"},
+            {"name": "Paidamoyo Mapeka", "phone": "263712127593"},
+            {"name": "Soyab Patel", "phone": "263784077420"},
+            {"name": "Batsirai Muradzikwa", "phone": "263711421202"},
+        ]
+        for rep in maint_reporters_data:
+            r_phone = rep["phone"]
+            r_name = rep["name"]
+            e_res = await session.execute(select(Employee).where(Employee.phone == r_phone))
+            emp = e_res.scalars().first()
+            if emp:
+                emp.is_maintenance_reporter = True
+                emp.active = True
+            else:
+                session.add(Employee(
+                    employee_code=f"EMP_MNT_{r_phone[-4:]}",
+                    full_name=r_name,
+                    phone=r_phone,
+                    is_maintenance_reporter=True,
+                    active=True
+                ))
+
+        # Explicitly remove Kevin Chikati from maintenance reporters
+        k_res = await session.execute(select(Employee).where(Employee.phone == "263718627526"))
+        kevin = k_res.scalars().first()
+        if kevin:
+            kevin.is_maintenance_reporter = False
+
         await session.commit()
 
         # Clean up legacy / incorrect AdminCategoryMapping rows
