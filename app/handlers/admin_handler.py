@@ -307,11 +307,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             cat_name = t.category.category_name if t.category else "N/A"
             sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
             issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
-            p_name = t.priority.priority_name if t.priority else "Medium"
-            status_str = STATUS_NAMES.get(t.status_id, "🟡 Open")
-            domain_label = "🏗️ PROJECTS" if getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number else "💻 IT"
-            room_info = f"\n📍 *Room/Area:* {t.room_area}" if getattr(t, "room_area", None) else ""
-            hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if getattr(t, "is_safety_hazard", False) else ""
+            is_maint_t = getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number
+            domain_label = "🏗️ PROJECTS" if is_maint_t else "💻 IT"
+            room_area_val = getattr(t, "room_area", None)
+            room_info = f"\n📍 *Room/Area:* {room_area_val}" if is_maint_t and room_area_val and room_area_val != "N/A" else ""
+            hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if is_maint_t and getattr(t, "is_safety_hazard", False) else ""
 
             header = f"🎫 TICKET {t.ticket_number} ({domain_label})"
             body = (
