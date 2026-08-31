@@ -369,6 +369,7 @@ async def init_db_models():
             {"name": "Paidamoyo Mapeka", "phone": "263712127593"},
             {"name": "Soyab Patel", "phone": "263784077420"},
             {"name": "Batsirai Muradzikwa", "phone": "263711421202"},
+            {"name": "Simbarashe Chaunoita", "phone": "263785571584"},
         ]
         for rep in maint_reporters_data:
             r_phone = rep["phone"]
