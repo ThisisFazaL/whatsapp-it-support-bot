@@ -87,11 +87,11 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             header_text="⚙️ SELECT SUPPORT DOMAIN"
         )
     else:
-        # Standard Employee -> Start with Location Selection so admin knows where the issue is!
-        await start_location_selection(session, phone, domain="IT")
+        # Standard IT Employee -> Go DIRECTLY to IT Categories Menu (NEVER ask location for IT!)
+        await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
 
-async def start_location_selection(session: AsyncSession, phone: str, domain: str = "IT"):
-    """Presents location selection numbered text list."""
+async def start_location_selection(session: AsyncSession, phone: str, domain: str = "MAINTENANCE"):
+    """Presents project site location selection numbered text list for Building Projects."""
     stmt = select(Location).order_by(Location.location_id)
     res = await session.execute(stmt)
     locations = res.scalars().all()
@@ -110,8 +110,8 @@ async def start_location_selection(session: AsyncSession, phone: str, domain: st
 
     loc_text = "\n".join(loc_list)
     msg = (
-        f"🏢 *Select Location*\n\n"
-        f"Please select your location by replying with the corresponding number:\n\n"
+        f"🏢 *Select Project Location*\n\n"
+        f"Please select the project location by replying with the corresponding number:\n\n"
         f"{loc_text}"
     )
 
@@ -176,10 +176,11 @@ async def handle_flow(
         if "maint" in text_clean or "btn_domain_maint" in text_clean or "project" in text_clean or choice_num == "2":
             await start_location_selection(session, phone, domain="MAINTENANCE")
         else:
-            await start_location_selection(session, phone, domain="IT")
+            # IT Support -> Skip Location Prompt completely! Pull from DB profile directly!
+            await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
         return
 
-    # STEP 1: Select Location (Numbered Text List)
+    # STEP 1: Select Location (Numbered Text List - ONLY for Projects domain)
     elif step == "select_location":
         loc_map = data.get("locations_map", {})
         selected_loc_id = loc_map.get(choice_num) or loc_map.get(text_clean)
@@ -195,7 +196,7 @@ async def handle_flow(
             await set_user_state(session, phone, "awaiting_other_location", data)
             await meta_api.send_text_message(
                 phone,
-                "🏢 *Type Custom Location*\n\nPlease type your specific location/branch name:\n(e.g., *Shop 6*, *110 Coventry Road*, *6 Austin Road Workington*, *Remote / Home*)"
+                "🏢 *Type Custom Project Location*\n\nPlease type the location name or site address:"
             )
             return
         else:
@@ -203,21 +204,15 @@ async def handle_flow(
             data["location_id"] = int(selected_loc_id)
             data["location_name"] = loc_obj.location_name if loc_obj else "On-Site"
 
-            if domain == "MAINTENANCE":
-                # Ask for Specific Room / Area (Projects domain)
-                await set_user_state(session, phone, "awaiting_room_area", data)
-                await meta_api.send_text_message(
-                    phone,
-                    "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
-                )
-                return
-            else:
-                # IT Support -> Proceed directly to IT Categories Menu
-                data["room_area"] = None
-                await send_categories_menu(session, phone, domain="IT", data=data)
-                return
+            # Ask for Specific Room / Area for Projects
+            await set_user_state(session, phone, "awaiting_room_area", data)
+            await meta_api.send_text_message(
+                phone,
+                "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
+            )
+            return
 
-    # STEP 1.2: Awaiting Custom Location Text
+    # STEP 1.2: Awaiting Custom Project Location Text
     elif step == "awaiting_other_location":
         custom_loc = message_text.strip()
         if len(custom_loc) < 2:
@@ -227,17 +222,12 @@ async def handle_flow(
         data["location_name"] = custom_loc
         data["location_id"] = None
 
-        if domain == "MAINTENANCE":
-            await set_user_state(session, phone, "awaiting_room_area", data)
-            await meta_api.send_text_message(
-                phone,
-                "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
-            )
-            return
-        else:
-            data["room_area"] = None
-            await send_categories_menu(session, phone, domain="IT", data=data)
-            return
+        await set_user_state(session, phone, "awaiting_room_area", data)
+        await meta_api.send_text_message(
+            phone,
+            "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
+        )
+        return
 
     # STEP 1.5: Awaiting Room / Area Text
     elif step == "awaiting_room_area":
@@ -247,7 +237,7 @@ async def handle_flow(
             return
 
         data["room_area"] = room_text
-        await send_categories_menu(session, phone, domain=domain, data=data)
+        await send_categories_menu(session, phone, domain="MAINTENANCE", data=data)
         return
 
     # STEP 2: Awaiting Category
@@ -459,26 +449,43 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     category_id = data.get("category_id")
     subcategory_id = data.get("subcategory_id")
     issue_type_id = data.get("issue_type_id")
-    room_area = data.get("room_area", "N/A")
     is_safety_hazard = data.get("is_safety_hazard", False)
     description = data.get("description", "No description provided")
     ticket_image_id = data.get("image_id")
     priority_id = data.get("priority_id", 2)
-    loc_name = data.get("location_name", "On-Site")
-
-    ticket_number = await generate_ticket_number(session, domain=domain)
 
     emp_id = employee.employee_id if employee else None
     if not emp_id and phone:
         e_res = await session.execute(select(Employee).where(Employee.phone == phone))
         emp_obj = e_res.scalars().first()
-        emp_id = emp_obj.employee_id if emp_obj else None
+        if emp_obj:
+            employee = emp_obj
+            emp_id = emp_obj.employee_id
 
     if not emp_id:
         emp_obj = Employee(full_name="Staff User", phone=phone, active=True)
         session.add(emp_obj)
         await session.flush()
+        employee = emp_obj
         emp_id = emp_obj.employee_id
+
+    if domain == "IT":
+        # Extract location directly from employee's registered profile in database!
+        emp_loc_id = employee.location_id if employee else None
+        emp_loc_name = employee.location.location_name if employee and employee.location else None
+        if not emp_loc_name and emp_loc_id:
+            loc_obj = await session.get(Location, emp_loc_id)
+            emp_loc_name = loc_obj.location_name if loc_obj else None
+        loc_name = emp_loc_name or "On-Site"
+        location_id = emp_loc_id
+        room_area = None
+    else:
+        # Projects domain -> Use location & room selected by user
+        location_id = data.get("location_id")
+        loc_name = data.get("location_name", "On-Site")
+        room_area = data.get("room_area", "N/A")
+
+    ticket_number = await generate_ticket_number(session, domain=domain)
 
     if domain == "MAINTENANCE":
         new_ticket = MaintenanceTicket(
@@ -499,6 +506,7 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
         new_ticket = Ticket(
             ticket_number=ticket_number,
             employee_id=emp_id,
+            location_id=location_id,
             domain=domain,
             category_id=category_id,
             subcategory_id=subcategory_id,

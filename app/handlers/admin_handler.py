@@ -314,7 +314,7 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 emp_name = emp.full_name if emp else "Staff Reporter"
                 emp_phone = emp.phone if emp else ""
                 dept_name = emp.department.department_name if emp and emp.department else ""
-                loc_name = emp.location.location_name if emp and emp.location else ""
+                loc_name = t.location.location_name if getattr(t, "location", None) and t.location else (emp.location.location_name if emp and emp.location else "")
                 
                 cat_name = t.category.category_name if t.category else "N/A"
                 sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"

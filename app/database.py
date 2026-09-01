@@ -278,7 +278,7 @@ async def init_db_models():
         if not res.scalars().all():
             session.add_all([Department(department_id=1, department_name="IT Support"), Department(department_id=2, department_name="Finance")])
         
-        # Guarantee exact 7 Project Locations are synced safely without breaking foreign keys
+        # Guarantee Project and Branch Locations are synced safely without breaking foreign keys
         desired_locations = [
             "Tagoneswa Hardware",
             "LG Plast",
@@ -286,7 +286,9 @@ async def init_db_models():
             "Shop 6",
             "Kreckle Foods",
             "19 Mcloughlin Kensington",
-            "12 Divine Milton Park"
+            "12 Divine Milton Park",
+            "110 Coventry Road Workington",
+            "6 Austin Road Workington"
         ]
         res = await session.execute(select(Location).order_by(Location.location_id))
         existing_locs = res.scalars().all()
@@ -295,6 +297,7 @@ async def init_db_models():
                 existing_locs[idx].location_name = name
             else:
                 session.add(Location(location_name=name))
+        await session.flush()
 
         # Guarantee 4 Support Admins are synced in PostgreSQL database on startup
         admin_data = [
@@ -336,12 +339,11 @@ async def init_db_models():
             session.add(sales_dept)
             await session.flush()
 
-        loc_res = await session.execute(select(Location).where(Location.location_name.ilike("%6 Austin Road%")))
-        austin_loc = loc_res.scalars().first()
-        if not austin_loc:
-            austin_loc = Location(location_name="6 Austin Road Workington")
-            session.add(austin_loc)
-            await session.flush()
+        loc_coventry_res = await session.execute(select(Location).where(Location.location_name.ilike("%110 Coventry Road%")))
+        coventry_loc = loc_coventry_res.scalars().first()
+
+        loc_austin_res = await session.execute(select(Location).where(Location.location_name.ilike("%6 Austin Road%")))
+        austin_loc = loc_austin_res.scalars().first()
 
         # Update or Insert Patience Ndlovu
         p_res = await session.execute(select(Employee).where(Employee.phone == "263780806954"))
@@ -349,7 +351,7 @@ async def init_db_models():
         if patience:
             patience.full_name = "Patience Ndlovu"
             patience.department_id = sales_dept.department_id
-            patience.location_id = austin_loc.location_id
+            if austin_loc: patience.location_id = austin_loc.location_id
             patience.active = True
         else:
             session.add(Employee(
@@ -357,9 +359,31 @@ async def init_db_models():
                 full_name="Patience Ndlovu",
                 phone="263780806954",
                 department_id=sales_dept.department_id,
-                location_id=austin_loc.location_id,
+                location_id=austin_loc.location_id if austin_loc else None,
                 active=True
             ))
+
+        # Sync location mappings for registered Austin Road employees
+        austin_phones = {
+            "263776477481", "263711421202", "263784077420", "263781343668", "263714282265",
+            "263774522586", "263774308083", "263778861934", "263788500565", "263780099335",
+            "263785322640", "263780216289", "263788071001", "263780573092", "263780543771",
+            "263780100545", "263780100288", "263787348969", "263780806954"
+        }
+        if austin_loc:
+            for p_num in austin_phones:
+                emp_obj = (await session.execute(select(Employee).where(Employee.phone == p_num))).scalars().first()
+                if emp_obj:
+                    emp_obj.location_id = austin_loc.location_id
+
+        if coventry_loc:
+            # Map remaining employees to Coventry Road
+            all_emps = (await session.execute(select(Employee))).scalars().all()
+            for emp in all_emps:
+                if emp.phone not in austin_phones and (emp.location_id is None or emp.location_id in [1, 2, 3]):
+                    emp.location_id = coventry_loc.location_id
+
+        await session.commit()
         # Guarantee Authorized Building Projects Reporters are synced
         maint_reporters_data = [
             {"name": "Fazal Saiyed", "phone": "919265368695"},
