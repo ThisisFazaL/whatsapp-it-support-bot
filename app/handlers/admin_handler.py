@@ -1,9 +1,12 @@
 import re
 import datetime
 import asyncio
+import logging
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger("admin_handler")
 
 from app.config import settings
 from app.database import (
@@ -265,7 +268,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             m_asg_stmt = (
                 select(MaintenanceTicketAssignment)
                 .options(
-                    selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.employee),
+                    selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.employee).selectinload(Employee.department),
+                    selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.employee).selectinload(Employee.location),
                     selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.category),
                     selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.subcategory),
                     selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.issue_type),
@@ -280,7 +284,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             asg_stmt = (
                 select(TicketAssignment)
                 .options(
-                    selectinload(TicketAssignment.ticket).selectinload(Ticket.employee),
+                    selectinload(TicketAssignment.ticket).selectinload(Ticket.employee).selectinload(Employee.department),
+                    selectinload(TicketAssignment.ticket).selectinload(Ticket.employee).selectinload(Employee.location),
                     selectinload(TicketAssignment.ticket).selectinload(Ticket.category),
                     selectinload(TicketAssignment.ticket).selectinload(Ticket.subcategory),
                     selectinload(TicketAssignment.ticket).selectinload(Ticket.issue_type),
@@ -296,47 +301,71 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             await meta_api.send_text_message(sender_phone, no_t_msg)
             return True
 
-        summary_header = f"📋 *ACTIVE TICKETS ASSIGNED TO YOU ({len(tickets)} Active)*\n\nHello {admin.full_name},\nHere are your current active support tickets:"
+        # Sort tickets by created_at desc (newest first)
+        tickets.sort(key=lambda t: t.created_at or datetime.datetime.min, reverse=True)
+
+        summary_header = f"📋 *ACTIVE TICKETS ASSIGNED TO YOU ({len(tickets)} Active)*\n\nHello {admin.full_name},\nHere are all your pending support tickets:"
         await meta_api.send_text_message(sender_phone, summary_header)
         await asyncio.sleep(0.5)
 
         for t in tickets:
-            emp = t.employee
-            emp_name = emp.full_name if emp else "Unknown"
-            emp_phone = emp.phone if emp else ""
-            cat_name = t.category.category_name if t.category else "N/A"
-            sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
-            issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
-            is_maint_t = getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number
-            domain_label = "🏗️ PROJECTS" if is_maint_t else "💻 IT"
-            room_area_val = getattr(t, "room_area", None)
-            room_info = f"\n📍 *Room/Area:* {room_area_val}" if is_maint_t and room_area_val and room_area_val != "N/A" else ""
-            hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if is_maint_t and getattr(t, "is_safety_hazard", False) else ""
+            try:
+                emp = t.employee
+                emp_name = emp.full_name if emp else "Staff Reporter"
+                emp_phone = emp.phone if emp else ""
+                dept_name = emp.department.department_name if emp and emp.department else ""
+                loc_name = emp.location.location_name if emp and emp.location else ""
+                
+                cat_name = t.category.category_name if t.category else "N/A"
+                sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
+                issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
+                p_name = t.priority.priority_name if t.priority else "Medium"
+                status_str = STATUS_NAMES.get(t.status_id, "🟡 Open")
 
-            header = f"🎫 TICKET {t.ticket_number} ({domain_label})"
-            body = (
-                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`){room_info}\n"
-                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
-                f"⚙️ *Issue:* {issue_name}\n"
-                f"🚨 *Priority:* {p_name} | Status: *{status_str}*{hazard_info}\n"
-                f"📝 *Description:* {t.description}"
-            )
-            footer = "Tap button below to resolve"
-            buttons = [
-                {
-                    "id": f"resolve_{t.ticket_number}",
-                    "title": "🟢 Resolve Ticket"
-                }
-            ]
-            await meta_api.send_button_message(
-                to_phone=sender_phone,
-                body_text=body,
-                buttons=buttons,
-                header_text=header,
-                footer_text=footer,
-                image_id=t.image_id
-            )
-            await asyncio.sleep(0.8)
+                is_maint_t = getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number
+                domain_label = "🏗️ PROJECTS" if is_maint_t else "💻 IT"
+                
+                # Format location lines
+                loc_line = ""
+                if loc_name or dept_name:
+                    loc_parts = []
+                    if loc_name: loc_parts.append(loc_name)
+                    if dept_name: loc_parts.append(dept_name)
+                    loc_line = f"🏢 *Location:* {', '.join(loc_parts)}\n"
+
+                room_area_val = getattr(t, "room_area", None)
+                if is_maint_t and room_area_val and room_area_val != "N/A":
+                    loc_line += f"📍 *Room/Area:* {room_area_val}\n"
+
+                hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if is_maint_t and getattr(t, "is_safety_hazard", False) else ""
+
+                header = f"🎫 TICKET {t.ticket_number} ({domain_label})"
+                body = (
+                    f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                    f"{loc_line}"
+                    f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                    f"⚙️ *Issue:* {issue_name}\n"
+                    f"🚨 *Priority:* {p_name} | Status: *{status_str}*{hazard_info}\n"
+                    f"📝 *Description:* {t.description}"
+                )
+                footer = "Tap button below to resolve"
+                buttons = [
+                    {
+                        "id": f"resolve_{t.ticket_number}",
+                        "title": "🟢 Resolve Ticket"
+                    }
+                ]
+                await meta_api.send_button_message(
+                    to_phone=sender_phone,
+                    body_text=body,
+                    buttons=buttons,
+                    header_text=header,
+                    footer_text=footer,
+                    image_id=t.image_id
+                )
+                await asyncio.sleep(0.6)
+            except Exception as e:
+                logger.error(f"Error sending ticket card for {t.ticket_number}: {e}", exc_info=True)
         return True
 
     # 3. HANDLE SUMMARY REPORT
