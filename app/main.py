@@ -117,7 +117,6 @@ async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
         select(MaintenanceTicket)
         .options(
             selectinload(MaintenanceTicket.employee),
-            selectinload(MaintenanceTicket.location),
             selectinload(MaintenanceTicket.category),
             selectinload(MaintenanceTicket.subcategory),
             selectinload(MaintenanceTicket.issue_type),
@@ -134,12 +133,10 @@ async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
     for t in m_tickets:
         emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
         emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
-        loc_str = t.location.location_name if t.location else "N/A"
         item = {
             "ticket_number": t.ticket_number,
             "reporter": f"{emp_name} (+{emp_phone})",
             "created_at": t.created_at.isoformat() if t.created_at else None,
-            "location": loc_str,
             "room_area": t.room_area or "N/A",
             "category": t.category.category_name if t.category else "N/A",
             "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
