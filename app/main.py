@@ -108,7 +108,7 @@ async def trigger_ticket_cleanup_endpoint():
 
 @app.get("/inspect-zayn-tickets")
 async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
-    """Inspects all Building Projects and IT Support tickets created by Zayn."""
+    """Inspects all Building Projects and IT Support tickets created by Zayn or anyone."""
     from app.database import MaintenanceTicket, Ticket, Employee
     from sqlalchemy.orm import selectinload
     
@@ -130,22 +130,26 @@ async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
     m_tickets = m_res.scalars().all()
     
     maint_list = []
+    all_projects_list = []
     for t in m_tickets:
-        emp_name = t.employee.full_name if t.employee else "Unknown"
-        emp_phone = t.employee.phone if t.employee else ""
+        emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
+        emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
+        loc_str = t.location.location_name if t.location else "N/A"
+        item = {
+            "ticket_number": t.ticket_number,
+            "reporter": f"{emp_name} (+{emp_phone})",
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "location": loc_str,
+            "room_area": t.room_area or "N/A",
+            "category": t.category.category_name if t.category else "N/A",
+            "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
+            "issue": t.issue_type.issue_name if t.issue_type else "N/A",
+            "description": t.description or "",
+            "status": t.status.status_name if t.status else str(t.status_id)
+        }
+        all_projects_list.append(item)
         if "zayn" in emp_name.lower() or "713866223" in emp_phone:
-            maint_list.append({
-                "ticket_number": t.ticket_number,
-                "reporter": f"{emp_name} (+{emp_phone})",
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-                "location": t.location.location_name if t.location else t.location_name,
-                "room_area": t.room_area,
-                "category": t.category.category_name if t.category else "N/A",
-                "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
-                "issue": t.issue_type.issue_name if t.issue_type else "N/A",
-                "description": t.description,
-                "status": t.status.status_name if t.status else str(t.status_id)
-            })
+            maint_list.append(item)
 
     # IT Support tickets
     it_stmt = (
@@ -164,25 +168,28 @@ async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
 
     it_list = []
     for t in it_tickets:
-        emp_name = t.employee.full_name if t.employee else "Unknown"
-        emp_phone = t.employee.phone if t.employee else ""
+        emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
+        emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
+        item = {
+            "ticket_number": t.ticket_number,
+            "reporter": f"{emp_name} (+{emp_phone})",
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "category": t.category.category_name if t.category else "N/A",
+            "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
+            "issue": t.issue_type.issue_name if t.issue_type else "N/A",
+            "description": t.description or "",
+            "status": t.status.status_name if t.status else str(t.status_id)
+        }
         if "zayn" in emp_name.lower() or "713866223" in emp_phone:
-            it_list.append({
-                "ticket_number": t.ticket_number,
-                "reporter": f"{emp_name} (+{emp_phone})",
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-                "category": t.category.category_name if t.category else "N/A",
-                "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
-                "issue": t.issue_type.issue_name if t.issue_type else "N/A",
-                "description": t.description,
-                "status": t.status.status_name if t.status else str(t.status_id)
-            })
+            it_list.append(item)
 
     return {
         "zayn_projects_tickets": maint_list,
         "zayn_it_tickets": it_list,
-        "total_projects_count": len(maint_list),
-        "total_it_count": len(it_list)
+        "all_projects_tickets": all_projects_list,
+        "total_zayn_projects_count": len(maint_list),
+        "total_zayn_it_count": len(it_list),
+        "total_all_projects_count": len(all_projects_list)
     }
 
 @app.get("/daily-report.pdf")
