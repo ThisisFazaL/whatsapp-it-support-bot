@@ -109,85 +109,93 @@ async def trigger_ticket_cleanup_endpoint():
 @app.get("/inspect-zayn-tickets")
 async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
     """Inspects all Building Projects and IT Support tickets created by Zayn or anyone."""
-    from app.database import MaintenanceTicket, Ticket, Employee
-    from sqlalchemy.orm import selectinload
-    
-    # Building Projects tickets
-    m_stmt = (
-        select(MaintenanceTicket)
-        .options(
-            selectinload(MaintenanceTicket.employee),
-            selectinload(MaintenanceTicket.category),
-            selectinload(MaintenanceTicket.subcategory),
-            selectinload(MaintenanceTicket.issue_type),
-            selectinload(MaintenanceTicket.priority),
-            selectinload(MaintenanceTicket.status)
+    import traceback
+    try:
+        from app.database import MaintenanceTicket, Ticket, Employee
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        
+        # Building Projects tickets
+        m_stmt = (
+            select(MaintenanceTicket)
+            .options(
+                selectinload(MaintenanceTicket.employee),
+                selectinload(MaintenanceTicket.category),
+                selectinload(MaintenanceTicket.subcategory),
+                selectinload(MaintenanceTicket.issue_type),
+                selectinload(MaintenanceTicket.priority),
+                selectinload(MaintenanceTicket.status)
+            )
+            .order_by(MaintenanceTicket.created_at.desc())
         )
-        .order_by(MaintenanceTicket.created_at.desc())
-    )
-    m_res = await db.execute(m_stmt)
-    m_tickets = m_res.scalars().all()
-    
-    maint_list = []
-    all_projects_list = []
-    for t in m_tickets:
-        emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
-        emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
-        item = {
-            "ticket_number": t.ticket_number,
-            "reporter": f"{emp_name} (+{emp_phone})",
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "room_area": t.room_area or "N/A",
-            "category": t.category.category_name if t.category else "N/A",
-            "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
-            "issue": t.issue_type.issue_name if t.issue_type else "N/A",
-            "description": t.description or "",
-            "status": t.status.status_name if t.status else str(t.status_id)
-        }
-        all_projects_list.append(item)
-        if "zayn" in emp_name.lower() or "713866223" in emp_phone:
-            maint_list.append(item)
+        m_res = await db.execute(m_stmt)
+        m_tickets = m_res.scalars().all()
+        
+        maint_list = []
+        all_projects_list = []
+        for t in m_tickets:
+            emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
+            emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
+            item = {
+                "ticket_number": str(t.ticket_number),
+                "reporter": f"{emp_name} (+{emp_phone})",
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "room_area": str(t.room_area or "N/A"),
+                "category": str(t.category.category_name if t.category else "N/A"),
+                "subcategory": str(t.subcategory.subcategory_name if t.subcategory else "N/A"),
+                "issue": str(t.issue_type.issue_name if t.issue_type else "N/A"),
+                "description": str(t.description or ""),
+                "status": str(t.status.status_name if t.status else t.status_id)
+            }
+            all_projects_list.append(item)
+            if "zayn" in emp_name.lower() or "713866223" in emp_phone:
+                maint_list.append(item)
 
-    # IT Support tickets
-    it_stmt = (
-        select(Ticket)
-        .options(
-            selectinload(Ticket.employee),
-            selectinload(Ticket.category),
-            selectinload(Ticket.subcategory),
-            selectinload(Ticket.issue_type),
-            selectinload(Ticket.status)
+        # IT Support tickets
+        it_stmt = (
+            select(Ticket)
+            .options(
+                selectinload(Ticket.employee),
+                selectinload(Ticket.category),
+                selectinload(Ticket.subcategory),
+                selectinload(Ticket.issue_type),
+                selectinload(Ticket.status)
+            )
+            .order_by(Ticket.created_at.desc())
         )
-        .order_by(Ticket.created_at.desc())
-    )
-    it_res = await db.execute(it_stmt)
-    it_tickets = it_res.scalars().all()
+        it_res = await db.execute(it_stmt)
+        it_tickets = it_res.scalars().all()
 
-    it_list = []
-    for t in it_tickets:
-        emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
-        emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
-        item = {
-            "ticket_number": t.ticket_number,
-            "reporter": f"{emp_name} (+{emp_phone})",
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "category": t.category.category_name if t.category else "N/A",
-            "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
-            "issue": t.issue_type.issue_name if t.issue_type else "N/A",
-            "description": t.description or "",
-            "status": t.status.status_name if t.status else str(t.status_id)
+        it_list = []
+        for t in it_tickets:
+            emp_name = t.employee.full_name if (t.employee and t.employee.full_name) else "Unknown"
+            emp_phone = t.employee.phone if (t.employee and t.employee.phone) else ""
+            item = {
+                "ticket_number": str(t.ticket_number),
+                "reporter": f"{emp_name} (+{emp_phone})",
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "category": str(t.category.category_name if t.category else "N/A"),
+                "subcategory": str(t.subcategory.subcategory_name if t.subcategory else "N/A"),
+                "issue": str(t.issue_type.issue_name if t.issue_type else "N/A"),
+                "description": str(t.description or ""),
+                "status": str(t.status.status_name if t.status else t.status_id)
+            }
+            if "zayn" in emp_name.lower() or "713866223" in emp_phone:
+                it_list.append(item)
+
+        return {
+            "zayn_projects_tickets": maint_list,
+            "zayn_it_tickets": it_list,
+            "all_projects_tickets": all_projects_list,
+            "total_zayn_projects_count": len(maint_list),
+            "total_zayn_it_count": len(it_list),
+            "total_all_projects_count": len(all_projects_list)
         }
-        if "zayn" in emp_name.lower() or "713866223" in emp_phone:
-            it_list.append(item)
-
-    return {
-        "zayn_projects_tickets": maint_list,
-        "zayn_it_tickets": it_list,
-        "all_projects_tickets": all_projects_list,
-        "total_zayn_projects_count": len(maint_list),
-        "total_zayn_it_count": len(it_list),
-        "total_all_projects_count": len(all_projects_list)
-    }
+    except Exception as exc:
+        return {
+            "error": str(exc),
+            "traceback": traceback.format_exc()
+        }
 
 @app.get("/daily-report.pdf")
 async def download_daily_report_pdf(db: AsyncSession = Depends(get_db)):
