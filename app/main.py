@@ -100,6 +100,13 @@ async def trigger_ticket_cleanup_endpoint():
     await cleanup_and_renumber()
     return {"status": "success", "message": "Test tickets deleted, ticket 5 renumbered to TKT-MNT-20260827-00001, and alerts sent to admins."}
 
+@app.get("/trigger-create-zayn-ticket")
+async def trigger_create_zayn_ticket_endpoint():
+    """Creates Zayn's Building Projects ticket TKT-MNT-20260831-00001 and notifies Projects Admins."""
+    from create_zayn_ticket_1_and_notify import create_zayn_ticket_and_notify
+    await create_zayn_ticket_and_notify()
+    return {"status": "success", "message": "Ticket TKT-MNT-20260831-00001 created and alerts sent to Projects Admins (Stanclea, Omar, Master Admin)."}
+
 @app.get("/inspect-zayn-tickets")
 async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
     """Inspects all Building Projects and IT Support tickets created by Zayn or anyone."""
