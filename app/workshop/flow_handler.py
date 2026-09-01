@@ -36,12 +36,13 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff):
     phone = staff.phone
     role = staff.role.upper()
     
-    if role == "CLERK":
+    if role in {"DRIVER", "CLERK"}:
         await set_user_state(session, phone, "ws_truck_search", {})
+        role_label = "Driver" if role == "DRIVER" else "Clerk"
         msg = (
-            f"👋 *Welcome {staff.full_name}*\n"
-            f"🚚 *Tagoneswa Workshop & Fleet Portal*\n\n"
-            f"Please enter the *Truck Number* (e.g. `9999` or `1045`):"
+            f"👋 *Welcome {staff.full_name}* ({role_label})\\n"
+            f"🚚 *Tagoneswa Logistics & Fleet Portal*\\n\\n"
+            f"Please enter the *Truck Number* (e.g. for plate `ABZ 1045`, type `1045`):"
         )
         await meta_api.send_text_message(phone, msg)
     

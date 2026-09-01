@@ -450,13 +450,20 @@ async def init_db_models():
         await session.execute(delete(AdminCategoryMapping))
         await session.commit()
 
-        # Guarantee Workshop Tables & Seed Data are synced on startup
+        # Purge legacy workshop trucks, staff, tickets, and parts requests
         try:
+            from app.workshop.models import WorkshopPartsRequest, WorkshopTicket, WorkshopTruck, WorkshopStaff
+            await session.execute(delete(WorkshopPartsRequest))
+            await session.execute(delete(WorkshopTicket))
+            await session.execute(delete(WorkshopTruck))
+            await session.execute(delete(WorkshopStaff))
+            await session.commit()
+            
             from seed_workshop_data import seed_workshop_data_in_session
             await seed_workshop_data_in_session(session)
         except Exception as ws_err:
             import logging
-            logging.getLogger("database").warning(f"Workshop seed sync skipped or error: {ws_err}")
+            logging.getLogger("database").warning(f"Workshop tables init note: {ws_err}")
 
     # Sync all PostgreSQL sequences to prevent UniqueViolation errors on insertion
     async with engine.begin() as conn:

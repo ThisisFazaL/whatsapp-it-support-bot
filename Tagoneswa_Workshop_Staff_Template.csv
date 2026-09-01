@@ -1,6 +1,8 @@
-Full Name,WhatsApp Phone Number (with Country Code),System Role (CLERK / SUPERVISOR / MECHANIC / LEAD / PURCHASING),Job Designation,Base Location,Status
-Panashe Mutasa,+263 77 000 0001,CLERK,Fault Entry Clerk / Driver Liaison,Harare Central Yard,Active
-Edward Marufu,+263 77 000 0002,SUPERVISOR,Logistics & Fleet Supervisor,Harare Central Yard,Active
-Blessing Moyo,+263 77 000 0003,MECHANIC,Senior Heavy Vehicle Mechanic,Harare Workshop Bay,Active
-Farai Shumba,+263 77 000 0004,LEAD,Workshop Lead / Bay Foreman,Harare Workshop Bay,Active
-Procurement Team,+263 77 000 0005,PURCHASING,Purchasing & Spares Manager,Head Office,Active
+Full Name,WhatsApp Phone Number (with Country Code e.g. +263...),System Role (DRIVER / SUPERVISOR / MECHANIC / LEAD / PURCHASING / CLERK),Job Designation / Title,Base Yard / Location,Status (Active / Inactive)
+Tinashe Moyo,+263 77 100 0001,DRIVER,Heavy Long-Haul Driver (Reporter),Harare Central Yard,Active
+Simba Ndlovu,+263 77 100 0002,DRIVER,Tipper / Site Driver (Reporter),Mine Site A,Active
+Edward Marufu,+263 77 200 0001,SUPERVISOR,Logistics & Fleet Supervisor (Gatekeeper & QC),Harare Central Yard,Active
+Blessing Moyo,+263 77 300 0001,MECHANIC,Senior Heavy Vehicle Mechanic (Repair & Costs),Harare Workshop Bay,Active
+Farai Shumba,+263 77 300 0002,LEAD,Workshop Lead / Bay Foreman,Harare Workshop Bay,Active
+Procurement Team,+263 77 400 0001,PURCHASING,Purchasing & Spares Procurement,Head Office,Active
+Panashe Mutasa,+263 77 500 0001,CLERK,Fault Entry Clerk (Optional),Harare Central Yard,Active

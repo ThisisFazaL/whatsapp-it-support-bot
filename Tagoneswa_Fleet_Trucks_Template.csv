@@ -1,6 +1,6 @@
-Truck Number (Door #),Registration Plate,Make & Model,Body Type / Configuration,Home Depot / Yard,Status (Active/Inactive)
-1045,ABZ 1045,Volvo FH16 540,Horse (6x4),Harare Central Yard,Active
-1046,ACY 2046,Scania R500,Horse (6x4),Bulawayo Yard,Active
-2012,AEN 2012,Shacman F3000,20m³ Tipper,Mine Site A,Active
-3005,AFG 3005,Mercedes-Benz Actros 3340,Fuel Tanker,Beira Corridor,Active
-4010,AGH 4010,Isuzu FTR 850,8-Ton Rigid,Harare Central Yard,Active
+Registration Plate Number (e.g. ABZ 1045),Truck Number (Auto-extracted from Plate: e.g. 1045),Vehicle Make & Model (e.g. Volvo FH16 540),"Body Type / Configuration (e.g. Horse 6x4, Tipper, Tanker)",Home Depot / Base Yard (e.g. Harare Central Yard),Status (Active / Inactive)
+ABZ 1045,1045,Volvo FH16 540,Horse (6x4),Harare Central Yard,Active
+ACY 2046,2046,Scania R500,Horse (6x4),Bulawayo Yard,Active
+AEN 2012,2012,Shacman F3000,20m³ Tipper,Mine Site A,Active
+AFG 3005,3005,Mercedes-Benz Actros 3340,Fuel Tanker,Beira Corridor,Active
+AGH 4010,4010,Isuzu FTR 850,8-Ton Rigid,Harare Central Yard,Active

@@ -15,6 +15,13 @@ def clean_phone(phone_str: str) -> str:
     digits = re.sub(r"\D", "", str(phone_str or ""))
     return digits
 
+def extract_truck_number_from_plate(plate: str, provided_num: str = None) -> str:
+    """Extracts numeric truck number from plate (e.g. 'ABZ 1045' -> '1045') if not explicitly given."""
+    if provided_num and str(provided_num).strip():
+        return str(provided_num).strip()
+    match = re.search(r"\d+", str(plate or ""))
+    return match.group(0) if match else str(plate).strip()
+
 async def import_data(trucks_csv_path: str = "Tagoneswa_Fleet_Trucks_Template.csv", staff_csv_path: str = "Tagoneswa_Workshop_Staff_Template.csv"):
     db_urls = [settings.database_url, "sqlite+aiosqlite:///./itsupport.db"]
     engine = None
@@ -44,12 +51,14 @@ async def import_data(trucks_csv_path: str = "Tagoneswa_Fleet_Trucks_Template.cs
                 reader = csv.DictReader(f)
                 truck_count = 0
                 for row in reader:
-                    truck_num = str(row.get("Truck Number (Door #)", "") or row.get("Truck Number", "")).strip()
-                    plate = str(row.get("Registration Plate", "")).strip()
-                    model = str(row.get("Make & Model", "")).strip()
-                    body = str(row.get("Body Type / Configuration", "")).strip()
-                    depot = str(row.get("Home Depot / Yard", "")).strip()
-                    active_str = str(row.get("Status (Active/Inactive)", "") or row.get("Status", "Active")).strip().lower()
+                    plate = str(row.get("Registration Plate Number (e.g. ABZ 1045)", "") or row.get("Registration Plate", "") or row.get("Plate", "")).strip()
+                    raw_num = str(row.get("Truck Number (Auto-extracted from Plate: e.g. 1045)", "") or row.get("Truck Number", "")).strip()
+                    truck_num = extract_truck_number_from_plate(plate, raw_num)
+                    
+                    model = str(row.get("Vehicle Make & Model (e.g. Volvo FH16 540)", "") or row.get("Vehicle Make & Model", "") or row.get("Make & Model", "")).strip()
+                    body = str(row.get("Body Type / Configuration (e.g. Horse 6x4, Tipper, Tanker)", "") or row.get("Body Type / Configuration", "")).strip()
+                    depot = str(row.get("Home Depot / Base Yard (e.g. Harare Central Yard)", "") or row.get("Home Depot / Yard", "")).strip()
+                    active_str = str(row.get("Status (Active / Inactive)", "") or row.get("Status", "Active")).strip().lower()
                     is_active = active_str in ["active", "yes", "true", "1"]
 
                     if not truck_num:
@@ -84,9 +93,9 @@ async def import_data(trucks_csv_path: str = "Tagoneswa_Fleet_Trucks_Template.cs
                 staff_count = 0
                 for row in reader:
                     name = str(row.get("Full Name", "")).strip()
-                    raw_phone = str(row.get("WhatsApp Phone Number (with Country Code)", "") or row.get("WhatsApp Phone Number", "") or row.get("Phone", "")).strip()
-                    role = str(row.get("System Role (CLERK / SUPERVISOR / MECHANIC / LEAD / PURCHASING)", "") or row.get("System Role", "") or row.get("Role", "CLERK")).strip().upper()
-                    active_str = str(row.get("Status", "Active")).strip().lower()
+                    raw_phone = str(row.get("WhatsApp Phone Number (with Country Code e.g. +263...)", "") or row.get("WhatsApp Phone Number", "") or row.get("Phone", "")).strip()
+                    role = str(row.get("System Role (DRIVER / SUPERVISOR / MECHANIC / LEAD / PURCHASING / CLERK)", "") or row.get("System Role", "") or row.get("Role", "DRIVER")).strip().upper()
+                    active_str = str(row.get("Status (Active / Inactive)", "") or row.get("Status", "Active")).strip().lower()
                     is_active = active_str in ["active", "yes", "true", "1"]
 
                     phone = clean_phone(raw_phone)
@@ -109,7 +118,7 @@ async def import_data(trucks_csv_path: str = "Tagoneswa_Fleet_Trucks_Template.cs
                         staff.active = is_active
                     staff_count += 1
                 await session.commit()
-                print(f"[SUCCESS] Imported / Updated {staff_count} Workshop Staff Members!")
+                print(f"[SUCCESS] Imported / Updated {staff_count} Workshop Staff / Drivers!")
 
 if __name__ == "__main__":
     trucks_file = sys.argv[1] if len(sys.argv) > 1 else "Tagoneswa_Fleet_Trucks_Template.csv"
