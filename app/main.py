@@ -106,6 +106,85 @@ async def trigger_ticket_cleanup_endpoint():
     await cleanup_and_renumber()
     return {"status": "success", "message": "Test tickets deleted, ticket 5 renumbered to TKT-MNT-20260827-00001, and alerts sent to admins."}
 
+@app.get("/inspect-zayn-tickets")
+async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
+    """Inspects all Building Projects and IT Support tickets created by Zayn."""
+    from app.database import MaintenanceTicket, Ticket, Employee
+    from sqlalchemy.orm import selectinload
+    
+    # Building Projects tickets
+    m_stmt = (
+        select(MaintenanceTicket)
+        .options(
+            selectinload(MaintenanceTicket.employee),
+            selectinload(MaintenanceTicket.location),
+            selectinload(MaintenanceTicket.category),
+            selectinload(MaintenanceTicket.subcategory),
+            selectinload(MaintenanceTicket.issue_type),
+            selectinload(MaintenanceTicket.priority),
+            selectinload(MaintenanceTicket.status)
+        )
+        .order_by(MaintenanceTicket.created_at.desc())
+    )
+    m_res = await db.execute(m_stmt)
+    m_tickets = m_res.scalars().all()
+    
+    maint_list = []
+    for t in m_tickets:
+        emp_name = t.employee.full_name if t.employee else "Unknown"
+        emp_phone = t.employee.phone if t.employee else ""
+        if "zayn" in emp_name.lower() or "713866223" in emp_phone:
+            maint_list.append({
+                "ticket_number": t.ticket_number,
+                "reporter": f"{emp_name} (+{emp_phone})",
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "location": t.location.location_name if t.location else t.location_name,
+                "room_area": t.room_area,
+                "category": t.category.category_name if t.category else "N/A",
+                "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
+                "issue": t.issue_type.issue_name if t.issue_type else "N/A",
+                "description": t.description,
+                "status": t.status.status_name if t.status else str(t.status_id)
+            })
+
+    # IT Support tickets
+    it_stmt = (
+        select(Ticket)
+        .options(
+            selectinload(Ticket.employee),
+            selectinload(Ticket.category),
+            selectinload(Ticket.subcategory),
+            selectinload(Ticket.issue_type),
+            selectinload(Ticket.status)
+        )
+        .order_by(Ticket.created_at.desc())
+    )
+    it_res = await db.execute(it_stmt)
+    it_tickets = it_res.scalars().all()
+
+    it_list = []
+    for t in it_tickets:
+        emp_name = t.employee.full_name if t.employee else "Unknown"
+        emp_phone = t.employee.phone if t.employee else ""
+        if "zayn" in emp_name.lower() or "713866223" in emp_phone:
+            it_list.append({
+                "ticket_number": t.ticket_number,
+                "reporter": f"{emp_name} (+{emp_phone})",
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "category": t.category.category_name if t.category else "N/A",
+                "subcategory": t.subcategory.subcategory_name if t.subcategory else "N/A",
+                "issue": t.issue_type.issue_name if t.issue_type else "N/A",
+                "description": t.description,
+                "status": t.status.status_name if t.status else str(t.status_id)
+            })
+
+    return {
+        "zayn_projects_tickets": maint_list,
+        "zayn_it_tickets": it_list,
+        "total_projects_count": len(maint_list),
+        "total_it_count": len(it_list)
+    }
+
 @app.get("/daily-report.pdf")
 async def download_daily_report_pdf(db: AsyncSession = Depends(get_db)):
     """Serves the latest Daily Master Executive Report PDF directly generated from live database."""
@@ -192,6 +271,14 @@ async def process_webhook_payload(body: dict):
             else:
                 logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
                 await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
+                return
+
+            # Step 0: Workshop Subsystem Routing (Isolated Subsystem)
+            from app.workshop.router import get_workshop_staff, handle_workshop_message
+            workshop_user = await get_workshop_staff(db, sender_phone)
+            if workshop_user:
+                logger.info(f"Routing to Workshop Subsystem for staff '{workshop_user.full_name}' ({workshop_user.role}).")
+                await handle_workshop_message(db, workshop_user, message_text, image_id)
                 return
 
             # Check if user is an active SupportAdmin or ExecutiveObserver
