@@ -325,23 +325,20 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 is_maint_t = getattr(t, "domain", "") == "MAINTENANCE" or "TKT-MNT" in t.ticket_number
                 domain_label = "🏗️ PROJECTS" if is_maint_t else "💻 IT"
                 
-                # Format location lines
+                dept_str = f" ({dept_name})" if dept_name else ""
                 loc_line = ""
-                if loc_name or dept_name:
-                    loc_parts = []
-                    if loc_name: loc_parts.append(loc_name)
-                    if dept_name: loc_parts.append(dept_name)
-                    loc_line = f"🏢 *Location:* {', '.join(loc_parts)}\n"
-
-                room_area_val = getattr(t, "room_area", None)
-                if is_maint_t and room_area_val and room_area_val != "N/A":
-                    loc_line += f"📍 *Room/Area:* {room_area_val}\n"
+                if is_maint_t:
+                    if loc_name:
+                        loc_line += f"🏢 *Location:* {loc_name}\n"
+                    room_area_val = getattr(t, "room_area", None)
+                    if room_area_val and room_area_val != "N/A":
+                        loc_line += f"📍 *Room/Area:* {room_area_val}\n"
 
                 hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if is_maint_t and getattr(t, "is_safety_hazard", False) else ""
 
                 header = f"🎫 TICKET {t.ticket_number} ({domain_label})"
                 body = (
-                    f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                    f"👤 *Reporter:* {emp_name}{dept_str} (`+{emp_phone}`)\n"
                     f"{loc_line}"
                     f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                     f"⚙️ *Issue:* {issue_name}\n"

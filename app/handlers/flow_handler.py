@@ -595,12 +595,14 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     # Send Alert with Claim / Resolve Buttons to target Support Admins
     emp_name = employee.full_name if employee else "Staff Reporter"
     emp_phone = employee.phone if employee else phone
+    dept_name = employee.department.department_name if employee and employee.department else ""
+    dept_str = f" ({dept_name})" if dept_name else ""
 
     header = f"🚨 NEW {domain_label} TICKET"
     loc_body = f"🏢 *Location:* {loc_name}\n📍 *Room / Area:* {room_area}\n" if domain == "MAINTENANCE" and loc_name else ""
     body = (
         f"🎫 *Ticket ID:* `{ticket_number}`\n"
-        f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+        f"👤 *Reporter:* {emp_name}{dept_str} (`+{emp_phone}`)\n"
         f"{loc_body}"
         f"📌 *Category:* {cat_obj.category_name if cat_obj else 'N/A'} ➡️ {sub_obj.subcategory_name if sub_obj else 'N/A'}\n"
         f"⚙️ *Issue:* {issue_obj.issue_name if issue_obj else 'Custom'}\n"
