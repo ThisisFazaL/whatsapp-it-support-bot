@@ -457,3 +457,20 @@ async def init_db_models():
         except Exception as ws_err:
             import logging
             logging.getLogger("database").warning(f"Workshop seed sync skipped or error: {ws_err}")
+
+    # Sync all PostgreSQL sequences to prevent UniqueViolation errors on insertion
+    async with engine.begin() as conn:
+        from sqlalchemy import text
+        seq_queries = [
+            "SELECT setval('maintenance_ticket_assignments_assignment_id_seq', COALESCE((SELECT MAX(assignment_id) FROM maintenance_ticket_assignments), 0) + 1, false);",
+            "SELECT setval('maintenance_tickets_ticket_id_seq', COALESCE((SELECT MAX(ticket_id) FROM maintenance_tickets), 0) + 1, false);",
+            "SELECT setval('ticket_assignments_assignment_id_seq', COALESCE((SELECT MAX(assignment_id) FROM ticket_assignments), 0) + 1, false);",
+            "SELECT setval('tickets_ticket_id_seq', COALESCE((SELECT MAX(ticket_id) FROM tickets), 0) + 1, false);",
+            "SELECT setval('support_admins_admin_id_seq', COALESCE((SELECT MAX(admin_id) FROM support_admins), 0) + 1, false);",
+            "SELECT setval('employees_employee_id_seq', COALESCE((SELECT MAX(employee_id) FROM employees), 0) + 1, false);"
+        ]
+        for q in seq_queries:
+            try:
+                await conn.execute(text(q))
+            except Exception:
+                pass
