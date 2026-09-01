@@ -30,6 +30,35 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
         await clear_user_state(session, phone)
         await start_workshop_flow(session, staff)
         return True
+
+    # 1.1 Test Data Management Commands (Supervisor / Admin only)
+    if staff.role.upper() == "SUPERVISOR" and text.lower() in {"delete testing data", "delete test data", "clear test data"}:
+        from manage_test_data import delete_test_data_in_session
+        await delete_test_data_in_session(session)
+        from app.meta_api import meta_api
+        await meta_api.send_text_message(
+            phone,
+            "🗑️ *All Testing Data Deleted Successfully!*\\n\\n"
+            "• Fake Truck #9999 removed\\n"
+            "• Test Clerk (+91 82007 13637) reset\\n"
+            "• Test Mechanic (+91 78599 91843) reset\\n"
+            "• All associated test tickets & parts requests cleared."
+        )
+        return True
+
+    if staff.role.upper() == "SUPERVISOR" and text.lower() in {"seed testing data", "seed test data"}:
+        from manage_test_data import seed_test_database_in_session
+        await seed_test_database_in_session(session)
+        from app.meta_api import meta_api
+        await meta_api.send_text_message(
+            phone,
+            "✅ *Testing Data Seeded Successfully!*\\n\\n"
+            "• Fake Truck: #9999 (Volvo FH16 - TST 9999)\\n"
+            "• Clerk: `+91 82007 13637`\\n"
+            "• Mechanic: `+91 78599 91843`\\n"
+            "• Supervisor: `+91 92653 68695`"
+        )
+        return True
         
     state = await get_user_state(session, phone)
     current_step = state.current_step if state else None
