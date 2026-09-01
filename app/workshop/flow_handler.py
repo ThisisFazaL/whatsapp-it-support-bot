@@ -37,17 +37,15 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff):
     role = staff.role.upper()
     
     if role == "CLERK":
-        # Panashe starts fault logging flow
         await set_user_state(session, phone, "ws_truck_search", {})
         msg = (
             f"👋 *Welcome {staff.full_name}*\n"
             f"🚚 *Tagoneswa Workshop & Fleet Portal*\n\n"
-            f"Please enter the *Truck Number* (e.g. `1045` or `2012`):"
+            f"Please enter the *Truck Number* (e.g. `9999` or `1045`):"
         )
         await meta_api.send_text_message(phone, msg)
     
     elif role in {"MECHANIC", "LEAD"}:
-        # Mechanic portal / status check
         stmt = select(WorkshopTicket).where(
             WorkshopTicket.status.in_(["WITH_MECHANIC", "AWAITING_PARTS", "INFO_REQUESTED", "REPAIR_IN_PROGRESS", "REWORK_REQUIRED"])
         ).order_by(WorkshopTicket.created_at.desc()).limit(5)
@@ -67,7 +65,6 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff):
             await meta_api.send_text_message(phone, "\n".join(lines))
             
     elif role == "SUPERVISOR":
-        # Edward's menu
         msg = (
             f"👋 *Welcome {staff.full_name}* (Logistics Supervisor)\n\n"
             f"You will automatically receive alerts when:\n"
@@ -78,7 +75,6 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff):
         await meta_api.send_text_message(phone, msg)
         
     elif role == "PURCHASING":
-        # Purchasing menu
         stmt = select(WorkshopPartsRequest).where(WorkshopPartsRequest.status.in_(["PENDING", "INFO_REQUESTED"]))
         pending = (await session.execute(stmt)).scalars().all()
         msg = (
@@ -92,7 +88,6 @@ async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text:
     phone = staff.phone
     search_query = text.strip()
     
-    # Search trucks matching digits or plate substring
     stmt = select(WorkshopTruck).where(
         (WorkshopTruck.truck_number.ilike(f"%{search_query}%")) |
         (WorkshopTruck.plate_number.ilike(f"%{search_query}%"))
@@ -129,7 +124,6 @@ async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text:
         ]
         await meta_api.send_button_message(phone, body, buttons, header_text="VEHICLE CONFIRMATION")
     else:
-        # Multiple matches (e.g. 12 matches #12 and #112)
         lines = [f"🔍 Multiple vehicles found matching '*{search_query}*':\n"]
         for idx, t in enumerate(matching_trucks[:5], start=1):
             lines.append(f"*{idx}.* Truck #{t.truck_number} — {t.model_make} (`{t.plate_number}`)")
@@ -143,10 +137,9 @@ async def handle_truck_confirmation(session: AsyncSession, staff: WorkshopStaff,
     phone = staff.phone
     if "reenter" in text.lower() or text == "2":
         await set_user_state(session, phone, "ws_truck_search", {})
-        await meta_api.send_text_message(phone, "Please enter the Truck Number (e.g. `1045`):")
+        await meta_api.send_text_message(phone, "Please enter the Truck Number (e.g. `9999` or `1045`):")
         return
         
-    # Confirmed -> Send Category Menu
     stmt = select(WorkshopCategory).where(WorkshopCategory.active == True).order_by(WorkshopCategory.category_id)
     categories = (await session.execute(stmt)).scalars().all()
     
@@ -180,7 +173,6 @@ async def handle_category_selection(session: AsyncSession, staff: WorkshopStaff,
     data["category_id"] = category_id
     data["category_name"] = cat_obj.category_name
     
-    # Fetch subcategories
     stmt = select(WorkshopSubcategory).where(
         WorkshopSubcategory.category_id == category_id,
         WorkshopSubcategory.active == True
@@ -218,13 +210,41 @@ async def handle_subcategory_selection(session: AsyncSession, staff: WorkshopSta
     msg = (
         f"📝 *Please describe the problem in detail:*\n\n"
         f"📌 *Issue:* {data.get('category_name')} ➔ {data.get('subcategory_name')}\n"
-        f"💡 You can type notes and attach an optional photo of the damage/leak."
+        f"Type your fault notes below:"
     )
     await meta_api.send_text_message(phone, msg)
 
-async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, text: str, image_id: str, data: dict):
+async def handle_description_entry(session: AsyncSession, staff: WorkshopStaff, text: str, image_id: str, data: dict):
     phone = staff.phone
-    description = text.strip() if text else "Fault reported via WhatsApp"
+    data["description"] = text.strip() if text else "Fault reported via WhatsApp"
+    
+    if image_id:
+        data["image_id"] = image_id
+        return await finalize_ticket_logging(session, staff, data)
+        
+    # Prompt for optional photo
+    await set_user_state(session, phone, "ws_attach_clerk_photo", data)
+    photo_prompt = (
+        f"📸 *Attach Photo (Optional)*\n\n"
+        f"Please send a photo of the defect/damage right now, or tap below to skip:"
+    )
+    buttons = [{"id": "btn_ws_skip_clerk_photo", "title": "Skip Photo"}]
+    await meta_api.send_button_message(phone, photo_prompt, buttons, header_text="PHOTO ATTACHMENT")
+
+async def handle_photo_step(session: AsyncSession, staff: WorkshopStaff, text: str, image_id: str, data: dict):
+    if image_id:
+        data["image_id"] = image_id
+    elif text and text.startswith("btn_ws_skip_clerk_photo"):
+        data["image_id"] = None
+    elif text and text.lower() in {"skip", "skip photo"}:
+        data["image_id"] = None
+        
+    await finalize_ticket_logging(session, staff, data)
+
+async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, data: dict):
+    phone = staff.phone
+    description = data.get("description", "Fault reported via WhatsApp")
+    image_id = data.get("image_id")
     
     ticket_num = await generate_workshop_ticket_number(session)
     
@@ -244,7 +264,7 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, t
     
     await clear_user_state(session, phone)
     
-    # 1. Confirm to Panashe (Clerk)
+    # 1. Confirm to Clerk
     clerk_msg = (
         f"✅ *Workshop Fault Ticket Created!*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -252,12 +272,13 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, t
         f"🚚 *Vehicle:* {data.get('truck_info')}\n"
         f"📌 *Category:* {ticket.category_name} ➔ {ticket.subcategory_name}\n"
         f"📝 *Description:* {ticket.description}\n"
+        f"📸 *Photo:* {'Attached' if image_id else 'None'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏳ *Status: UNDER REVIEW* (Forwarded to Edward for Gatekeeper Review)."
+        f"⏳ *Status: UNDER REVIEW* (Forwarded to Supervisor for Gatekeeper Review)."
     )
     await meta_api.send_text_message(phone, clerk_msg)
     
-    # 2. Alert Edward (Supervisor)
+    # 2. Alert Supervisor
     stmt = select(WorkshopStaff).where(WorkshopStaff.role == "SUPERVISOR", WorkshopStaff.active == True)
     supervisors = (await session.execute(stmt)).scalars().all()
     
@@ -270,6 +291,7 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, t
             f"👤 *Logged By:* {staff.full_name}\n"
             f"📌 *Fault:* {ticket.category_name} ➔ {ticket.subcategory_name}\n"
             f"📝 *Notes:* {ticket.description}\n"
+            f"📸 *Photo:* {'Attached' if image_id else 'None'}\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"Please select routing action:"
         )

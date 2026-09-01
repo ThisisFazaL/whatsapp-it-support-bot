@@ -81,8 +81,11 @@ async def run_test():
         # 1.5 Panashe selects Subcategory 1 (Air Pressure Leak)
         await handle_workshop_message(session, panashe, "1")
         
-        # 1.6 Panashe inputs description and optional image
-        await handle_workshop_message(session, panashe, "Air pressure drops rapidly when footbrake pressed", image_id="img_leak_001")
+        # 1.6 Panashe inputs description (Step 1)
+        await handle_workshop_message(session, panashe, "Air pressure drops rapidly when footbrake pressed")
+        
+        # 1.7 Panashe sends optional photo (Step 2)
+        await handle_workshop_message(session, panashe, "Photo of leaking line", image_id="img_leak_001")
 
         # Verify Ticket Created
         stmt = select(WorkshopTicket).order_by(WorkshopTicket.ticket_id.desc())
@@ -118,8 +121,12 @@ async def run_test():
         # 3.2 Mechanic taps "Request Parts"
         await handle_workshop_message(session, blessing, f"btn_ws_parts_req_{ticket.ticket_id}")
 
-        # 3.3 Mechanic enters part name & photo
-        await handle_workshop_message(session, blessing, "1x Wabco 4-way protection valve", image_id="img_valve_sample_01")
+        # 3.3 Mechanic enters part name (Step 1)
+        await handle_workshop_message(session, blessing, "1x Wabco 4-way protection valve")
+        
+        # 3.4 Mechanic attaches sample photo (Step 2)
+        await handle_workshop_message(session, blessing, "Sample valve image", image_id="img_valve_sample_01")
+        
         await session.refresh(ticket)
         assert ticket.status == "AWAITING_PARTS", f"Expected AWAITING_PARTS, got {ticket.status}"
         

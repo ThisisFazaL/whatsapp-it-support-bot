@@ -6,7 +6,7 @@ from app.workshop.models import WorkshopStaff
 from app.workshop.flow_handler import (
     GLOBAL_RESET_KEYWORDS, start_workshop_flow, handle_truck_search,
     handle_truck_confirmation, handle_category_selection, handle_subcategory_selection,
-    finalize_ticket_logging
+    handle_description_entry, handle_photo_step
 )
 from app.workshop.supervisor_handler import handle_supervisor_action
 from app.workshop.purchasing_handler import handle_purchasing_action
@@ -46,10 +46,10 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
         from app.meta_api import meta_api
         await meta_api.send_text_message(
             phone,
-            "🗑️ *All Testing Data Deleted Successfully!*\\n\\n"
-            "• Fake Truck #9999 removed\\n"
-            "• Test Clerk (+91 82007 13637) reset\\n"
-            "• Test Mechanic (+91 78599 91843) reset\\n"
+            "🗑️ *All Testing Data Deleted Successfully!*\n\n"
+            "• Fake Truck #9999 removed\n"
+            "• Test Clerk (+91 82007 13637) reset\n"
+            "• Test Mechanic (+91 78599 91843) reset\n"
             "• All associated test tickets & parts requests cleared."
         )
         return True
@@ -60,10 +60,10 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
         from app.meta_api import meta_api
         await meta_api.send_text_message(
             phone,
-            "✅ *Testing Data Seeded Successfully!*\\n\\n"
-            "• Fake Truck: #9999 (Volvo FH16 - TST 9999)\\n"
-            "• Clerk: `+91 82007 13637`\\n"
-            "• Mechanic: `+91 78599 91843`\\n"
+            "✅ *Testing Data Seeded Successfully!*\n\n"
+            "• Fake Truck: #9999 (Volvo FH16 - TST 9999)\n"
+            "• Clerk: `+91 82007 13637`\n"
+            "• Mechanic: `+91 78599 91843`\n"
             "• Supervisor: `+91 92653 68695`"
         )
         return True
@@ -85,7 +85,7 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
             return True
 
     # 4. Check Mechanic Handlers
-    if text.startswith("btn_ws_parts_") or text.startswith("btn_ws_repair_done_") or current_step in {"ws_enter_eta", "ws_enter_part_details", "ws_parts_clarification_reply", "ws_enter_resolution_notes", "ws_enter_costing"}:
+    if text.startswith("btn_ws_parts_") or text.startswith("btn_ws_repair_done_") or text.startswith("btn_ws_skip_mech_photo") or current_step in {"ws_enter_eta", "ws_enter_part_details", "ws_parts_attach_photo", "ws_parts_clarification_reply", "ws_enter_resolution_notes", "ws_enter_costing"}:
         handled = await handle_mechanic_action(session, staff, text, image_id, data, current_step)
         if handled:
             return True
@@ -116,7 +116,11 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
         return True
         
     if current_step == "ws_enter_description":
-        await finalize_ticket_logging(session, staff, text, image_id, data)
+        await handle_description_entry(session, staff, text, image_id, data)
+        return True
+
+    if current_step == "ws_attach_clerk_photo" or text.startswith("btn_ws_skip_clerk_photo"):
+        await handle_photo_step(session, staff, text, image_id, data)
         return True
 
     # Default fallback

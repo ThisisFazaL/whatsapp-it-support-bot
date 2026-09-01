@@ -11,6 +11,56 @@ async def get_ticket_with_truck(session: AsyncSession, ticket_id: int) -> Worksh
     stmt = select(WorkshopTicket).options(selectinload(WorkshopTicket.truck)).where(WorkshopTicket.ticket_id == ticket_id)
     return (await session.execute(stmt)).scalars().first()
 
+async def finalize_parts_request(session: AsyncSession, staff: WorkshopStaff, data: dict):
+    phone = staff.phone
+    ticket_id = data.get("ticket_id")
+    ticket = await get_ticket_with_truck(session, ticket_id)
+    part_name = data.get("part_name", "Spare Part")
+    part_description = data.get("part_description", part_name)
+    sample_image_id = data.get("sample_image_id")
+    
+    if ticket:
+        parts_req = WorkshopPartsRequest(
+            ticket_id=ticket.ticket_id,
+            part_name=part_name,
+            part_description=part_description,
+            sample_image_id=sample_image_id,
+            status="PENDING"
+        )
+        session.add(parts_req)
+        ticket.status = "AWAITING_PARTS"
+        await session.commit()
+        await session.refresh(parts_req)
+        await clear_user_state(session, phone)
+        
+        await meta_api.send_text_message(
+            phone,
+            f"✅ Parts request for '*{part_name}*' sent to Purchasing Team.\n⏳ Status: *AWAITING PARTS*."
+        )
+        
+        stmt = select(WorkshopStaff).where(WorkshopStaff.role == "PURCHASING", WorkshopStaff.active == True)
+        purchasing_team = (await session.execute(stmt)).scalars().all()
+        truck_num = ticket.truck.truck_number if ticket.truck else ""
+        truck_model = ticket.truck.model_make if ticket.truck else ""
+        
+        for p in purchasing_team:
+            p_msg = (
+                f"🛒 *NEW PARTS REQUISITION*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
+                f"👨‍🔧 *Mechanic:* {staff.full_name}\n"
+                f"📦 *Part Required:* {part_name}\n"
+                f"🖼️ *Sample Photo:* {'Attached' if sample_image_id else 'None'}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Please confirm action:"
+            )
+            buttons = [
+                {"id": f"btn_parts_received_{parts_req.request_id}", "title": "📦 Part Received"},
+                {"id": f"btn_parts_need_info_{parts_req.request_id}", "title": "❓ Need Info/Sample"}
+            ]
+            await meta_api.send_button_message(p.phone, p_msg, buttons, header_text="PARTS REQUEST")
+
 async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, message_text: str, image_id: str, data: dict, state_step: str = None):
     phone = staff.phone
     text = message_text.strip()
@@ -55,55 +105,35 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
         await set_user_state(session, phone, "ws_enter_part_details", {"ticket_id": ticket_id})
         msg = (
             f"🛒 *Parts Requisition:*\n\n"
-            f"Please enter the part name/description and attach an optional sample photo:"
+            f"Please type the required part name, part number, or description:"
         )
         await meta_api.send_text_message(phone, msg)
         return True
 
     if state_step == "ws_enter_part_details":
-        ticket_id = data.get("ticket_id")
-        ticket = await get_ticket_with_truck(session, ticket_id)
-        if ticket:
-            parts_req = WorkshopPartsRequest(
-                ticket_id=ticket.ticket_id,
-                part_name=text,
-                part_description=text,
-                sample_image_id=image_id,
-                status="PENDING"
-            )
-            session.add(parts_req)
-            ticket.status = "AWAITING_PARTS"
-            await session.commit()
-            await session.refresh(parts_req)
-            await clear_user_state(session, phone)
+        data["part_name"] = text
+        data["part_description"] = text
+        if image_id:
+            data["sample_image_id"] = image_id
+            await finalize_parts_request(session, staff, data)
+            return True
             
-            await meta_api.send_text_message(
-                phone,
-                f"✅ Parts request for '*{text}*' sent to Purchasing Team.\n⏳ Status: *AWAITING PARTS*."
-            )
+        await set_user_state(session, phone, "ws_parts_attach_photo", data)
+        photo_prompt = (
+            f"📸 *Attach Sample Photo (Optional)*\n\n"
+            f"Please send a sample photo of the required part, or tap below to skip:"
+        )
+        buttons = [{"id": "btn_ws_skip_mech_photo", "title": "Skip Photo"}]
+        await meta_api.send_button_message(phone, photo_prompt, buttons, header_text="PHOTO ATTACHMENT")
+        return True
+
+    if state_step == "ws_parts_attach_photo" or text.startswith("btn_ws_skip_mech_photo"):
+        if image_id:
+            data["sample_image_id"] = image_id
+        elif text and text.lower() in {"skip", "skip photo"} or text.startswith("btn_ws_skip_mech_photo"):
+            data["sample_image_id"] = None
             
-            stmt = select(WorkshopStaff).where(WorkshopStaff.role == "PURCHASING", WorkshopStaff.active == True)
-            purchasing_team = (await session.execute(stmt)).scalars().all()
-            truck_num = ticket.truck.truck_number if ticket.truck else ""
-            truck_model = ticket.truck.model_make if ticket.truck else ""
-            
-            for p in purchasing_team:
-                p_msg = (
-                    f"🛒 *NEW PARTS REQUISITION*\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
-                    f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
-                    f"👨‍🔧 *Mechanic:* {staff.full_name}\n"
-                    f"📦 *Part Required:* {text}\n"
-                    f"🖼️ *Sample Photo:* {'Attached' if image_id else 'None'}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Please confirm action:"
-                )
-                buttons = [
-                    {"id": f"btn_parts_received_{parts_req.request_id}", "title": "📦 Part Received"},
-                    {"id": f"btn_parts_need_info_{parts_req.request_id}", "title": "❓ Need Info/Sample"}
-                ]
-                await meta_api.send_button_message(p.phone, p_msg, buttons, header_text="PARTS REQUEST")
+        await finalize_parts_request(session, staff, data)
         return True
 
     if state_step == "ws_parts_clarification_reply":
