@@ -34,17 +34,17 @@ async def create_zayn_ticket_and_notify():
                 zayn_emp.active = True
 
             # 2. Fetch Category, Subcategory, IssueType
-            c_res = await session.execute(select(Category).where(Category.category_name.ilike("%Doors, Windows%")))
+            c_res = await session.execute(select(Category).where(Category.domain.ilike("MAINTENANCE")))
             cat = c_res.scalars().first()
-            cat_id = cat.category_id if cat else 6
+            cat_id = cat.category_id if cat else None
 
-            s_res = await session.execute(select(Subcategory).where(Subcategory.subcategory_name.ilike("%Door Latch%")))
+            s_res = await session.execute(select(Subcategory))
             sub = s_res.scalars().first()
-            sub_id = sub.subcategory_id if sub else 22
+            sub_id = sub.subcategory_id if sub else None
 
-            i_res = await session.execute(select(IssueType).where(IssueType.issue_name.ilike("%squeaking or misaligned%")))
+            i_res = await session.execute(select(IssueType))
             issue = i_res.scalars().first()
-            issue_id = issue.issue_type_id if issue else 89
+            issue_id = issue.issue_type_id if issue else None
 
             t_num = "TKT-MNT-20260831-00001"
             
