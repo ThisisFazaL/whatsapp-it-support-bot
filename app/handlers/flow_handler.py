@@ -87,8 +87,8 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             header_text="⚙️ SELECT SUPPORT DOMAIN"
         )
     else:
-        # Standard IT Employee -> Go DIRECTLY to IT Categories Menu (No Location prompt for IT!)
-        await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
+        # Standard Employee -> Start with Location Selection so admin knows where the issue is!
+        await start_location_selection(session, phone, domain="IT")
 
 async def start_location_selection(session: AsyncSession, phone: str, domain: str = "IT"):
     """Presents location selection numbered text list."""
@@ -111,7 +111,7 @@ async def start_location_selection(session: AsyncSession, phone: str, domain: st
     loc_text = "\n".join(loc_list)
     msg = (
         f"🏢 *Select Location*\n\n"
-        f"Please select the location by replying with the corresponding number:\n\n"
+        f"Please select your location by replying with the corresponding number:\n\n"
         f"{loc_text}"
     )
 
@@ -176,8 +176,7 @@ async def handle_flow(
         if "maint" in text_clean or "btn_domain_maint" in text_clean or "project" in text_clean or choice_num == "2":
             await start_location_selection(session, phone, domain="MAINTENANCE")
         else:
-            # IT Support -> Skip Location Selection completely! Go straight to IT Categories Menu!
-            await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
+            await start_location_selection(session, phone, domain="IT")
         return
 
     # STEP 1: Select Location (Numbered Text List)
@@ -193,19 +192,52 @@ async def handle_flow(
             return
 
         if selected_loc_id == "OTHER":
-            data["location_name"] = "Other Location"
+            await set_user_state(session, phone, "awaiting_other_location", data)
+            await meta_api.send_text_message(
+                phone,
+                "🏢 *Type Custom Location*\n\nPlease type your specific location/branch name:\n(e.g., *Shop 6*, *110 Coventry Road*, *6 Austin Road Workington*, *Remote / Home*)"
+            )
+            return
         else:
             loc_obj = await session.get(Location, int(selected_loc_id))
             data["location_id"] = int(selected_loc_id)
             data["location_name"] = loc_obj.location_name if loc_obj else "On-Site"
 
-        # Ask for Specific Room / Area (New Prompt)
-        await set_user_state(session, phone, "awaiting_room_area", data)
-        await meta_api.send_text_message(
-            phone,
-            "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
-        )
-        return
+            if domain == "MAINTENANCE":
+                # Ask for Specific Room / Area (Projects domain)
+                await set_user_state(session, phone, "awaiting_room_area", data)
+                await meta_api.send_text_message(
+                    phone,
+                    "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
+                )
+                return
+            else:
+                # IT Support -> Proceed directly to IT Categories Menu
+                data["room_area"] = None
+                await send_categories_menu(session, phone, domain="IT", data=data)
+                return
+
+    # STEP 1.2: Awaiting Custom Location Text
+    elif step == "awaiting_other_location":
+        custom_loc = message_text.strip()
+        if len(custom_loc) < 2:
+            await meta_api.send_text_message(phone, "⚠️ Please type a valid location name:")
+            return
+
+        data["location_name"] = custom_loc
+        data["location_id"] = None
+
+        if domain == "MAINTENANCE":
+            await set_user_state(session, phone, "awaiting_room_area", data)
+            await meta_api.send_text_message(
+                phone,
+                "📍 *Specify Room / Area*\n\nPlease type the specific room, floor, or area:\n(e.g., *Executive Kitchen*, *2nd Floor Restroom*, *Warehouse Bay 3*, *Reception*)"
+            )
+            return
+        else:
+            data["room_area"] = None
+            await send_categories_menu(session, phone, domain="IT", data=data)
+            return
 
     # STEP 1.5: Awaiting Room / Area Text
     elif step == "awaiting_room_area":
@@ -577,7 +609,7 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
 
     hazard_notice = "\n⚠️ *SAFETY HAZARD:* 🚨 URGENT SAFETY HAZARD FLAG!" if is_safety_hazard else ""
     domain_label = "🏗️ PROJECTS" if domain == "MAINTENANCE" else "💻 IT SUPPORT"
-    location_line = f"🏢 *Location:* {loc_name}" + (f" ({room_area})" if room_area else "") + "\n" if domain == "MAINTENANCE" and loc_name else ""
+    location_line = f"🏢 *Location:* {loc_name}" + (f" ({room_area})" if room_area else "") + "\n" if loc_name else ""
 
     # Send Confirmation to Reporter
     emp_confirmation = (
@@ -599,7 +631,7 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     dept_str = f" ({dept_name})" if dept_name else ""
 
     header = f"🚨 NEW {domain_label} TICKET"
-    loc_body = f"🏢 *Location:* {loc_name}\n📍 *Room / Area:* {room_area}\n" if domain == "MAINTENANCE" and loc_name else ""
+    loc_body = f"🏢 *Location:* {loc_name}\n" + (f"📍 *Room / Area:* {room_area}\n" if room_area else "") if loc_name else ""
     body = (
         f"🎫 *Ticket ID:* `{ticket_number}`\n"
         f"👤 *Reporter:* {emp_name}{dept_str} (`+{emp_phone}`)\n"

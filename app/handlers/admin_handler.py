@@ -326,13 +326,10 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 domain_label = "🏗️ PROJECTS" if is_maint_t else "💻 IT"
                 
                 dept_str = f" ({dept_name})" if dept_name else ""
-                loc_line = ""
-                if is_maint_t:
-                    if loc_name:
-                        loc_line += f"🏢 *Location:* {loc_name}\n"
-                    room_area_val = getattr(t, "room_area", None)
-                    if room_area_val and room_area_val != "N/A":
-                        loc_line += f"📍 *Room/Area:* {room_area_val}\n"
+                loc_line = f"🏢 *Location:* {loc_name}\n" if loc_name else ""
+                room_area_val = getattr(t, "room_area", None)
+                if is_maint_t and room_area_val and room_area_val != "N/A":
+                    loc_line += f"📍 *Room/Area:* {room_area_val}\n"
 
                 hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if is_maint_t and getattr(t, "is_safety_hazard", False) else ""
 
