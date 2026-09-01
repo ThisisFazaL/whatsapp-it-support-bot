@@ -107,6 +107,26 @@ async def trigger_create_zayn_ticket_endpoint():
     await create_zayn_ticket_and_notify()
     return {"status": "success", "message": "Ticket TKT-MNT-20260831-00001 created and alerts sent to Projects Admins (Stanclea, Omar, Master Admin)."}
 
+@app.get("/debug-check-stanclea-admin")
+async def debug_check_stanclea_admin_endpoint(db: AsyncSession = Depends(get_db)):
+    from app.database import SupportAdmin, Employee
+    from sqlalchemy import select
+    from app.state_manager import is_admin, is_employee_registered
+    
+    admins_res = await db.execute(select(SupportAdmin))
+    admins = admins_res.scalars().all()
+    admin_list = [{"id": a.admin_id, "name": a.full_name, "phone": a.phone, "is_maint": a.is_maintenance_admin, "active": a.active} for a in admins]
+    
+    stanclea_admin = await is_admin(db, "263780099291")
+    stanclea_emp = await is_employee_registered(db, "263780099291")
+    
+    return {
+        "all_admins": admin_list,
+        "stanclea_is_admin": bool(stanclea_admin),
+        "stanclea_admin_name": stanclea_admin.full_name if stanclea_admin else None,
+        "stanclea_is_emp": bool(stanclea_emp)
+    }
+
 @app.get("/inspect-zayn-tickets")
 async def inspect_zayn_tickets_endpoint(db: AsyncSession = Depends(get_db)):
     """Inspects all Building Projects and IT Support tickets created by Zayn or anyone."""
