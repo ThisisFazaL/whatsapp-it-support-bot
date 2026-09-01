@@ -67,12 +67,6 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database models and seed data...")
     await init_db_models()
     logger.info("Database initialized successfully.")
-    
-    try:
-        from process_ticket_cleanup_and_notify import cleanup_and_renumber
-        await cleanup_and_renumber()
-    except Exception as e:
-        logger.error(f"Error in cleanup_and_renumber startup task: {e}")
 
     # Start 8 PM IST EOD report background task loop
     report_task = asyncio.create_task(scheduled_daily_report_loop())
