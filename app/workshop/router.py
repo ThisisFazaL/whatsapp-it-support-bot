@@ -13,10 +13,18 @@ from app.workshop.purchasing_handler import handle_purchasing_action
 from app.workshop.mechanic_handler import handle_mechanic_action
 
 async def get_workshop_staff(session: AsyncSession, phone: str) -> WorkshopStaff:
-    """Checks if the phone number belongs to registered workshop staff."""
+    """Checks if the phone number belongs to registered workshop staff with flexible format matching."""
     if not phone:
         return None
-    stmt = select(WorkshopStaff).where(WorkshopStaff.phone == phone, WorkshopStaff.active == True)
+    clean_phone = "".join(filter(str.isdigit, str(phone)))
+    last_10 = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
+    
+    stmt = select(WorkshopStaff).where(
+        (WorkshopStaff.phone == phone) |
+        (WorkshopStaff.phone == clean_phone) |
+        (WorkshopStaff.phone.endswith(last_10)),
+        WorkshopStaff.active == True
+    )
     return (await session.execute(stmt)).scalars().first()
 
 async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, message_text: str, image_id: str = None):
