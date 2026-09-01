@@ -20,7 +20,7 @@ async def update_roles():
         # 2. Add / Update Maintenance Admins: Stanclea & Omar Arizai
         new_maint_admins = [
             {"name": "Stanclea", "phone": "263780099291"},
-            {"name": "Omar Arizai", "phone": "26377133602"}
+            {"name": "Omar Arizai", "phone": "263771333602"}
         ]
 
         # Deactivate old test maintenance admins if any

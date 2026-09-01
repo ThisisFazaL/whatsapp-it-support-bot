@@ -383,7 +383,28 @@ async def init_db_models():
                 if emp.phone not in austin_phones and (emp.location_id is None or emp.location_id in [1, 2, 3]):
                     emp.location_id = coventry_loc.location_id
 
-        await session.commit()
+        # Guarantee Projects Support Admins (Stanclea & Omar Arizai) are synced with correct phone numbers
+        maint_admins_data = [
+            {"name": "Stanclea", "phone": "263780099291"},
+            {"name": "Omar Arizai", "phone": "263771333602"}
+        ]
+        for ma in maint_admins_data:
+            m_res = await session.execute(select(SupportAdmin).where((SupportAdmin.phone == ma["phone"]) | (SupportAdmin.full_name.ilike(f"%{ma['name']}%"))))
+            m_adm = m_res.scalars().first()
+            if m_adm:
+                m_adm.full_name = ma["name"]
+                m_adm.phone = ma["phone"]
+                m_adm.is_maintenance_admin = True
+                m_adm.active = True
+            else:
+                session.add(SupportAdmin(
+                    full_name=ma["name"],
+                    phone=ma["phone"],
+                    is_master_admin=False,
+                    is_maintenance_admin=True,
+                    active=True
+                ))
+
         # Guarantee Authorized Building Projects Reporters are synced
         maint_reporters_data = [
             {"name": "Fazal Saiyed", "phone": "919265368695"},
@@ -394,6 +415,8 @@ async def init_db_models():
             {"name": "Soyab Patel", "phone": "263784077420"},
             {"name": "Batsirai Muradzikwa", "phone": "263711421202"},
             {"name": "Simbarashe Chaunoita", "phone": "263785571584"},
+            {"name": "Stanclea", "phone": "263780099291"},
+            {"name": "Omar Arizai", "phone": "263771333602"},
         ]
         for rep in maint_reporters_data:
             r_phone = rep["phone"]
