@@ -1,0 +1,197 @@
+import datetime
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.meta_api import meta_api
+from app.state_manager import set_user_state, clear_user_state
+from app.workshop.models import WorkshopStaff, WorkshopTicket, WorkshopTruck
+
+async def get_ticket_with_truck(session: AsyncSession, ticket_id: int) -> WorkshopTicket:
+    stmt = select(WorkshopTicket).options(selectinload(WorkshopTicket.truck)).where(WorkshopTicket.ticket_id == ticket_id)
+    return (await session.execute(stmt)).scalars().first()
+
+async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, message_text: str, data: dict, state_step: str = None):
+    phone = staff.phone
+    text = message_text.strip()
+    
+    # 1. State: Entering Reject Reason
+    if state_step == "ws_reject_reason":
+        ticket_id = data.get("ticket_id")
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        if ticket:
+            ticket.status = "CLOSED"
+            ticket.internal_outcome = "NO_VALID_FAULT"
+            ticket.internal_action_notes = text
+            await session.commit()
+            await clear_user_state(session, phone)
+            
+            await meta_api.send_text_message(
+                phone,
+                f"✅ Ticket `{ticket.ticket_number}` has been rejected and closed.\n📝 *Reason:* {text}"
+            )
+        return True
+
+    # 2. State: Entering Internal Fix Notes
+    if state_step == "ws_internal_fix_notes":
+        ticket_id = data.get("ticket_id")
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        if ticket:
+            ticket.status = "CLOSED"
+            ticket.internal_outcome = "RESOLVED_INTERNALLY"
+            ticket.internal_action_notes = text
+            await session.commit()
+            await clear_user_state(session, phone)
+            
+            await meta_api.send_text_message(
+                phone,
+                f"✅ Ticket `{ticket.ticket_number}` resolved internally and closed.\n📝 *Action Taken:* {text}"
+            )
+        return True
+
+    # 3. State: Entering QC Failure Reason (Rework Loop)
+    if state_step == "ws_qc_fail_reason":
+        ticket_id = data.get("ticket_id")
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        if ticket:
+            ticket.status = "REWORK_REQUIRED"
+            ticket.qc_passed = False
+            ticket.qc_failure_reason = text
+            ticket.qc_tested_at = datetime.datetime.utcnow()
+            await session.commit()
+            await clear_user_state(session, phone)
+            
+            await meta_api.send_text_message(
+                phone,
+                f"⚠️ Ticket `{ticket.ticket_number}` marked *REWORK REQUIRED*.\n📝 *Failure Notes:* {text}\n\nAlert sent to mechanic to re-fix on shop floor."
+            )
+            
+            # Notify Mechanic
+            if ticket.assigned_mechanic_id:
+                mechanic = await session.get(WorkshopStaff, ticket.assigned_mechanic_id)
+                if mechanic:
+                    truck_num = ticket.truck.truck_number if ticket.truck else ""
+                    rework_alert = (
+                        f"⚠️ *QC TEST FAILED — REWORK REQUIRED*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                        f"🚚 *Vehicle:* Truck #{truck_num}\n"
+                        f"📝 *QC Failure Reason from Edward:* {text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Please inspect and fix again. Tap completion when done."
+                    )
+                    buttons = [{"id": f"btn_ws_repair_done_{ticket.ticket_id}", "title": "🏁 Repair Completed"}]
+                    await meta_api.send_button_message(mechanic.phone, rework_alert, buttons, header_text="REWORK ALERT")
+        return True
+
+    # Button Clicks
+    if text.startswith("btn_ws_route_intern_"):
+        ticket_id = int(text.split("_")[-1])
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        body = f"🛠️ Handle Internally for `{ticket.ticket_number}`:\nSelect outcome:"
+        buttons = [
+            {"id": f"btn_ws_resolve_intern_{ticket_id}", "title": "✅ Resolved Internally"},
+            {"id": f"btn_ws_reject_{ticket_id}", "title": "❌ No Valid Fault"}
+        ]
+        await meta_api.send_button_message(phone, body, buttons, header_text="INTERNAL ACTION")
+        return True
+
+    if text.startswith("btn_ws_resolve_intern_"):
+        ticket_id = int(text.split("_")[-1])
+        await set_user_state(session, phone, "ws_internal_fix_notes", {"ticket_id": ticket_id})
+        await meta_api.send_text_message(phone, "📝 Please record the action taken to resolve this internally:")
+        return True
+
+    if text.startswith("btn_ws_reject_"):
+        ticket_id = int(text.split("_")[-1])
+        await set_user_state(session, phone, "ws_reject_reason", {"ticket_id": ticket_id})
+        await meta_api.send_text_message(phone, "📝 *Mandatory Closure Reason:*\nPlease explain why this fault report is invalid or rejected:")
+        return True
+
+    if text.startswith("btn_ws_route_work_"):
+        ticket_id = int(text.split("_")[-1])
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        if ticket:
+            stmt = select(WorkshopStaff).where(WorkshopStaff.role == "MECHANIC", WorkshopStaff.active == True)
+            mechanic = (await session.execute(stmt)).scalars().first()
+            if not mechanic:
+                stmt_lead = select(WorkshopStaff).where(WorkshopStaff.role == "LEAD", WorkshopStaff.active == True)
+                mechanic = (await session.execute(stmt_lead)).scalars().first()
+            
+            ticket.assigned_mechanic_id = mechanic.staff_id if mechanic else None
+            ticket.status = "WITH_MECHANIC"
+            await session.commit()
+            
+            await meta_api.send_text_message(
+                phone,
+                f"✅ Ticket `{ticket.ticket_number}` routed to workshop floor.\n👨‍🔧 *Assigned Mechanic:* {mechanic.full_name if mechanic else 'Workshop Queue'}"
+            )
+            
+            if mechanic:
+                truck_num = ticket.truck.truck_number if ticket.truck else ""
+                truck_model = ticket.truck.model_make if ticket.truck else ""
+                mech_alert = (
+                    f"🔧 *NEW WORKSHOP JOB ASSIGNED*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                    f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
+                    f"📌 *Fault:* {ticket.category_name} ➔ {ticket.subcategory_name}\n"
+                    f"📝 *Notes:* {ticket.description}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⏱️ *Please enter your Estimated Completion Time (e.g. 'Tomorrow 11 AM' or '2 hours'):*"
+                )
+                await set_user_state(session, mechanic.phone, "ws_enter_eta", {"ticket_id": ticket.ticket_id})
+                await meta_api.send_text_message(mechanic.phone, mech_alert)
+        return True
+
+    if text.startswith("btn_ws_qc_fail_"):
+        ticket_id = int(text.split("_")[-1])
+        await set_user_state(session, phone, "ws_qc_fail_reason", {"ticket_id": ticket_id})
+        await meta_api.send_text_message(phone, "📝 *Mandatory Failure Reason:*\nPlease enter why the vehicle failed QC testing (e.g. 'Brake pedal still soft'):")
+        return True
+
+    if text.startswith("btn_ws_qc_pass_"):
+        ticket_id = int(text.split("_")[-1])
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        if ticket:
+            truck_num = ticket.truck.truck_number if ticket.truck else ""
+            body = (
+                f"✅ Vehicle Passed Quality Testing!\n\n"
+                f"🎫 Ticket: `{ticket.ticket_number}`\n"
+                f"🚚 Truck: #{truck_num}\n\n"
+                f"Ready to return to active fleet?"
+            )
+            buttons = [{"id": f"btn_ws_return_fleet_{ticket_id}", "title": "🚀 Return to Fleet"}]
+            await meta_api.send_button_message(phone, body, buttons, header_text="CONFIRM FLEET RETURN")
+        return True
+
+    if text.startswith("btn_ws_return_fleet_"):
+        ticket_id = int(text.split("_")[-1])
+        ticket = await get_ticket_with_truck(session, ticket_id)
+        if ticket:
+            now = datetime.datetime.utcnow()
+            ticket.status = "CLOSED"
+            ticket.qc_passed = True
+            ticket.qc_tested_at = now
+            ticket.return_to_fleet_at = now
+            await session.commit()
+            await clear_user_state(session, phone)
+            
+            await meta_api.send_text_message(
+                phone,
+                f"🚀 *Vehicle Returned to Fleet!*\n🎫 Ticket `{ticket.ticket_number}` is now *CLOSED*.\nTimestamp recorded."
+            )
+            
+            if ticket.logged_by_staff_id:
+                clerk = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
+                if clerk:
+                    truck_num = ticket.truck.truck_number if ticket.truck else ""
+                    await meta_api.send_text_message(
+                        clerk.phone,
+                        f"✅ *Vehicle Returned to Active Fleet*\n"
+                        f"🎫 Ticket: `{ticket.ticket_number}`\n"
+                        f"🚚 Truck #{truck_num} passed QC inspection and is ready for dispatch!"
+                    )
+        return True
+
+    return False

@@ -12,6 +12,9 @@ from app.config import settings
 
 Base = declarative_base()
 
+# Register Workshop models with Base
+import app.workshop.models
+
 class Location(Base):
     __tablename__ = "locations"
     location_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -446,3 +449,11 @@ async def init_db_models():
         # Clean up legacy / incorrect AdminCategoryMapping rows
         await session.execute(delete(AdminCategoryMapping))
         await session.commit()
+
+        # Guarantee Workshop Tables & Seed Data are synced on startup
+        try:
+            from seed_workshop_data import seed_workshop_data_in_session
+            await seed_workshop_data_in_session(session)
+        except Exception as ws_err:
+            import logging
+            logging.getLogger("database").warning(f"Workshop seed sync skipped or error: {ws_err}")
