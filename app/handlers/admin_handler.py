@@ -70,6 +70,10 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
         return True
 
     resolution_note = message_text.strip()
+    if resolution_note.lower().startswith(("resolve_", "claim_", "cmd_", "btn_", "confirm_", "reopen_")):
+        logger.warning(f"Ignored button payload '{resolution_note}' as resolution note text.")
+        return False
+
     if len(resolution_note) < 2:
         await meta_api.send_text_message(sender_phone, "⚠️ Resolution note is too short. Please type a brief description of what was done to fix the issue:")
         return True
@@ -208,11 +212,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if not admin:
         return False
 
-    # Check if admin is currently answering resolution note prompt
-    state = await get_user_state(session, sender_phone)
-    if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
-        return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
-
     # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-..."
     claim_match = re.match(r"^(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
     # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "resolve 1"
@@ -223,7 +222,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     is_raise_cmd = any(k in text_lower for k in ("cmd_raise_ticket", "raise ticket", "raise it ticket"))
     is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and any(k in text_lower for k in ("hi", "hello", "menu", "admin", "start", "help", "hey"))
 
+    # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
+    state = await get_user_state(session, sender_phone)
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
+        if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
+            return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
         return False
 
     # Executive Observer check
