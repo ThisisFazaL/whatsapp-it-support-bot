@@ -450,15 +450,8 @@ async def init_db_models():
         await session.execute(delete(AdminCategoryMapping))
         await session.commit()
 
-        # Purge legacy workshop trucks, staff, tickets, and parts requests
+        # Sync Workshop Taxonomy and Real Tagoneswa Fleet on startup
         try:
-            from app.workshop.models import WorkshopPartsRequest, WorkshopTicket, WorkshopTruck, WorkshopStaff
-            await session.execute(delete(WorkshopPartsRequest))
-            await session.execute(delete(WorkshopTicket))
-            await session.execute(delete(WorkshopTruck))
-            await session.execute(delete(WorkshopStaff))
-            await session.commit()
-            
             from seed_workshop_data import seed_workshop_data_in_session
             await seed_workshop_data_in_session(session)
         except Exception as ws_err:

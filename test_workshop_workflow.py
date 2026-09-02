@@ -48,44 +48,62 @@ async def run_test():
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with session_factory() as session:
+        # Guarantee real fleet and test staff exist in test session
+        from seed_workshop_data import seed_workshop_data_in_session
+        await seed_workshop_data_in_session(session)
+
+        # Seed test staff if missing
+        test_staff_list = [
+            {"full_name": "Tinashe Moyo (Driver)", "phone": "919876543220", "role": "DRIVER"},
+            {"full_name": "Edward Marufu (Supervisor)", "phone": "919876543221", "role": "SUPERVISOR"},
+            {"full_name": "Blessing Moyo (Mechanic)", "phone": "919876543222", "role": "MECHANIC"},
+            {"full_name": "Purchasing Team", "phone": "919876543224", "role": "PURCHASING"},
+        ]
+        for s in test_staff_list:
+            stmt = select(WorkshopStaff).where(WorkshopStaff.phone == s["phone"])
+            existing = (await session.execute(stmt)).scalars().first()
+            if not existing:
+                session.add(WorkshopStaff(**s, active=True))
+        await session.commit()
+
         # Load Staff
-        panashe = await get_workshop_staff(session, "919876543220") # Clerk
+        driver = await get_workshop_staff(session, "919876543220") # Driver
         edward = await get_workshop_staff(session, "919876543221")  # Supervisor
         blessing = await get_workshop_staff(session, "919876543222") # Mechanic
         purchasing = await get_workshop_staff(session, "919876543224") # Purchasing
 
-        assert panashe is not None, "Panashe not found in DB"
+        assert driver is not None, "Driver not found in DB"
         assert edward is not None, "Edward not found in DB"
         assert blessing is not None, "Blessing not found in DB"
         assert purchasing is not None, "Purchasing not found in DB"
 
-        print(f"[OK] Staff loaded: Panashe ({panashe.role}), Edward ({edward.role}), Blessing ({blessing.role}), Purchasing ({purchasing.role})")
+        print(f"[OK] Staff loaded: Driver ({driver.role}), Edward ({edward.role}), Blessing ({blessing.role}), Purchasing ({purchasing.role})")
 
         # -------------------------------------------------------------
-        # STAGE 1: Panashe (Clerk) Logs Issue
+        # STAGE 1: Driver Logs Issue for Real Truck AGZ 7331 (7331)
         # -------------------------------------------------------------
-        print("\n[STAGE 1] Panashe Logs Issue for Truck #1045...")
+        print("\n[STAGE 1] Driver Logs Issue for Real Truck #7331 (AGZ 7331)...")
         
-        # 1.1 Panashe sends "Hi"
-        await handle_workshop_message(session, panashe, "Hi")
+        # 1.1 Driver sends "Hi"
+        await handle_workshop_message(session, driver, "Hi")
         
-        # 1.2 Panashe types "1045"
-        await handle_workshop_message(session, panashe, "1045")
+        # 1.2 Driver types "7331" (or "AGZ7331")
+        await handle_workshop_message(session, driver, "7331")
         
-        # 1.3 Panashe confirms truck
-        await handle_workshop_message(session, panashe, "btn_ws_confirm_truck")
+        # 1.3 Driver confirms truck
+        await handle_workshop_message(session, driver, "btn_ws_confirm_truck")
         
-        # 1.4 Panashe selects Category 1 (Brakes & Air Pressure)
-        await handle_workshop_message(session, panashe, "1")
+        # 1.4 Driver selects Category 1 (Brakes & Air Pressure)
+        await handle_workshop_message(session, driver, "1")
         
-        # 1.5 Panashe selects Subcategory 1 (Air Pressure Leak)
-        await handle_workshop_message(session, panashe, "1")
+        # 1.5 Driver selects Subcategory 1 (Air Pressure Leak)
+        await handle_workshop_message(session, driver, "1")
         
-        # 1.6 Panashe inputs description (Step 1)
-        await handle_workshop_message(session, panashe, "Air pressure drops rapidly when footbrake pressed")
+        # 1.6 Driver inputs description (Step 1)
+        await handle_workshop_message(session, driver, "Air pressure drops rapidly when footbrake pressed")
         
-        # 1.7 Panashe sends optional photo (Step 2)
-        await handle_workshop_message(session, panashe, "Photo of leaking line", image_id="img_leak_001")
+        # 1.7 Driver sends optional photo (Step 2)
+        await handle_workshop_message(session, driver, "Photo of leaking line", image_id="img_leak_001")
 
         # Verify Ticket Created
         stmt = select(WorkshopTicket).order_by(WorkshopTicket.ticket_id.desc())
@@ -93,7 +111,7 @@ async def run_test():
         assert ticket is not None, "Ticket was not created"
         assert ticket.status == "UNDER_REVIEW", f"Expected UNDER_REVIEW, got {ticket.status}"
         assert ticket.image_id == "img_leak_001", "Image attachment missing"
-        print(f"[PASS] STAGE 1: Ticket {ticket.ticket_number} created with status '{ticket.status}'!")
+        print(f"[PASS] STAGE 1: Ticket {ticket.ticket_number} created with status '{ticket.status}' for IVECO STRALIS 330 (AGZ 7331)!")
 
         # -------------------------------------------------------------
         # STAGE 2: Edward Gatekeeper Review -> Send to Workshop
@@ -221,7 +239,7 @@ async def run_test():
         print(f"[PASS] STAGE 6.2: Vehicle passed QC and returned to active fleet! Final Status: '{ticket.status}'!")
 
     print("="*60)
-    print("ALL WORKSHOP WORKFLOW SIMULATION TESTS PASSED 100% PERFECTLY!")
+    print("ALL WORKSHOP WORKFLOW SIMULATION TESTS PASSED 100% PERFECTLY WITH REAL FLEET DATA!")
     print("="*60)
 
 if __name__ == "__main__":

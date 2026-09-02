@@ -1,6 +1,40 @@
-Registration Plate Number (e.g. ABZ 1045),Truck Number (Auto-extracted from Plate: e.g. 1045),Vehicle Make & Model (e.g. Volvo FH16 540),"Body Type / Configuration (e.g. Horse 6x4, Tipper, Tanker)",Home Depot / Base Yard (e.g. Harare Central Yard),Status (Active / Inactive)
-ABZ 1045,1045,Volvo FH16 540,Horse (6x4),Harare Central Yard,Active
-ACY 2046,2046,Scania R500,Horse (6x4),Bulawayo Yard,Active
-AEN 2012,2012,Shacman F3000,20m³ Tipper,Mine Site A,Active
-AFG 3005,3005,Mercedes-Benz Actros 3340,Fuel Tanker,Beira Corridor,Active
-AGH 4010,4010,Isuzu FTR 850,8-Ton Rigid,Harare Central Yard,Active
+Registration Plate Number,Truck Number (Digits to type),Vehicle Make & Model,Body Type / Configuration,Home Depot / Base Yard,Status
+AGZ 7331,7331,IVECO STRALIS 330,Horse (6x4),Harare Yard,Active
+AGV 5771,5771,RIGID TRUCK IVECO 180E25,Rigid,Harare Yard,Active
+AHF 0234,0234,IVECO 74e18,Rigid,Harare Yard,Active
+AHF 8440,8440,IVECO BOX VA 75 E18,Box Rigid,Harare Yard,Active
+AHF 0233,0233,IVECO Eurocargo,Rigid,Harare Yard,Active
+AGT 2070,2070,SINO TRUCK ZZ1168G,Horse (6x4),Harare Yard,Active
+AGV 1928,1928,Fox Rigid Truck,Rigid,Harare Yard,Active
+AGV 1926,1926,DAF LF250,Rigid,Harare Yard,Active
+AEK 5978,5978,IVECO Eurocargo,Rigid,Harare Yard,Active
+AFE 6854,6854,TOYOACE,Rigid,Harare Yard,Active
+AFG 0346,0346,IVECO 75e16 Eurocargo,Rigid,Harare Yard,Active
+AFM 9709,9709,TOYOTA PRIUS,Light Vehicle,Harare Yard,Active
+AFN 5056,5056,IVECO Eurocargo 180e25 (Box),Box Rigid,Harare Yard,Active
+AFN 5057,5057,IVECO Eurocargo 180e25 (Box),Box Rigid,Harare Yard,Active
+AFO 4351,4351,Hino Dutro,Rigid,Harare Yard,Active
+AFS 2545,2545,TOYOTA DYNA,Rigid,Harare Yard,Active
+AFV 2732,2732,NISSAN AD VAN,Van,Harare Yard,Active
+AGA 4929,4929,MAZDA TITAN,Rigid,Harare Yard,Active
+AGH 5878,5878,IVECO,Rigid,Harare Yard,Active
+AGH 5879,5879,EUROCARGO 180e24,Rigid,Harare Yard,Active
+AGN 6858,6858,TOYOTA PROBOX,Light Vehicle,Harare Yard,Active
+AHF 8435,8435,ISUZU,Rigid,Harare Yard,Active
+AHF 0232,0232,IVECO Eurocargo,Rigid,Harare Yard,Active
+AHC 9313,9313,SINO TRUCK,Horse (6x4),Harare Yard,Active
+AHC 9312,9312,NISSAN AD VAN,Van,Harare Yard,Active
+AHC 0030,0030,HINO RANGER,Rigid,Harare Yard,Active
+AGY 1742,1742,NISSAN AD VAN,Van,Harare Yard,Active
+AGX 6234,6234,Nissan Condor UD Truck,UD Truck,Harare Yard,Active
+AGV 5770,5770,MAN TGL 7150,Rigid,Harare Yard,Active
+AGV 5769,5769,IVECO 180E25,Rigid,Harare Yard,Active
+AGV 5768,5768,Mitsubishi Fuso,Rigid,Harare Yard,Active
+AGT 6917,6917,NISSAN AD VAN,Van,Harare Yard,Active
+AGQ 2920,2920,Mazda Titan,Rigid,Harare Yard,Active
+AGO 0727,0727,Nissan Caravan NV350,Van,Harare Yard,Active
+AGO 0714,0714,Nissan NV200,Van,Harare Yard,Active
+AGI 6605,6605,TOYOTA PROBOX,Light Vehicle,Harare Yard,Active
+ACW 4715,4715,Hino 30SC (Rigid),Rigid,Harare Yard,Active
+AHF 8434,8434,IVECO 150e19,Rigid,Harare Yard,Active
+AHF 8436,8436,IVECO 180e28,Rigid,Harare Yard,Active
