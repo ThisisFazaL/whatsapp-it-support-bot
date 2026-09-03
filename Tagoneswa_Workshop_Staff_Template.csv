@@ -1,8 +1,26 @@
-Full Name,WhatsApp Phone Number (with Country Code e.g. +263...),System Role (DRIVER / SUPERVISOR / MECHANIC / LEAD / PURCHASING / CLERK),Job Designation / Title,Base Yard / Location,Status (Active / Inactive)
-Tinashe Moyo,+263 77 100 0001,DRIVER,Heavy Long-Haul Driver (Reporter),Harare Central Yard,Active
-Simba Ndlovu,+263 77 100 0002,DRIVER,Tipper / Site Driver (Reporter),Mine Site A,Active
-Edward Marufu,+263 77 200 0001,SUPERVISOR,Logistics & Fleet Supervisor (Gatekeeper & QC),Harare Central Yard,Active
-Blessing Moyo,+263 77 300 0001,MECHANIC,Senior Heavy Vehicle Mechanic (Repair & Costs),Harare Workshop Bay,Active
-Farai Shumba,+263 77 300 0002,LEAD,Workshop Lead / Bay Foreman,Harare Workshop Bay,Active
-Procurement Team,+263 77 400 0001,PURCHASING,Purchasing & Spares Procurement,Head Office,Active
-Panashe Mutasa,+263 77 500 0001,CLERK,Fault Entry Clerk (Optional),Harare Central Yard,Active
+Full Name,WhatsApp Phone Number,System Role,Job Title,Base Yard / Location,Status
+Terrence Mupfumi,263788112771,DRIVER,Driver,Harare,Active
+Godknows Kadungure,263772678948,DRIVER,Driver,Harare,Active
+Peter Ncube,263774364811,DRIVER,Driver,Harare,Active
+Ashley Zirota,263787760064,DRIVER,Driver,Harare,Active
+Wilbert Makoma,263775959241,DRIVER,Driver,Harare,Active
+Langton Mariga,263779618688,DRIVER,Driver,Harare,Active
+Takudzwa Bafana,263775316554,DRIVER,Driver,Harare,Active
+Tatenda Bhunu,263771345594,DRIVER,Driver,Harare,Active
+Tonderai Matongo,263777758430,DRIVER,Driver,Harare,Active
+Lastern Sabola,263733493338,DRIVER,Driver,Harare,Active
+Owen Sibanda,263783175517,DRIVER,Driver,Harare,Active
+Praymore Madondo,263781603472,DRIVER,Driver,Harare,Active
+Michael Kamudyariwa,263774842059,DRIVER,Driver,Harare,Active
+Thabani Chinamora,263772961453,DRIVER,Driver,Harare,Active
+Last Kanyandura,263775738870,DRIVER,Driver,Harare,Active
+Nyasha Isaiah,263777724900,DRIVER,Driver,Harare,Active
+Garikai Madubeko,263777669972,DRIVER,Driver,Harare,Active
+Shepherd Matowanyika,263776093473,DRIVER,Driver,Harare,Active
+Kelvin Chitsamba,263779841935,DRIVER,Driver,Harare,Active
+Fortune Samukange,263775189811,DRIVER,Driver,Harare,Active
+Panashe Mutamangira,263777261203,LOGISTICS_ASSISTANT,Logistics Assistant,Harare,Active
+Edward Chemhere,263715025982,SUPERVISOR,Logistics Supervisor,Harare,Active
+Lydon Kandikire,263718295309,PURCHASING,Procurement,Harare,Active
+Sajid,263718093498,MECHANIC,Mechanic,Harare,Active
+Fazal Saiyed (Supervisor),919265368695,SUPERVISOR,Logistics Supervisor,HQ,Active

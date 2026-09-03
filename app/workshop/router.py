@@ -13,14 +13,16 @@ from app.workshop.purchasing_handler import handle_purchasing_action
 from app.workshop.mechanic_handler import handle_mechanic_action
 
 async def get_workshop_staff(session: AsyncSession, phone: str) -> WorkshopStaff:
-    """Checks if the phone number belongs to registered workshop staff with exact phone matching."""
+    """Checks if the phone number belongs to registered workshop staff with flexible 9-digit suffix matching."""
     if not phone:
         return None
     clean_phone = "".join(filter(str.isdigit, str(phone)))
+    last_9 = clean_phone[-9:] if len(clean_phone) >= 9 else clean_phone
     
     stmt = select(WorkshopStaff).where(
         (WorkshopStaff.phone == phone) |
-        (WorkshopStaff.phone == clean_phone),
+        (WorkshopStaff.phone == clean_phone) |
+        (WorkshopStaff.phone.endswith(last_9)),
         WorkshopStaff.active == True
     )
     return (await session.execute(stmt)).scalars().first()
@@ -38,7 +40,7 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
         return True
 
     # 1.1 Test Data Management Commands (Supervisor / Admin only)
-    if staff.role.upper() == "SUPERVISOR" and text.lower() in {"delete testing data", "delete test data", "clear test data"}:
+    if staff.role.upper() in {"SUPERVISOR", "LOGISTICS SUPERVISOR", "ADMIN"} and text.lower() in {"delete testing data", "delete test data", "clear test data"}:
         from manage_test_data import delete_test_data_in_session
         await delete_test_data_in_session(session)
         from app.meta_api import meta_api
@@ -52,7 +54,7 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
         )
         return True
 
-    if staff.role.upper() == "SUPERVISOR" and text.lower() in {"seed testing data", "seed test data"}:
+    if staff.role.upper() in {"SUPERVISOR", "LOGISTICS SUPERVISOR", "ADMIN"} and text.lower() in {"seed testing data", "seed test data"}:
         from manage_test_data import seed_test_database_in_session
         await seed_test_database_in_session(session)
         from app.meta_api import meta_api

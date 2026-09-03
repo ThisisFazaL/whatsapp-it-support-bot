@@ -52,8 +52,37 @@ PRODUCTION_FLEET = [
     {"truck_number": "8436", "plate_number": "AHF 8436", "model_make": "IVECO 180e28", "body_type": "Rigid", "home_depot": "Harare Yard"},
 ]
 
+# Permanent Production Staff & Drivers Directory (24 members + Admin)
+PRODUCTION_STAFF = [
+    {"full_name": "Terrence Mupfumi", "phone": "263788112771", "role": "DRIVER"},
+    {"full_name": "Godknows Kadungure", "phone": "263772678948", "role": "DRIVER"},
+    {"full_name": "Peter Ncube", "phone": "263774364811", "role": "DRIVER"},
+    {"full_name": "Ashley Zirota", "phone": "263787760064", "role": "DRIVER"},
+    {"full_name": "Wilbert Makoma", "phone": "263775959241", "role": "DRIVER"},
+    {"full_name": "Langton Mariga", "phone": "263779618688", "role": "DRIVER"},
+    {"full_name": "Takudzwa Bafana", "phone": "263775316554", "role": "DRIVER"},
+    {"full_name": "Tatenda Bhunu", "phone": "263771345594", "role": "DRIVER"},
+    {"full_name": "Tonderai Matongo", "phone": "263777758430", "role": "DRIVER"},
+    {"full_name": "Lastern Sabola", "phone": "263733493338", "role": "DRIVER"},
+    {"full_name": "Owen Sibanda", "phone": "263783175517", "role": "DRIVER"},
+    {"full_name": "Praymore Madondo", "phone": "263781603472", "role": "DRIVER"},
+    {"full_name": "Michael Kamudyariwa", "phone": "263774842059", "role": "DRIVER"},
+    {"full_name": "Thabani Chinamora", "phone": "263772961453", "role": "DRIVER"},
+    {"full_name": "Last Kanyandura", "phone": "263775738870", "role": "DRIVER"},
+    {"full_name": "Nyasha Isaiah", "phone": "263777724900", "role": "DRIVER"},
+    {"full_name": "Garikai Madubeko", "phone": "263777669972", "role": "DRIVER"},
+    {"full_name": "Shepherd Matowanyika", "phone": "263776093473", "role": "DRIVER"},
+    {"full_name": "Kelvin Chitsamba", "phone": "263779841935", "role": "DRIVER"},
+    {"full_name": "Fortune Samukange", "phone": "263775189811", "role": "DRIVER"},
+    {"full_name": "Panashe Mutamangira", "phone": "263777261203", "role": "LOGISTICS_ASSISTANT"},
+    {"full_name": "Edward Chemhere", "phone": "263715025982", "role": "SUPERVISOR"},
+    {"full_name": "Lydon Kandikire", "phone": "263718295309", "role": "PURCHASING"},
+    {"full_name": "Sajid", "phone": "263718093498", "role": "MECHANIC"},
+    {"full_name": "Fazal Saiyed (Supervisor)", "phone": "919265368695", "role": "SUPERVISOR"}
+]
+
 async def seed_workshop_data_in_session(session: AsyncSession):
-    """Idempotently seeds standard fault taxonomies and real Tagoneswa fleet trucks."""
+    """Idempotently seeds standard fault taxonomies, fleet trucks, and registered staff."""
     
     # 1. Seed Real Fleet Trucks
     for t in PRODUCTION_FLEET:
@@ -68,7 +97,29 @@ async def seed_workshop_data_in_session(session: AsyncSession):
             existing.home_depot = t["home_depot"]
             existing.active = True
 
-    # 2. Seed Categories & Subcategories
+    # 2. Seed Real Staff & Drivers
+    for s in PRODUCTION_STAFF:
+        clean_p = s["phone"]
+        last_9 = clean_p[-9:] if len(clean_p) >= 9 else clean_p
+        stmt = select(WorkshopStaff).where(
+            (WorkshopStaff.phone == clean_p) |
+            (WorkshopStaff.phone.endswith(last_9))
+        )
+        existing = (await session.execute(stmt)).scalars().first()
+        if not existing:
+            session.add(WorkshopStaff(
+                full_name=s["full_name"],
+                phone=clean_p,
+                role=s["role"],
+                active=True
+            ))
+        else:
+            existing.full_name = s["full_name"]
+            existing.phone = clean_p
+            existing.role = s["role"]
+            existing.active = True
+
+    # 3. Seed Categories & Subcategories
     taxonomy = [
         ("Brakes & Air Pressure", ["Air Pressure Leak", "Foot Brake Spongy / Low Air", "Handbrake / Maxie Stuck", "Air Compressor / Dryer Issue"]),
         ("Engine, Fuel & Cooling", ["Engine Overheating", "Low Oil Pressure Warning", "Diesel Starvation / Fuel Leak", "Loss of Power / Turbo Noise"]),
