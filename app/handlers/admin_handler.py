@@ -212,16 +212,69 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if not admin:
         return False
 
-    # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-..."
-    claim_match = re.match(r"^(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
-    # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "resolve 1"
-    resolve_match = re.match(r"^resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+    # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-...", "🔵 claim_TKT-...", "claim TKT-..."
+    claim_match = re.match(r"^(?:🔵\s*)?(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+    # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "🟢 resolve_TKT-...", "resolve 1"
+    resolve_match = re.match(r"^(?:🟢\s*)?resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+
+    # Check for bare button text: "🔵 Claim Ticket", "Claim Ticket", "claim", "accept"
+    is_bare_claim = not claim_match and (text_lower in {"claim ticket", "claim", "accept", "accept ticket", "🔵 claim ticket"} or "claim ticket" in text_lower)
+    is_bare_resolve = not resolve_match and (text_lower in {"resolve ticket", "resolve", "🟢 resolve ticket"} or "resolve ticket" in text_lower)
+
+    raw_ticket_arg = None
+    if is_bare_claim:
+        if admin.is_maintenance_admin:
+            m_assigned_subq = select(MaintenanceTicketAssignment.ticket_id)
+            latest_open_stmt = (
+                select(MaintenanceTicket)
+                .where(MaintenanceTicket.status_id == 1, MaintenanceTicket.ticket_id.not_in(m_assigned_subq))
+                .order_by(MaintenanceTicket.created_at.desc())
+            )
+            latest_t = (await session.execute(latest_open_stmt)).scalars().first()
+            if latest_t:
+                raw_ticket_arg = latest_t.ticket_number
+                claim_match = True
+        else:
+            it_assigned_subq = select(TicketAssignment.ticket_id)
+            latest_open_stmt = (
+                select(Ticket)
+                .where(Ticket.status_id == 1, Ticket.ticket_id.not_in(it_assigned_subq))
+                .order_by(Ticket.created_at.desc())
+            )
+            latest_t = (await session.execute(latest_open_stmt)).scalars().first()
+            if latest_t:
+                raw_ticket_arg = latest_t.ticket_number
+                claim_match = True
+
+    elif is_bare_resolve:
+        if admin.is_maintenance_admin:
+            m_asg_stmt = (
+                select(MaintenanceTicket)
+                .join(MaintenanceTicketAssignment, MaintenanceTicket.ticket_id == MaintenanceTicketAssignment.ticket_id)
+                .where(MaintenanceTicketAssignment.admin_id == admin.admin_id, MaintenanceTicket.status_id == 2)
+                .order_by(MaintenanceTicket.updated_at.desc())
+            )
+            assigned_t = (await session.execute(m_asg_stmt)).scalars().first()
+            if assigned_t:
+                raw_ticket_arg = assigned_t.ticket_number
+                resolve_match = True
+        else:
+            it_asg_stmt = (
+                select(Ticket)
+                .join(TicketAssignment, Ticket.ticket_id == TicketAssignment.ticket_id)
+                .where(TicketAssignment.admin_id == admin.admin_id, Ticket.status_id == 2)
+                .order_by(Ticket.updated_at.desc())
+            )
+            assigned_t = (await session.execute(it_asg_stmt)).scalars().first()
+            if assigned_t:
+                raw_ticket_arg = assigned_t.ticket_number
+                resolve_match = True
 
     is_view_assigned = text_lower in {"cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets", "my assigned tickets", "my assigned ticket"} or text_strip.startswith("cmd_my_assigned_tickets")
     is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
     is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
     raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
-    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and (
+    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
         raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
         text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
         any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
@@ -569,7 +622,15 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
         return False
 
     # 5. HANDLE RESOLVE BUTTON TAP OR COMMAND -> PROMPT FOR NOTES
-    raw_ticket_arg = (claim_match or resolve_match).group(1).upper()
+    if not raw_ticket_arg:
+        if hasattr(claim_match, "group"):
+            raw_ticket_arg = claim_match.group(1).upper()
+        elif hasattr(resolve_match, "group"):
+            raw_ticket_arg = resolve_match.group(1).upper()
+
+    if not raw_ticket_arg:
+        return False
+
     is_maint_ticket = "TKT-MNT" in raw_ticket_arg
 
     if is_maint_ticket:
@@ -642,12 +703,23 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
             )
             return True
 
+        # Pre-extract attributes before commit to avoid any DetachedInstance / MissingGreenlet errors
+        ticket_id = ticket.ticket_id
+        ticket_num = ticket.ticket_number
+        ticket_desc = ticket.description
+        ticket_image_id = ticket.image_id if (ticket.image_id and len(ticket.image_id) > 5 and ticket.image_id.lower() != "none") else None
+        cat_name = ticket.category.category_name if ticket.category else "N/A"
+        sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
+        issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
+        emp_name = ticket.employee.full_name if ticket.employee else "Staff Reporter"
+        emp_phone = ticket.employee.phone if ticket.employee and ticket.employee.phone else ""
+
         # Assign ticket to this claiming admin
         if not current_asg:
             if is_maint_ticket:
-                session.add(MaintenanceTicketAssignment(ticket_id=ticket.ticket_id, admin_id=admin.admin_id))
+                session.add(MaintenanceTicketAssignment(ticket_id=ticket_id, admin_id=admin.admin_id))
             else:
-                session.add(TicketAssignment(ticket_id=ticket.ticket_id, admin_id=admin.admin_id))
+                session.add(TicketAssignment(ticket_id=ticket_id, admin_id=admin.admin_id))
         else:
             current_asg.admin_id = admin.admin_id
 
@@ -656,68 +728,75 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
         ticket.updated_at = datetime.datetime.utcnow()
         await session.commit()
 
-        cat_name = ticket.category.category_name if ticket.category else "N/A"
-        sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
-        issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
-        emp_name = ticket.employee.full_name if ticket.employee else "Staff Reporter"
-        emp_phone = ticket.employee.phone if ticket.employee else ""
-
         # 1. Confirm to claiming admin with interactive Resolve button
         claim_confirm_msg = (
             f"✅ *TICKET CLAIMED SUCCESSFULLY!*\n\n"
-            f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+            f"🎫 *Ticket ID:* `{ticket_num}`\n"
             f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
-            f"📝 *Description:* {ticket.description}\n\n"
+            f"📝 *Description:* {ticket_desc}\n\n"
             f"You are now the assigned support admin for this ticket. Tap below when completed:"
         )
         resolve_btns = [
-            {"id": f"resolve_{ticket.ticket_number}", "title": "🟢 Resolve Ticket"}
+            {"id": f"resolve_{ticket_num}", "title": "🟢 Resolve Ticket"}
         ]
-        await meta_api.send_button_message(
-            to_phone=sender_phone,
-            body_text=claim_confirm_msg,
-            buttons=resolve_btns,
-            header_text="✅ TICKET ASSIGNED TO YOU",
-            footer_text="Tap button to resolve when done",
-            image_id=ticket.image_id
-        )
+        try:
+            await meta_api.send_button_message(
+                to_phone=sender_phone,
+                body_text=claim_confirm_msg,
+                buttons=resolve_btns,
+                header_text="✅ TICKET ASSIGNED TO YOU",
+                footer_text="Tap button to resolve when done",
+                image_id=ticket_image_id
+            )
+        except Exception as send_err:
+            logger.error(f"Error sending button confirmation: {send_err}", exc_info=True)
+            await meta_api.send_text_message(sender_phone, claim_confirm_msg)
 
         # 2. Notify co-admins in the same domain
-        if is_maint_ticket:
-            co_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
-        else:
-            co_stmt = select(SupportAdmin).where(SupportAdmin.active == True, SupportAdmin.is_maintenance_admin == False)
+        try:
+            if is_maint_ticket:
+                co_stmt = select(SupportAdmin).where(SupportAdmin.is_maintenance_admin == True, SupportAdmin.active == True)
+            else:
+                co_stmt = select(SupportAdmin).where(SupportAdmin.active == True, SupportAdmin.is_maintenance_admin == False)
 
-        co_admins = (await session.execute(co_stmt)).scalars().all()
-        for ca in co_admins:
-            if ca.phone != sender_phone and ca.phone != settings.master_admin_phone:
-                co_notice = (
-                    f"ℹ️ *TICKET CLAIMED UPDATE*\n\n"
-                    f"Ticket *{ticket.ticket_number}* ({cat_name} ➡️ {sub_name}) has been claimed by *{admin.full_name}*."
-                )
-                await meta_api.send_text_message(ca.phone, co_notice)
+            co_admins = (await session.execute(co_stmt)).scalars().all()
+            for ca in co_admins:
+                if ca.phone != sender_phone and ca.phone != settings.master_admin_phone:
+                    co_notice = (
+                        f"ℹ️ *TICKET CLAIMED UPDATE*\n\n"
+                        f"Ticket *{ticket_num}* ({cat_name} ➡️ {sub_name}) has been claimed by *{admin.full_name}*."
+                    )
+                    await meta_api.send_text_message(ca.phone, co_notice)
+        except Exception as co_err:
+            logger.error(f"Error notifying co-admins of claim: {co_err}")
 
         # 3. Notify Master Admin Fazal
-        if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
-            master_claim_msg = (
-                f"ℹ️ *[MASTER ALERT] TICKET CLAIMED*\n\n"
-                f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
-                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
-                f"👤 *Claimed By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
-                f"📊 *Status:* 🔵 IN PROGRESS"
-            )
-            await meta_api.send_text_message(settings.master_admin_phone, master_claim_msg)
+        try:
+            if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
+                master_claim_msg = (
+                    f"ℹ️ *[MASTER ALERT] TICKET CLAIMED*\n\n"
+                    f"🎫 *Ticket ID:* `{ticket_num}`\n"
+                    f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                    f"👤 *Claimed By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
+                    f"📊 *Status:* 🔵 IN PROGRESS"
+                )
+                await meta_api.send_text_message(settings.master_admin_phone, master_claim_msg)
+        except Exception as master_err:
+            logger.error(f"Error notifying master admin of claim: {master_err}")
 
         # 4. Notify Reporter / Employee
-        domain_title = "Building Projects" if is_maint_ticket else "IT Support"
-        if ticket.employee and ticket.employee.phone:
-            emp_update = (
-                f"👨‍💻 *{domain_title} Support Update*\n\n"
-                f"Your support ticket *{ticket.ticket_number}* has been claimed by Support Admin *{admin.full_name}* and is now **IN PROGRESS**."
-            )
-            await meta_api.send_text_message(ticket.employee.phone, emp_update)
+        try:
+            domain_title = "Building Projects" if is_maint_ticket else "IT Support"
+            if emp_phone:
+                emp_update = (
+                    f"👨‍💻 *{domain_title} Support Update*\n\n"
+                    f"Your support ticket *{ticket_num}* has been claimed by Support Admin *{admin.full_name}* and is now **IN PROGRESS**."
+                )
+                await meta_api.send_text_message(emp_phone, emp_update)
+        except Exception as emp_err:
+            logger.error(f"Error notifying reporter of claim: {emp_err}")
 
         return True
 

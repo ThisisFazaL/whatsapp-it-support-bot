@@ -446,6 +446,36 @@ async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
         logger.error(f"Error in recover_stuck_tickets: {e}", exc_info=True)
         return {"error": str(e), "traceback": traceback.format_exc()}
 
+@app.get("/api/admin/reinitiate-claim-ticket-2")
+async def reinitiate_claim_ticket_2(db: AsyncSession = Depends(get_db)):
+    """Ensures TKT-MNT-20260903-00002 is assigned to Stanclea and set to In Progress in the DB."""
+    try:
+        from app.database import MaintenanceTicket, MaintenanceTicketAssignment, SupportAdmin
+        stmt = select(MaintenanceTicket).where(MaintenanceTicket.ticket_number == "TKT-MNT-20260903-00002")
+        t = (await db.execute(stmt)).scalars().first()
+        if not t:
+            return {"error": "Ticket TKT-MNT-20260903-00002 not found"}
+
+        stanclea_phone = "263780099291"
+        adm_stmt = select(SupportAdmin).where(SupportAdmin.phone == stanclea_phone)
+        admin = (await db.execute(adm_stmt)).scalars().first()
+        if not admin:
+            return {"error": "Stanclea admin record not found"}
+
+        asg_chk = select(MaintenanceTicketAssignment).where(MaintenanceTicketAssignment.ticket_id == t.ticket_id)
+        current_asg = (await db.execute(asg_chk)).scalars().first()
+
+        if not current_asg:
+            db.add(MaintenanceTicketAssignment(ticket_id=t.ticket_id, admin_id=admin.admin_id))
+        else:
+            current_asg.admin_id = admin.admin_id
+
+        t.status_id = 2  # In Progress
+        await db.commit()
+        return {"status": "SUCCESS", "ticket": t.ticket_number, "status_id": t.status_id, "assigned_to": admin.full_name}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/send-zayn-project-ticket-2-to-stanclea")
 @app.get("/trigger-send-zayn-ticket-to-stanclea")
 async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):
