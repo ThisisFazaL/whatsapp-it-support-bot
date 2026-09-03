@@ -460,6 +460,7 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
 
         stanclea_phone = "263780099291"
 
+        from app.state_manager import clear_user_state
         # Clear any stale conversation state for Stanclea
         await clear_user_state(db, stanclea_phone)
 
