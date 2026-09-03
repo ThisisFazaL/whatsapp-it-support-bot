@@ -37,6 +37,17 @@ async def finalize_parts_request(session: AsyncSession, staff: WorkshopStaff, da
             phone,
             f"✅ Parts request for '*{part_name}*' sent to Purchasing Team.\n⏳ Status: *AWAITING PARTS*."
         )
+        if ticket.logged_by_staff_id:
+            raiser = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
+            if raiser:
+                truck_num = ticket.truck.truck_number if ticket.truck else ""
+                await meta_api.send_text_message(
+                    raiser.phone,
+                    f"📦 *Parts Requested for Truck #{truck_num}*\n"
+                    f"🎫 Ticket: `{ticket.ticket_number}`\n"
+                    f"Part: *{part_name}*\n"
+                    f"⏳ Status: Awaiting delivery from Purchasing Team."
+                )
         
         stmt = select(WorkshopStaff).where(WorkshopStaff.role == "PURCHASING", WorkshopStaff.active == True)
         purchasing_team = (await session.execute(stmt)).scalars().all()
@@ -83,6 +94,19 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
             data["ticket_id"] = ticket.ticket_id
             await set_user_state(session, phone, "ws_parts_check", data)
             
+            # Notify Ticket Raiser of ETA
+            if ticket.logged_by_staff_id:
+                raiser = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
+                if raiser:
+                    truck_num = ticket.truck.truck_number if ticket.truck else ""
+                    await meta_api.send_text_message(
+                        raiser.phone,
+                        f"⏱️ *Workshop ETA Recorded*\n"
+                        f"🎫 Ticket: `{ticket.ticket_number}` (Truck #{truck_num})\n"
+                        f"👨‍🔧 Mechanic: {staff.full_name}\n"
+                        f"📅 Estimated Ready: *{text}*"
+                    )
+
             msg = f"✅ ETA recorded: *{text}*\n\n📦 *Are replacement parts needed from Purchasing?*"
             buttons = [
                 {"id": f"btn_ws_parts_none_{ticket.ticket_id}", "title": "In Stocks"},

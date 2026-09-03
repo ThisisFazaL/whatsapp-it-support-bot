@@ -89,9 +89,16 @@ async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text:
     phone = staff.phone
     search_query = text.strip()
     
+    import re
+    clean_query = re.sub(r"\s+", "", search_query)
+    digits = re.findall(r"\d+", search_query)
+    digit_str = digits[0] if digits else clean_query
+
     stmt = select(WorkshopTruck).where(
-        (WorkshopTruck.truck_number.ilike(f"%{search_query}%")) |
-        (WorkshopTruck.plate_number.ilike(f"%{search_query}%"))
+        (WorkshopTruck.truck_number == digit_str) |
+        (WorkshopTruck.truck_number.ilike(f"%{digit_str}%")) |
+        (WorkshopTruck.plate_number.ilike(f"%{search_query}%")) |
+        (WorkshopTruck.plate_number.ilike(f"%{clean_query}%"))
     ).where(WorkshopTruck.active == True)
     
     res = await session.execute(stmt)
@@ -233,11 +240,10 @@ async def handle_description_entry(session: AsyncSession, staff: WorkshopStaff, 
     await meta_api.send_button_message(phone, photo_prompt, buttons, header_text="PHOTO ATTACHMENT")
 
 async def handle_photo_step(session: AsyncSession, staff: WorkshopStaff, text: str, image_id: str, data: dict):
+    clean_text = (text or "").lower().strip()
     if image_id:
         data["image_id"] = image_id
-    elif text and text.startswith("btn_ws_skip_clerk_photo"):
-        data["image_id"] = None
-    elif text and text.lower() in {"skip", "skip photo"}:
+    elif clean_text in {"skip", "skip photo", "none", "no", "no photo", "skip_photo", "btn_ws_skip_clerk_photo"} or clean_text.startswith("btn_ws_skip_"):
         data["image_id"] = None
         
     await finalize_ticket_logging(session, staff, data)

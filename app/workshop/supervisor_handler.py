@@ -13,7 +13,6 @@ async def get_ticket_with_truck(session: AsyncSession, ticket_id: int = None) ->
         t = (await session.execute(stmt)).scalars().first()
         if t:
             return t
-    # Fallback to latest active ticket
     stmt_latest = select(WorkshopTicket).options(selectinload(WorkshopTicket.truck)).order_by(WorkshopTicket.ticket_id.desc())
     return (await session.execute(stmt_latest)).scalars().first()
 
@@ -32,10 +31,34 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
             await session.commit()
             await clear_user_state(session, phone)
             
+            # Confirm to Supervisor
             await meta_api.send_text_message(
                 phone,
                 f"✅ Ticket `{ticket.ticket_number}` has been rejected and closed.\n📝 *Reason:* {text}"
             )
+            
+            # NOTIFY TICKET RAISER (Driver / Logistics Assistant)
+            if ticket.logged_by_staff_id:
+                raiser = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
+                if raiser:
+                    truck_num = ticket.truck.truck_number if ticket.truck else ""
+                    truck_model = ticket.truck.model_make if ticket.truck else ""
+                    raiser_msg = (
+                        f"🚫 *Workshop Fault Ticket Closed (Rejected)*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                        f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
+                        f"👤 *Reviewed By:* {staff.full_name} (Supervisor)\n"
+                        f"📝 *Reason:* {text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⚠️ *Status: CLOSED (No Valid Fault Found)*."
+                    )
+                    await meta_api.send_text_message(
+                        raiser.phone,
+                        raiser_msg,
+                        fallback_template="workshop_fleet_ready",
+                        template_params=[raiser.full_name, ticket.ticket_number, f"Truck #{truck_num}"]
+                    )
         return True
 
     # 2. State: Entering Internal Fix Notes
@@ -49,10 +72,34 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
             await session.commit()
             await clear_user_state(session, phone)
             
+            # Confirm to Supervisor
             await meta_api.send_text_message(
                 phone,
                 f"✅ Ticket `{ticket.ticket_number}` resolved internally and closed.\n📝 *Action Taken:* {text}"
             )
+            
+            # NOTIFY TICKET RAISER (Driver / Logistics Assistant)
+            if ticket.logged_by_staff_id:
+                raiser = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
+                if raiser:
+                    truck_num = ticket.truck.truck_number if ticket.truck else ""
+                    truck_model = ticket.truck.model_make if ticket.truck else ""
+                    raiser_msg = (
+                        f"🛠️ *Workshop Fault Resolved Internally*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+                        f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
+                        f"👤 *Resolved By:* {staff.full_name} (Supervisor)\n"
+                        f"📝 *Action Taken:* {text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"✅ *Status: CLOSED (Resolved Internally)*. Vehicle is operational."
+                    )
+                    await meta_api.send_text_message(
+                        raiser.phone,
+                        raiser_msg,
+                        fallback_template="workshop_fleet_ready",
+                        template_params=[raiser.full_name, ticket.ticket_number, f"Truck #{truck_num}"]
+                    )
         return True
 
     # 3. State: Entering QC Failure Reason (Rework Loop)
@@ -134,11 +181,26 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
             ticket.status = "WITH_MECHANIC"
             await session.commit()
             
+            # Confirm to Supervisor
             await meta_api.send_text_message(
                 phone,
                 f"✅ Ticket `{ticket.ticket_number}` routed to workshop floor.\n👨‍🔧 *Assigned Mechanic:* {mechanic.full_name if mechanic else 'Workshop Queue'}"
             )
             
+            # NOTIFY DRIVER / TICKET RAISER
+            if ticket.logged_by_staff_id:
+                raiser = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
+                if raiser:
+                    truck_num = ticket.truck.truck_number if ticket.truck else ""
+                    await meta_api.send_text_message(
+                        raiser.phone,
+                        f"🚚 *Vehicle Status Update*\n"
+                        f"🎫 Ticket: `{ticket.ticket_number}` (Truck #{truck_num})\n"
+                        f"Status: *APPROVED & SENT TO WORKSHOP*\n"
+                        f"👨‍🔧 Assigned Mechanic: *{mechanic.full_name if mechanic else 'Workshop Floor'}*"
+                    )
+            
+            # Alert Mechanic
             if mechanic:
                 truck_num = ticket.truck.truck_number if ticket.truck else ""
                 truck_model = ticket.truck.model_make if ticket.truck else ""
@@ -194,12 +256,13 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
             await session.commit()
             await clear_user_state(session, phone)
             
+            # Confirm to Supervisor
             await meta_api.send_text_message(
                 phone,
                 f"🚀 *Vehicle Returned to Fleet!*\n🎫 Ticket `{ticket.ticket_number}` is now *CLOSED*.\nTimestamp recorded."
             )
             
-            # Notify driver
+            # NOTIFY DRIVER / TICKET RAISER
             if ticket.logged_by_staff_id:
                 driver = await session.get(WorkshopStaff, ticket.logged_by_staff_id)
                 if driver:
