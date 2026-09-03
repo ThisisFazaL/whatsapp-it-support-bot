@@ -105,6 +105,7 @@ class Ticket(Base):
     ticket_id = Column(Integer, primary_key=True, autoincrement=True)
     ticket_number = Column(String(30), unique=True, nullable=False)
     employee_id = Column(Integer, ForeignKey("employees.employee_id"), nullable=False)
+    location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
     domain = Column(String(20), default="IT") # "IT" or "MAINTENANCE"
     category_id = Column(Integer, ForeignKey("categories.category_id"), nullable=True)
     subcategory_id = Column(Integer, ForeignKey("subcategories.subcategory_id"), nullable=True)
@@ -121,6 +122,7 @@ class Ticket(Base):
     closed_at = Column(DateTime, nullable=True)
 
     employee = relationship("Employee")
+    location = relationship("Location")
     category = relationship("Category")
     subcategory = relationship("Subcategory")
     issue_type = relationship("IssueType")
@@ -142,6 +144,7 @@ class MaintenanceTicket(Base):
     ticket_id = Column(Integer, primary_key=True, autoincrement=True)
     ticket_number = Column(String(30), unique=True, nullable=False)
     employee_id = Column(Integer, ForeignKey("employees.employee_id"), nullable=False)
+    location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
     domain = Column(String(20), default="MAINTENANCE")
     category_id = Column(Integer, ForeignKey("categories.category_id"), nullable=True)
     subcategory_id = Column(Integer, ForeignKey("subcategories.subcategory_id"), nullable=True)
@@ -158,6 +161,7 @@ class MaintenanceTicket(Base):
     closed_at = Column(DateTime, nullable=True)
 
     employee = relationship("Employee")
+    location = relationship("Location")
     category = relationship("Category")
     subcategory = relationship("Subcategory")
     issue_type = relationship("IssueType")
@@ -458,9 +462,19 @@ async def init_db_models():
             import logging
             logging.getLogger("database").warning(f"Workshop tables init note: {ws_err}")
 
-    # Sync all PostgreSQL sequences to prevent UniqueViolation errors on insertion
+    # Sync all PostgreSQL sequences and ensure columns exist to prevent runtime errors
     async with engine.begin() as conn:
         from sqlalchemy import text
+        col_queries = [
+            "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES locations(location_id);",
+            "ALTER TABLE maintenance_tickets ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES locations(location_id);"
+        ]
+        for cq in col_queries:
+            try:
+                await conn.execute(text(cq))
+            except Exception:
+                pass
+
         seq_queries = [
             "SELECT setval('maintenance_ticket_assignments_assignment_id_seq', COALESCE((SELECT MAX(assignment_id) FROM maintenance_ticket_assignments), 0) + 1, false);",
             "SELECT setval('maintenance_tickets_ticket_id_seq', COALESCE((SELECT MAX(ticket_id) FROM maintenance_tickets), 0) + 1, false);",
