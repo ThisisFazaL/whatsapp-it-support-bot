@@ -235,7 +235,7 @@ def build_pdf(filename):
         "&nbsp;&nbsp;&nbsp;&nbsp;• <b>Electrical & Lighting</b> (LED Flickering, Sockets, Wiring, Breakers)<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• <b>Plumbing & Water Leakage</b> (Taps, Flushes, Drains, Dispensers)<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• <b>General Building & Furniture</b> (Office Chairs, Desks, Cabinets, AC/HVAC)<br/>"
-        "&nbsp;&nbsp;&nbsp;&nbsp;• <b>Renovation & Expansion</b> (Partitions, Extensions, Flooring/Tiling, Wiring/Plumbing Fittings)",
+        "&nbsp;&nbsp;&nbsp;&nbsp;• <b>Renovation & Expansion</b> (New Floor, Structural Partitions, Flooring/Tiling, Wiring & Plumbing Fittings)",
 
         "<b>Step 4: Describe Issue & Optional Photo</b> — Type a brief description and optionally attach a photo of the defect in WhatsApp.",
 

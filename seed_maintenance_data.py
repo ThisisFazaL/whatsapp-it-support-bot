@@ -81,6 +81,10 @@ async def seed_maintenance_data_in_session(session):
             "name": "Renovation & Expansion",
             "subcategories": [
                 {
+                    "name": "New Floor",
+                    "issues": ["New floor construction / extension", "Concrete slab / foundation pour", "Mezzanine / upper floor addition"]
+                },
+                {
                     "name": "Structural & Partitioning",
                     "issues": ["New wall / drywall partition request", "Room extension / expansion work", "Demolition / wall removal request"]
                 },
@@ -120,7 +124,7 @@ async def seed_maintenance_data_in_session(session):
                     session.add(IssueType(subcategory_id=sub_obj.subcategory_id, issue_name=issue_str, active=True))
 
     await session.commit()
-    logger.info("✅ Maintenance / Building Projects categories (including Renovation & Expansion) synced successfully!")
+    logger.info("✅ Maintenance / Building Projects categories (including Renovation & Expansion -> New Floor) synced successfully!")
 
 async def seed_maintenance_data():
     logger.info("Initializing DB models and seeding Maintenance data...")
