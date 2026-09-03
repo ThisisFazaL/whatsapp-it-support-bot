@@ -23,30 +23,25 @@ def extract_numeric_choice(text: str) -> str:
     return match.group(0) if match else text.strip().lower()
 
 async def generate_ticket_number(session: AsyncSession, domain: str = "IT") -> str:
-    """Generates a unique ticket number in format: TKT-YYYYMMDD-XXXXX or TKT-MNT-YYYYMMDD-XXXXX"""
+    """Generates a guaranteed unique ticket number in format: TKT-YYYYMMDD-XXXXX or TKT-MNT-YYYYMMDD-XXXXX"""
     prefix = "TKT-MNT" if domain == "MAINTENANCE" else "TKT"
     today_str = datetime.datetime.utcnow().strftime("%Y%m%d")
     
-    if domain == "MAINTENANCE":
-        stmt = select(func.count(MaintenanceTicket.ticket_id))
-        res = await session.execute(stmt)
-        total_count = res.scalar() or 0
-        ticket_num = f"{prefix}-{today_str}-{str(total_count + 1).zfill(5)}"
-        check_stmt = select(MaintenanceTicket).where(MaintenanceTicket.ticket_number == ticket_num)
+    table_cls = MaintenanceTicket if domain == "MAINTENANCE" else Ticket
+    id_col = MaintenanceTicket.ticket_id if domain == "MAINTENANCE" else Ticket.ticket_id
+    
+    stmt = select(func.coalesce(func.max(id_col), 0))
+    res = await session.execute(stmt)
+    max_id = res.scalar() or 0
+    next_num = max_id + 1
+    
+    while True:
+        ticket_num = f"{prefix}-{today_str}-{str(next_num).zfill(5)}"
+        check_stmt = select(table_cls).where(table_cls.ticket_number == ticket_num)
         existing = (await session.execute(check_stmt)).scalars().first()
-    else:
-        stmt = select(func.count(Ticket.ticket_id))
-        res = await session.execute(stmt)
-        total_count = res.scalar() or 0
-        ticket_num = f"{prefix}-{today_str}-{str(total_count + 1).zfill(5)}"
-        check_stmt = select(Ticket).where(Ticket.ticket_number == ticket_num)
-        existing = (await session.execute(check_stmt)).scalars().first()
-
-    if existing:
-        random_suffix = str(random.randint(100, 999))
-        ticket_num = f"{prefix}-{today_str}-{str(total_count + 1).zfill(5)}{random_suffix}"
-
-    return ticket_num
+        if not existing:
+            return ticket_num
+        next_num += 1
 
 async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee: Employee = None):
     """

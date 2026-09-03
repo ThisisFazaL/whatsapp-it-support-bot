@@ -408,24 +408,36 @@ async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
         
         recovered = []
         for s in stuck_states:
-            data = s.current_data or {}
-            if data.get("description") or data.get("category_id") or data.get("subcategory_id"):
-                emp = await is_employee_registered(db, s.phone)
-                await finalize_ticket_creation(
-                    session=db,
-                    phone=s.phone,
-                    employee=emp,
-                    data=data
-                )
+            try:
+                data = s.current_data or {}
+                if data.get("description") or data.get("category_id") or data.get("subcategory_id"):
+                    emp = await is_employee_registered(db, s.phone)
+                    await finalize_ticket_creation(
+                        session=db,
+                        phone=s.phone,
+                        employee=emp,
+                        data=data
+                    )
+                    recovered.append({
+                        "phone": s.phone,
+                        "step": s.current_step,
+                        "description": data.get("description"),
+                        "employee": emp.full_name if emp else "Staff User",
+                        "status": "CREATED_AND_SENT"
+                    })
+                else:
+                    await clear_user_state(db, s.phone)
+            except Exception as single_err:
+                logger.error(f"Error recovering state for {s.phone}: {single_err}", exc_info=True)
                 recovered.append({
                     "phone": s.phone,
-                    "step": s.current_step,
-                    "description": data.get("description"),
-                    "employee": emp.full_name if emp else "Staff User"
+                    "error": str(single_err)
                 })
+
         return {"recovered_count": len(recovered), "tickets": recovered}
     except Exception as e:
         logger.error(f"Error in recover_stuck_tickets: {e}", exc_info=True)
         return {"error": str(e), "traceback": traceback.format_exc()}
+
 
 
