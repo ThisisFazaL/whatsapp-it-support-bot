@@ -174,6 +174,13 @@ async def handle_flow(
 
     # Global Reset Check
     if text_clean in GLOBAL_RESET_KEYWORDS or not state or not state.current_step:
+        # If user is a SupportAdmin, sending 'hi' / 'menu' / 'reset' or having no state MUST show Admin Dashboard!
+        from app.state_manager import is_admin
+        admin_obj = await is_admin(session, phone)
+        if admin_obj:
+            from app.handlers.admin_handler import handle_admin_command
+            await handle_admin_command(session, phone, "menu")
+            return
         await start_ticket_creation_flow(session, phone, employee)
         return
 

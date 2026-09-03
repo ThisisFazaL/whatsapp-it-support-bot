@@ -448,23 +448,38 @@ async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
 
 @app.get("/trigger-send-zayn-ticket-to-stanclea")
 async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):
-    """Sends Zayn's ticket 2 (TKT-20260903-00079) alert to Stanclea directly on WhatsApp."""
+    """Sends Zayn's Projects Ticket 2 (TKT-MNT-20260903-00002) alert to Stanclea directly on WhatsApp."""
     try:
-        from app.database import Ticket
+        from app.database import MaintenanceTicket
         stmt = (
-            select(Ticket)
+            select(MaintenanceTicket)
             .options(
-                selectinload(Ticket.category),
-                selectinload(Ticket.subcategory),
-                selectinload(Ticket.issue_type),
-                selectinload(Ticket.priority)
+                selectinload(MaintenanceTicket.category),
+                selectinload(MaintenanceTicket.subcategory),
+                selectinload(MaintenanceTicket.issue_type),
+                selectinload(MaintenanceTicket.priority),
+                selectinload(MaintenanceTicket.location),
+                selectinload(MaintenanceTicket.employee)
             )
-            .where(Ticket.ticket_number == "TKT-20260903-00079")
+            .where(MaintenanceTicket.ticket_number == "TKT-MNT-20260903-00002")
         )
         res = await db.execute(stmt)
         t = res.scalars().first()
         if not t:
-            res2 = await db.execute(select(Ticket).options(selectinload(Ticket.category), selectinload(Ticket.subcategory), selectinload(Ticket.issue_type), selectinload(Ticket.priority)).order_by(Ticket.ticket_id.desc()))
+            # Fallback to latest MaintenanceTicket
+            stmt_latest = (
+                select(MaintenanceTicket)
+                .options(
+                    selectinload(MaintenanceTicket.category),
+                    selectinload(MaintenanceTicket.subcategory),
+                    selectinload(MaintenanceTicket.issue_type),
+                    selectinload(MaintenanceTicket.priority),
+                    selectinload(MaintenanceTicket.location),
+                    selectinload(MaintenanceTicket.employee)
+                )
+                .order_by(MaintenanceTicket.ticket_id.desc())
+            )
+            res2 = await db.execute(stmt_latest)
             t = res2.scalars().first()
 
         stanclea_phone = "263780099291"
@@ -473,18 +488,22 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
         # Clear any stale conversation state for Stanclea
         await clear_user_state(db, stanclea_phone)
 
-        cat_name = t.category.category_name if t and t.category else "IT & Computing Equipment"
-        sub_name = t.subcategory.subcategory_name if t and t.subcategory else "Computer & Laptop"
-        issue_name = t.issue_type.issue_name if t and t.issue_type else "Other"
-        priority_name = t.priority.priority_name if t and t.priority else "High"
-        desc = t.description if t and t.description else "Is not connecting on the internet"
-        ticket_num = t.ticket_number if t else "TKT-20260903-00079"
+        cat_name = t.category.category_name if t and t.category else "Renovation & Expansion"
+        sub_name = t.subcategory.subcategory_name if t and t.subcategory else "Structural & Partitioning"
+        issue_name = t.issue_type.issue_name if t and t.issue_type else "Room extension / expansion work"
+        priority_name = t.priority.priority_name if t and t.priority else "Medium"
+        desc = t.description if t and t.description else "We would like to close the back area and make a double story,also move the showroom back"
+        ticket_num = t.ticket_number if t else "TKT-MNT-20260903-00002"
+        loc_name = t.location.location_name if t and t.location else "Shop 5"
+        room_area = t.room_area or "Warehouse"
         image_id = t.image_id if t else None
 
-        header = "🚨 NEW 💻 IT SUPPORT TICKET"
+        header = "🚨 NEW 🏗️ PROJECTS TICKET"
         body = (
             f"🎫 *Ticket ID:* `{ticket_num}`\n"
-            f"👤 *Reporter:* Zayn (`+263713866223`)\n"
+            f"👤 *Reporter:* Zayn (General) (`+263713866223`)\n"
+            f"🏢 *Location:* {loc_name}\n"
+            f"📍 *Room / Area:* {room_area}\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
             f"🚨 *Priority:* {priority_name}\n"

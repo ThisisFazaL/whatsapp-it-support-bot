@@ -275,7 +275,8 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
                     selectinload(MaintenanceTicket.category),
                     selectinload(MaintenanceTicket.subcategory),
                     selectinload(MaintenanceTicket.issue_type),
-                    selectinload(MaintenanceTicket.priority)
+                    selectinload(MaintenanceTicket.priority),
+                    selectinload(MaintenanceTicket.location)
                 )
                 .where(
                     MaintenanceTicket.status_id == 1,
@@ -326,6 +327,7 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
             sub_name = t.subcategory.subcategory_name if t.subcategory else "Door Latch & Hinges"
             issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
             priority_name = t.priority.priority_name if t.priority else "Medium"
+            loc_name = t.location.location_name if t.location else "On-Site"
             room_area = t.room_area or "N/A"
 
             hazard_flag = "⚠️ URGENT SAFETY HAZARD | " if t.is_safety_hazard else ""
@@ -333,7 +335,7 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
             body = (
                 f"{hazard_flag}🎫 *Ticket ID:* `{t.ticket_number}`\n"
                 f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
-                f"🏢 *Location:* Tagoneswa Hardware\n"
+                f"🏢 *Location:* {loc_name}\n"
                 f"📍 *Room / Area:* {room_area}\n"
                 f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
                 f"⚙️ *Issue:* {issue_name}\n"
