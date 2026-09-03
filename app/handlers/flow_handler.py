@@ -69,13 +69,8 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
             is_maint_admin = adm_obj.is_maintenance_admin
             is_it_admin = (not is_maint_admin) or is_master
 
-    # Dedicated Projects Admins (Stanclea & Omar) -> Go DIRECTLY to Building Projects Location Selection!
-    if is_maint_admin and not is_master and not is_it_admin:
-        await start_location_selection(session, phone, domain="MAINTENANCE")
-        return
-
-    if is_maint_reporter or is_master or phone == settings.master_admin_phone:
-        # Dual-Role Users (Master Admin, Paida, Simbah, Soyab, Batsi, Arif, Zayn, Faizan)
+    if is_maint_reporter or is_maint_admin or is_master or phone == settings.master_admin_phone:
+        # All Admins & Authorized Reporters get domain choice (IT Support vs Projects)
         body = "👋 *Welcome to Support Portal*\n\nPlease select the type of ticket you would like to create:"
         buttons = [
             {"id": "btn_domain_it", "title": "💻 IT Support"},

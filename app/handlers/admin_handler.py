@@ -220,8 +220,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     is_view_assigned = text_lower in {"cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets", "my assigned tickets", "my assigned ticket"} or text_strip.startswith("cmd_my_assigned_tickets")
     is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
     is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
+    raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
     is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and (
-        text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"}
+        raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
+        text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
+        any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
     )
 
     state = await get_user_state(session, sender_phone)
