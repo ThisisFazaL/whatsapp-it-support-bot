@@ -311,16 +311,17 @@ async def process_webhook_payload(body: dict):
                 await meta_api.send_text_message(sender_phone, warning_msg)
                 return
 
-            # Step 2: "My Tickets" Command Check (if employee record exists)
+            # Step 2: Admin Command Check (Process Admin Commands FIRST for active Support Admins!)
+            if admin:
+                isAdminCmd = await handle_admin_command(db, sender_phone, message_text)
+                if isAdminCmd:
+                    return
+
+            # Step 3: "My Tickets" Command Check (if employee record exists)
             if employee:
                 isMyTickets = await handle_my_tickets(db, employee, message_text)
                 if isMyTickets:
                     return
-
-            # Step 3: Admin Command Check (e.g. 'resolve TKT-...' or 'Hi' Admin Portal)
-            isAdminCmd = await handle_admin_command(db, sender_phone, message_text)
-            if isAdminCmd:
-                return
 
             # Step 4: Check Current Conversation State
             state = await get_user_state(db, sender_phone)

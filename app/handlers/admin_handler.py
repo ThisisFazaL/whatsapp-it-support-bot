@@ -229,15 +229,16 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
 
     state = await get_user_state(session, sender_phone)
 
-    # If admin is in active ticket creation flow (raise_ticket) AND not sending an explicit button or reset command:
+    # If admin is in active ticket creation flow (raise_ticket) AND not sending a greeting, admin command, or reset:
     # Do NOT intercept description / text input as admin command! Let it flow to handle_flow!
-    if state and state.flow_name == "raise_ticket" and state.current_step in (
-        "awaiting_description", "awaiting_room_area", "awaiting_other_location",
-        "awaiting_category", "awaiting_subcategory", "awaiting_issue",
-        "select_priority", "select_safety_hazard", "awaiting_image"
-    ):
-        if not (claim_match or resolve_match or text_strip.startswith(("cmd_", "btn_", "claim_", "resolve_")) or text_lower in {"reset", "cancel"}):
-            return False
+    if not (is_greeting or is_view_assigned or is_summary or is_raise_cmd):
+        if state and state.flow_name == "raise_ticket" and state.current_step in (
+            "awaiting_description", "awaiting_room_area", "awaiting_other_location",
+            "awaiting_category", "awaiting_subcategory", "awaiting_issue",
+            "select_priority", "select_safety_hazard", "awaiting_image", "select_location", "select_domain"
+        ):
+            if not (claim_match or resolve_match or text_strip.startswith(("cmd_", "btn_", "claim_", "resolve_")) or text_lower in {"reset", "cancel"}):
+                return False
 
     # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
