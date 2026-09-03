@@ -494,14 +494,17 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
         buttons = [
             {"id": f"claim_{ticket_num}", "title": "🔵 Claim Ticket"}
         ]
-        resp = await meta_api.send_button_message(
-            to_phone=stanclea_phone,
-            body_text=body,
-            buttons=buttons,
-            header_text=header,
-            footer_text=footer,
-            image_id=image_id
-        )
+        try:
+            resp = await meta_api.send_button_message(
+                to_phone=stanclea_phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer,
+                image_id=image_id
+            )
+        except Exception as send_err:
+            resp = {"meta_error": str(send_err)}
         return {"status": "SUCCESS", "meta_response": resp, "ticket": ticket_num, "sent_to": stanclea_phone}
     except Exception as e:
         import traceback
