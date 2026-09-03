@@ -451,11 +451,20 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
     """Sends Zayn's ticket 2 (TKT-20260903-00079) alert to Stanclea directly on WhatsApp."""
     try:
         from app.database import Ticket
-        res = await db.execute(select(Ticket).where(Ticket.ticket_number == "TKT-20260903-00079"))
+        stmt = (
+            select(Ticket)
+            .options(
+                selectinload(Ticket.category),
+                selectinload(Ticket.subcategory),
+                selectinload(Ticket.issue_type),
+                selectinload(Ticket.priority)
+            )
+            .where(Ticket.ticket_number == "TKT-20260903-00079")
+        )
+        res = await db.execute(stmt)
         t = res.scalars().first()
         if not t:
-            # Fallback to latest Ticket by Zayn
-            res2 = await db.execute(select(Ticket).order_by(Ticket.ticket_id.desc()))
+            res2 = await db.execute(select(Ticket).options(selectinload(Ticket.category), selectinload(Ticket.subcategory), selectinload(Ticket.issue_type), selectinload(Ticket.priority)).order_by(Ticket.ticket_id.desc()))
             t = res2.scalars().first()
 
         stanclea_phone = "263780099291"
