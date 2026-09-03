@@ -217,13 +217,26 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "resolve 1"
     resolve_match = re.match(r"^resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
 
-    is_view_assigned = any(k in text_lower for k in ("cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets"))
-    is_summary = any(k in text_lower for k in ("cmd_admin_summary_report", "summary", "report"))
-    is_raise_cmd = any(k in text_lower for k in ("cmd_raise_ticket", "raise ticket", "raise it ticket"))
-    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and any(k in text_lower for k in ("hi", "hello", "menu", "admin", "start", "help", "hey"))
+    is_view_assigned = text_lower in {"cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets", "my assigned tickets", "my assigned ticket"} or text_strip.startswith("cmd_my_assigned_tickets")
+    is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
+    is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
+    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and (
+        text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"}
+    )
+
+    state = await get_user_state(session, sender_phone)
+
+    # If admin is in active ticket creation flow (raise_ticket) AND not sending an explicit button or reset command:
+    # Do NOT intercept description / text input as admin command! Let it flow to handle_flow!
+    if state and state.flow_name == "raise_ticket" and state.current_step in (
+        "awaiting_description", "awaiting_room_area", "awaiting_other_location",
+        "awaiting_category", "awaiting_subcategory", "awaiting_issue",
+        "select_priority", "select_safety_hazard", "awaiting_image"
+    ):
+        if not (claim_match or resolve_match or text_strip.startswith(("cmd_", "btn_", "claim_", "resolve_")) or text_lower in {"reset", "cancel"}):
+            return False
 
     # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
-    state = await get_user_state(session, sender_phone)
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
         if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
             return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
