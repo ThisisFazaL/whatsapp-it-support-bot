@@ -251,9 +251,146 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             )
             return True
 
+async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admin: SupportAdmin, sender_phone: str):
+    """
+    Delivers all open, unclaimed pending tickets (from the period when 24h window was closed)
+    to the admin whenever they send 'hi' or open the bot dashboard.
+    """
+    try:
+        unclaimed_maint = []
+        unclaimed_it = []
+
+        # 1. Projects / Maintenance Domain Unclaimed Tickets
+        if admin.is_maintenance_admin or admin.is_master_admin:
+            m_assigned_subq = select(MaintenanceTicketAssignment.ticket_id)
+            m_stmt = (
+                select(MaintenanceTicket)
+                .options(
+                    selectinload(MaintenanceTicket.employee),
+                    selectinload(MaintenanceTicket.category),
+                    selectinload(MaintenanceTicket.subcategory),
+                    selectinload(MaintenanceTicket.issue_type),
+                    selectinload(MaintenanceTicket.priority)
+                )
+                .where(
+                    MaintenanceTicket.status_id == 1,
+                    MaintenanceTicket.ticket_id.not_in(m_assigned_subq)
+                )
+                .order_by(MaintenanceTicket.created_at.asc())
+            )
+            m_res = await session.execute(m_stmt)
+            unclaimed_maint = m_res.scalars().all()
+
+        # 2. IT Domain Unclaimed Tickets
+        if not admin.is_maintenance_admin or admin.is_master_admin:
+            it_assigned_subq = select(TicketAssignment.ticket_id)
+            it_stmt = (
+                select(Ticket)
+                .options(
+                    selectinload(Ticket.employee),
+                    selectinload(Ticket.category),
+                    selectinload(Ticket.subcategory),
+                    selectinload(Ticket.issue_type),
+                    selectinload(Ticket.priority)
+                )
+                .where(
+                    Ticket.status_id == 1,
+                    Ticket.ticket_id.not_in(it_assigned_subq)
+                )
+                .order_by(Ticket.created_at.asc())
+            )
+            it_res = await session.execute(it_stmt)
+            unclaimed_it = it_res.scalars().all()
+
+        total_pending = len(unclaimed_maint) + len(unclaimed_it)
+        if total_pending == 0:
+            return
+
+        header_notice = (
+            f"📢 *UNCLAIMED PENDING TICKETS ({total_pending})*\n\n"
+            f"Hello *{admin.full_name}*, the following open ticket(s) were raised while your 24-hour WhatsApp messaging window was closed.\n\n"
+            f"Tap **[ 🔵 Claim Ticket ]** on any ticket below to claim it:"
+        )
+        await meta_api.send_text_message(sender_phone, header_notice)
+
+        # Deliver Projects Unclaimed Tickets
+        for t in unclaimed_maint:
+            emp_name = t.employee.full_name if t.employee else "Staff Reporter"
+            emp_phone = t.employee.phone if t.employee else ""
+            cat_name = t.category.category_name if t.category else "Doors, Windows & Locks"
+            sub_name = t.subcategory.subcategory_name if t.subcategory else "Door Latch & Hinges"
+            issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
+            priority_name = t.priority.priority_name if t.priority else "Medium"
+            room_area = t.room_area or "N/A"
+
+            hazard_flag = "⚠️ URGENT SAFETY HAZARD | " if t.is_safety_hazard else ""
+            header = f"🚨 NEW 🏗️ PROJECTS TICKET"
+            body = (
+                f"{hazard_flag}🎫 *Ticket ID:* `{t.ticket_number}`\n"
+                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                f"🏢 *Location:* Tagoneswa Hardware\n"
+                f"📍 *Room / Area:* {room_area}\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"🚨 *Priority:* {priority_name}\n"
+                f"📝 *Description:* {t.description}"
+            )
+            footer = "Tap button below to claim ticket"
+            buttons = [
+                {"id": f"claim_{t.ticket_number}", "title": "🔵 Claim Ticket"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=sender_phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer,
+                image_id=t.image_id
+            )
+            await asyncio.sleep(0.5)
+
+        # Deliver IT Support Unclaimed Tickets
+        for t in unclaimed_it:
+            emp_name = t.employee.full_name if t.employee else "Staff Reporter"
+            emp_phone = t.employee.phone if t.employee else ""
+            cat_name = t.category.category_name if t.category else "IT Equipment"
+            sub_name = t.subcategory.subcategory_name if t.subcategory else "Computer & Laptop"
+            issue_name = t.issue_type.issue_name if t.issue_type else "IT Issue"
+            priority_name = t.priority.priority_name if t.priority else "Medium"
+
+            header = f"🚨 NEW 💻 IT SUPPORT TICKET"
+            body = (
+                f"🎫 *Ticket ID:* `{t.ticket_number}`\n"
+                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"🚨 *Priority:* {priority_name}\n"
+                f"📝 *Description:* {t.description}"
+            )
+            footer = "Tap button below to claim ticket"
+            buttons = [
+                {"id": f"claim_{t.ticket_number}", "title": "🔵 Claim Ticket"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=sender_phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer,
+                image_id=t.image_id
+            )
+            await asyncio.sleep(0.5)
+
+    except Exception as e:
+        logger.error(f"Error delivering pending unclaimed tickets to admin {sender_phone}: {e}", exc_info=True)
+
     # 1. HANDLE GREETING / MENU
     if is_greeting:
         await clear_user_state(session, sender_phone)
+
+        # Deliver all unclaimed open tickets that were queued / missed during 24h window
+        await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
+
         header = "🛠️ SUPPORT ADMIN PORTAL"
         body = (
             f"Hello *{admin.full_name}*! 👋\n\n"
