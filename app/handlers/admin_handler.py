@@ -244,7 +244,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
         if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
             return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
-        return False
+        # If admin is NOT in active draft or resolution flow, treating any general message as Admin Dashboard Greeting!
+        is_greeting = True
 
     # Executive Observer check
     if sender_phone in settings.executive_observer_phones and sender_phone != settings.master_admin_phone:

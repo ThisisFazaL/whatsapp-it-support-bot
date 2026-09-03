@@ -448,28 +448,27 @@ async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
 
 @app.get("/trigger-send-zayn-ticket-to-stanclea")
 async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):
-    """Sends Zayn's ticket alert to Stanclea directly on WhatsApp."""
+    """Sends Zayn's ticket 2 (TKT-20260903-00079) alert to Stanclea directly on WhatsApp."""
     try:
-        from app.database import MaintenanceTicket
-        res = await db.execute(select(MaintenanceTicket).order_by(MaintenanceTicket.ticket_id.desc()))
-        m_tickets = res.scalars().all()
-        if not m_tickets:
-            return {"error": "No maintenance tickets found"}
+        from app.database import Ticket
+        res = await db.execute(select(Ticket).where(Ticket.ticket_number == "TKT-20260903-00079"))
+        t = res.scalars().first()
+        if not t:
+            # Fallback to latest Ticket by Zayn
+            res2 = await db.execute(select(Ticket).order_by(Ticket.ticket_id.desc()))
+            t = res2.scalars().first()
 
-        t = m_tickets[0]
         stanclea_phone = "263780099291"
 
         # Clear any stale conversation state for Stanclea
         await clear_user_state(db, stanclea_phone)
 
-        header = "🚨 NEW 🏗️ PROJECTS TICKET"
+        header = "🚨 NEW 💻 IT SUPPORT TICKET"
         body = (
             f"🎫 *Ticket ID:* `{t.ticket_number}`\n"
-            f"👤 *Reporter:* Zayn\n"
-            f"🏢 *Location:* Tagoneswa Hardware\n"
-            f"📍 *Room / Area:* Ground Floor\n"
-            f"📌 *Category:* Doors, Windows & Locks ➡️ Door Latch & Hinges\n"
-            f"⚙️ *Issue:* Door hinges squeaking or misaligned\n"
+            f"👤 *Reporter:* Zayn (`+263713866223`)\n"
+            f"📌 *Category:* IT & Computing Equipment ➡️ Computer & Laptop\n"
+            f"⚙️ *Issue:* Other\n"
             f"🚨 *Priority:* High\n"
             f"📝 *Description:* {t.description}"
         )
