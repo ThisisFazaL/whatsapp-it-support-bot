@@ -34,8 +34,13 @@ async def mock_send_button(to_phone: str, body_text: str, buttons: list, header_
     captured_messages.append({"type": "button", "to": to_phone, "text": body_text, "buttons": buttons, "kwargs": kwargs})
     print(f"\n[WhatsApp Buttons to +{to_phone}]:\n[{header_text or 'MENU'}]\n{body_text}\nButtons: {btn_titles} (IDs: {btn_ids})\n" + "-"*50)
 
+async def mock_send_image(to_phone: str, image_id: str, caption: str = ""):
+    captured_messages.append({"type": "image", "to": to_phone, "image_id": image_id, "caption": caption})
+    print(f"\n[WhatsApp PHOTO ATTACHMENT to +{to_phone}]:\nImage ID: {image_id}\nCaption: {caption}\n" + "-"*50)
+
 meta_api.send_text_message = mock_send_text
 meta_api.send_button_message = mock_send_button
+meta_api.send_image_message = mock_send_image
 
 async def run_test():
     print("="*60)

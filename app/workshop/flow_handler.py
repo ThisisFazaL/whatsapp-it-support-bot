@@ -290,6 +290,14 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, d
     supervisors = (await session.execute(stmt)).scalars().all()
     
     for sup in supervisors:
+        # If photo was attached by driver, send full photo to supervisor first
+        if image_id:
+            await meta_api.send_image_message(
+                sup.phone,
+                image_id,
+                caption=f"📸 Defect Photo for Ticket `{ticket.ticket_number}` ({data.get('truck_info', 'Fleet Truck')})"
+            )
+            
         sup_msg = (
             f"🔍 *NEW WORKSHOP FAULT UNDER REVIEW*\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -298,7 +306,7 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, d
             f"👤 *Logged By:* {staff.full_name}\n"
             f"📌 *Fault:* {ticket.category_name} ➔ {ticket.subcategory_name}\n"
             f"📝 *Notes:* {ticket.description}\n"
-            f"📸 *Photo:* {'Attached' if image_id else 'None'}\n"
+            f"📸 *Photo:* {'Attached above' if image_id else 'None'}\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"Please select routing action:"
         )

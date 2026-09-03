@@ -55,6 +55,14 @@ async def finalize_parts_request(session: AsyncSession, staff: WorkshopStaff, da
         truck_model = ticket.truck.model_make if ticket.truck else ""
         
         for p in purchasing_team:
+            # Forward mechanic's sample photo to purchasing
+            if sample_image_id:
+                await meta_api.send_image_message(
+                    p.phone,
+                    sample_image_id,
+                    caption=f"📸 Sample Photo for {part_name} (Ticket `{ticket.ticket_number}` - Truck #{truck_num})"
+                )
+                
             p_msg = (
                 f"🛒 *NEW PARTS REQUISITION*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -62,7 +70,7 @@ async def finalize_parts_request(session: AsyncSession, staff: WorkshopStaff, da
                 f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
                 f"👨‍🔧 *Mechanic:* {staff.full_name}\n"
                 f"📦 *Part Required:* {part_name}\n"
-                f"🖼️ *Sample Photo:* {'Attached' if sample_image_id else 'None'}\n"
+                f"🖼️ *Sample Photo:* {'Attached above' if sample_image_id else 'None'}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Please confirm action:"
             )
@@ -186,13 +194,19 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
             stmt = select(WorkshopStaff).where(WorkshopStaff.role == "PURCHASING", WorkshopStaff.active == True)
             purchasing_team = (await session.execute(stmt)).scalars().all()
             for p in purchasing_team:
+                if image_id:
+                    await meta_api.send_image_message(
+                        p.phone,
+                        image_id,
+                        caption=f"📸 Clarification Photo for {parts_req.part_name} (Ticket `{ticket.ticket_number if ticket else ''}`)"
+                    )
                 p_update = (
                     f"🔔 *CLARIFICATION RECEIVED FROM MECHANIC*\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"🎫 *Ticket ID:* `{ticket.ticket_number if ticket else ''}`\n"
                     f"📦 *Part:* {parts_req.part_name}\n"
                     f"📝 *Mechanic Reply:* {text}\n"
-                    f"🖼️ *Photo:* {'Attached' if image_id else 'None'}\n"
+                    f"🖼️ *Photo:* {'Attached above' if image_id else 'None'}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"Please confirm action:"
                 )

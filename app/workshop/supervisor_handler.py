@@ -204,6 +204,15 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
             if mechanic:
                 truck_num = ticket.truck.truck_number if ticket.truck else ""
                 truck_model = ticket.truck.model_make if ticket.truck else ""
+                
+                # Forward driver's defect photo to mechanic
+                if ticket.image_id:
+                    await meta_api.send_image_message(
+                        mechanic.phone,
+                        ticket.image_id,
+                        caption=f"📸 Driver Defect Photo for Ticket `{ticket.ticket_number}` (Truck #{truck_num})"
+                    )
+                    
                 mech_alert = (
                     f"🔧 *NEW WORKSHOP JOB ASSIGNED*\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -211,6 +220,7 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
                     f"🚚 *Vehicle:* Truck #{truck_num} ({truck_model})\n"
                     f"📌 *Fault:* {ticket.category_name} ➔ {ticket.subcategory_name}\n"
                     f"📝 *Notes:* {ticket.description}\n"
+                    f"📸 *Photo:* {'Attached above' if ticket.image_id else 'None'}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"⏱️ *Please enter your Estimated Completion Time (e.g. 'Tomorrow 11 AM' or '2 hours'):*"
                 )
