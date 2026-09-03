@@ -487,6 +487,7 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
         )
         return {"status": "SUCCESS", "meta_response": resp, "ticket": t.ticket_number, "sent_to": stanclea_phone}
     except Exception as e:
+        import traceback
         logger.error(f"Error sending zayn ticket to stanclea: {e}", exc_info=True)
         return {"error": str(e), "traceback": traceback.format_exc()}
 
