@@ -446,5 +446,72 @@ async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
         logger.error(f"Error in recover_stuck_tickets: {e}", exc_info=True)
         return {"error": str(e), "traceback": traceback.format_exc()}
 
+@app.get("/trigger-send-zayn-ticket-to-stanclea")
+async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):
+    """Sends Zayn's ticket alert to Stanclea directly on WhatsApp."""
+    try:
+        from app.database import MaintenanceTicket
+        res = await db.execute(select(MaintenanceTicket).order_by(MaintenanceTicket.ticket_id.desc()))
+        m_tickets = res.scalars().all()
+        if not m_tickets:
+            return {"error": "No maintenance tickets found"}
+
+        t = m_tickets[0]
+        stanclea_phone = "263780099291"
+
+        # Clear any stale conversation state for Stanclea
+        await clear_user_state(db, stanclea_phone)
+
+        header = "🚨 NEW 🏗️ PROJECTS TICKET"
+        body = (
+            f"🎫 *Ticket ID:* `{t.ticket_number}`\n"
+            f"👤 *Reporter:* Zayn\n"
+            f"🏢 *Location:* Tagoneswa Hardware\n"
+            f"📍 *Room / Area:* Ground Floor\n"
+            f"📌 *Category:* Doors, Windows & Locks ➡️ Door Latch & Hinges\n"
+            f"⚙️ *Issue:* Door hinges squeaking or misaligned\n"
+            f"🚨 *Priority:* High\n"
+            f"📝 *Description:* {t.description}"
+        )
+        footer = "Tap button below to claim ticket"
+        buttons = [
+            {"id": f"claim_{t.ticket_number}", "title": "🔵 Claim Ticket"}
+        ]
+        resp = await meta_api.send_button_message(
+            to_phone=stanclea_phone,
+            body_text=body,
+            buttons=buttons,
+            header_text=header,
+            footer_text=footer,
+            image_id=t.image_id
+        )
+        return {"status": "SUCCESS", "meta_response": resp, "ticket": t.ticket_number, "sent_to": stanclea_phone}
+    except Exception as e:
+        logger.error(f"Error sending zayn ticket to stanclea: {e}", exc_info=True)
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+@app.get("/debug-stanclea-admin-check")
+async def debug_stanclea_admin_check(db: AsyncSession = Depends(get_db)):
+    """Inspects Stanclea's exact admin, employee, and conversation state records."""
+    try:
+        from app.database import SupportAdmin, Employee, ConversationState
+        stanclea_phone = "263780099291"
+        adm = await is_admin(db, stanclea_phone)
+        emp = await is_employee_registered(db, stanclea_phone)
+        state = await get_user_state(db, stanclea_phone)
+
+        all_admins = (await db.execute(select(SupportAdmin))).scalars().all()
+        all_emps = (await db.execute(select(Employee).where(Employee.phone.like("%780099291%")))).scalars().all()
+
+        return {
+            "is_admin_result": {"id": adm.admin_id, "name": adm.full_name, "phone": adm.phone, "active": adm.active, "is_maint": adm.is_maintenance_admin} if adm else None,
+            "is_employee_result": {"id": emp.employee_id, "name": emp.full_name, "phone": emp.phone, "is_maint_reporter": emp.is_maintenance_reporter} if emp else None,
+            "current_state": {"flow": state.flow_name, "step": state.current_step, "data": state.current_data} if state else None,
+            "all_admins_list": [{"id": a.admin_id, "name": a.full_name, "phone": a.phone, "active": a.active} for a in all_admins],
+            "matching_employees": [{"id": e.employee_id, "name": e.full_name, "phone": e.phone} for e in all_emps]
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
 
 
