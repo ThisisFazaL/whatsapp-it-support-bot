@@ -91,7 +91,7 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
             await meta_api.send_button_message(phone, msg, buttons, header_text="PARTS CHECK")
         return True
 
-    if text.startswith("btn_ws_parts_none_"):
+    if text.startswith("btn_ws_parts_none_") or "in stocks" in text.lower() or "no parts" in text.lower():
         ticket_id = int(text.split("_")[-1])
         ticket = await get_ticket_with_truck(session, ticket_id)
         if ticket:
@@ -107,7 +107,7 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
             await meta_api.send_button_message(phone, msg, buttons, header_text="WORK IN PROGRESS")
         return True
 
-    if text.startswith("btn_ws_parts_req_"):
+    if text.startswith("btn_ws_parts_req_") or "request parts" in text.lower():
         ticket_id = int(text.split("_")[-1])
         await set_user_state(session, phone, "ws_enter_part_details", {"ticket_id": ticket_id})
         msg = (
@@ -179,7 +179,7 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
                 await meta_api.send_button_message(p.phone, p_update, buttons, header_text="PARTS UPDATE")
         return True
 
-    if text.startswith("btn_ws_repair_done_"):
+    if text.startswith("btn_ws_repair_done_") or "repair completed" in text.lower() or "repair complete" in text.lower():
         ticket_id = int(text.split("_")[-1])
         ticket = await get_ticket_with_truck(session, ticket_id)
         if ticket:

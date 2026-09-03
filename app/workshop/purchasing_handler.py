@@ -50,7 +50,7 @@ async def handle_purchasing_action(session: AsyncSession, staff: WorkshopStaff, 
                     await meta_api.send_text_message(mechanic.phone, mech_msg)
         return True
 
-    if text.startswith("btn_parts_need_info_"):
+    if text.startswith("btn_parts_need_info_") or "need info" in text.lower() or "need sample" in text.lower():
         req_id = int(text.split("_")[-1])
         await set_user_state(session, phone, "ws_purchasing_inquiry", {"request_id": req_id})
         prompt = (
@@ -60,7 +60,7 @@ async def handle_purchasing_action(session: AsyncSession, staff: WorkshopStaff, 
         await meta_api.send_text_message(phone, prompt)
         return True
 
-    if text.startswith("btn_parts_received_"):
+    if text.startswith("btn_parts_received_") or "part received" in text.lower() or "parts received" in text.lower():
         req_id = int(text.split("_")[-1])
         parts_req = await session.get(WorkshopPartsRequest, req_id)
         if parts_req:
