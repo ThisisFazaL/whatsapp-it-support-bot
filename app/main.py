@@ -393,32 +393,39 @@ async def list_recent_tickets(db: AsyncSession = Depends(get_db)):
 @app.get("/api/admin/recover-stuck-tickets")
 async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
     """Recovers any pending ticket states stuck at photo skip / awaiting_image step and creates them."""
-    from app.state_manager import is_employee_registered, clear_user_state
-    from app.handlers.flow_handler import finalize_ticket_creation
-    
-    stmt = select(ConversationState).where(
-        ConversationState.flow_name == "raise_ticket",
-        ConversationState.current_step.in_(["awaiting_image", "select_priority", "awaiting_description"])
-    )
-    res = await db.execute(stmt)
-    stuck_states = res.scalars().all()
-    
-    recovered = []
-    for s in stuck_states:
-        data = s.current_data or {}
-        if data.get("description") or data.get("category_id") or data.get("subcategory_id"):
-            emp = await is_employee_registered(db, s.phone)
-            await finalize_ticket_creation(
-                session=db,
-                phone=s.phone,
-                employee=emp,
-                data=data
-            )
-            recovered.append({
-                "phone": s.phone,
-                "step": s.current_step,
-                "description": data.get("description"),
-                "employee": emp.full_name if emp else "Staff User"
-            })
-    return {"recovered_count": len(recovered), "tickets": recovered}
+    import traceback
+    try:
+        from app.database import ConversationState
+        from app.state_manager import is_employee_registered, clear_user_state
+        from app.handlers.flow_handler import finalize_ticket_creation
+        
+        stmt = select(ConversationState).where(
+            ConversationState.flow_name == "raise_ticket",
+            ConversationState.current_step.in_(["awaiting_image", "select_priority", "awaiting_description"])
+        )
+        res = await db.execute(stmt)
+        stuck_states = res.scalars().all()
+        
+        recovered = []
+        for s in stuck_states:
+            data = s.current_data or {}
+            if data.get("description") or data.get("category_id") or data.get("subcategory_id"):
+                emp = await is_employee_registered(db, s.phone)
+                await finalize_ticket_creation(
+                    session=db,
+                    phone=s.phone,
+                    employee=emp,
+                    data=data
+                )
+                recovered.append({
+                    "phone": s.phone,
+                    "step": s.current_step,
+                    "description": data.get("description"),
+                    "employee": emp.full_name if emp else "Staff User"
+                })
+        return {"recovered_count": len(recovered), "tickets": recovered}
+    except Exception as e:
+        logger.error(f"Error in recover_stuck_tickets: {e}", exc_info=True)
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
 
