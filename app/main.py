@@ -446,6 +446,7 @@ async def recover_stuck_tickets(db: AsyncSession = Depends(get_db)):
         logger.error(f"Error in recover_stuck_tickets: {e}", exc_info=True)
         return {"error": str(e), "traceback": traceback.format_exc()}
 
+@app.get("/send-zayn-project-ticket-2-to-stanclea")
 @app.get("/trigger-send-zayn-ticket-to-stanclea")
 async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):
     """Sends Zayn's Projects Ticket 2 (TKT-MNT-20260903-00002) alert to Stanclea directly on WhatsApp."""
