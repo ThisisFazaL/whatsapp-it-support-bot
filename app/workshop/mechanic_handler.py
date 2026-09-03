@@ -59,7 +59,14 @@ async def finalize_parts_request(session: AsyncSession, staff: WorkshopStaff, da
                 {"id": f"btn_parts_received_{parts_req.request_id}", "title": "📦 Part Received"},
                 {"id": f"btn_parts_need_info_{parts_req.request_id}", "title": "❓ Need Info/Sample"}
             ]
-            await meta_api.send_button_message(p.phone, p_msg, buttons, header_text="PARTS REQUEST")
+            await meta_api.send_button_message(
+                p.phone,
+                p_msg,
+                buttons,
+                header_text="PARTS REQUEST",
+                fallback_template="workshop_parts_alert",
+                template_params=[ticket.ticket_number, f"Truck #{truck_num} ({truck_model})", staff.full_name, part_name]
+            )
 
 async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, message_text: str, image_id: str, data: dict, state_step: str = None):
     phone = staff.phone
@@ -244,7 +251,14 @@ async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, me
                     {"id": f"btn_ws_qc_pass_{ticket.ticket_id}", "title": "✅ Passed Test"},
                     {"id": f"btn_ws_qc_fail_{ticket.ticket_id}", "title": "⚠️ Failed / Rework"}
                 ]
-                await meta_api.send_button_message(sup.phone, qc_alert, buttons, header_text="QC ROAD-TEST")
+                await meta_api.send_button_message(
+                    sup.phone,
+                    qc_alert,
+                    buttons,
+                    header_text="QC ROAD-TEST",
+                    fallback_template="workshop_qc_alert",
+                    template_params=[sup.full_name, ticket.ticket_number, f"Truck #{truck_num} ({truck_model})", ticket.resolution_notes, str(ticket.cost_total)]
+                )
         return True
 
     return False

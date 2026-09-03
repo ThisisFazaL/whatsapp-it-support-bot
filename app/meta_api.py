@@ -32,6 +32,12 @@ class MetaWhatsAppAPI:
                         return response_json
                     else:
                         logger.warning(f"Meta Graph API Warning ({response.status_code}) Attempt {attempt}/{max_retries}: {response_json}")
+                        # Check if error is 24-hour window restriction (code 131047 / 131042 / 131026)
+                        err_code = response_json.get("error", {}).get("code")
+                        if err_code in {131047, 131042, 131026}:
+                            logger.info(f"[24H WINDOW EXPIRED] Meta Error {err_code}. Returning response for template fallback.")
+                            return response_json
+                            
                         if attempt < max_retries:
                             await asyncio.sleep(0.5 * attempt)
                         else:
@@ -44,10 +50,7 @@ class MetaWhatsAppAPI:
                     return {"error": str(e)}
 
     async def upload_media(self, file_path: str, mime_type: str = "application/pdf") -> str:
-        """
-        Uploads a local media file directly to Meta WhatsApp servers via Media Upload API.
-        Returns the Meta Media ID string.
-        """
+        """Uploads a local media file directly to Meta WhatsApp servers via Media Upload API."""
         if not os.path.exists(file_path):
             logger.error(f"Media file not found: {file_path}")
             return None
@@ -84,10 +87,8 @@ class MetaWhatsAppAPI:
             logger.error(f"Exception during Meta Media Upload: {e}", exc_info=True)
             return None
 
-    async def send_text_message(self, to_phone: str, text: str) -> dict:
-        """
-        Sends a WhatsApp text message to the specified recipient phone number via Meta Graph API.
-        """
+    async def send_text_message(self, to_phone: str, text: str, fallback_template: str = None, template_params: list = None) -> dict:
+        """Sends a WhatsApp text message to recipient, with automatic 24h window template fallback."""
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
         payload = {
             "messaging_product": "whatsapp",
@@ -99,12 +100,18 @@ class MetaWhatsAppAPI:
             }
         }
         logger.info(f"[OUTGOING WHATSAPP -> {clean_phone}]\n{text}\n----------------------------------")
-        return await self._post_with_retry(payload)
+        res = await self._post_with_retry(payload)
+        
+        # Check for 24-hour window restriction and fallback to Template Message if available
+        err_code = res.get("error", {}).get("code") if isinstance(res.get("error"), dict) else None
+        if err_code in {131047, 131042, 131026} and fallback_template:
+            logger.info(f"[AUTO-FALLBACK] Sending approved template '{fallback_template}' to +{clean_phone} to bypass 24h window.")
+            return await self.send_template_message(clean_phone, fallback_template, body_params=template_params or [])
+            
+        return res
 
     async def send_image_message(self, to_phone: str, image_id: str, caption: str = "") -> dict:
-        """
-        Sends a full high-res WhatsApp photo attachment to the recipient via Meta Graph API.
-        """
+        """Sends a full high-res WhatsApp photo attachment to recipient."""
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
         payload = {
             "messaging_product": "whatsapp",
@@ -119,9 +126,10 @@ class MetaWhatsAppAPI:
         logger.info(f"[OUTGOING FULL PHOTO ATTACHMENT -> {clean_phone}]\nImage ID: {image_id}\nCaption: {caption}")
         return await self._post_with_retry(payload)
 
-    async def send_button_message(self, to_phone: str, body_text: str, buttons: list, header_text: str = None, footer_text: str = None, image_id: str = None) -> dict:
+    async def send_button_message(self, to_phone: str, body_text: str, buttons: list, header_text: str = None, footer_text: str = None, image_id: str = None, fallback_template: str = None, template_params: list = None) -> dict:
         """
-        Sends interactive quick reply buttons (with optional full photo attachment header) to a WhatsApp recipient via Meta Graph API.
+        Sends interactive quick reply buttons to a WhatsApp recipient.
+        If the 24-hour window has expired (error 131047), automatically falls back to an approved Template Message.
         """
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
         interactive_dict = {
@@ -161,21 +169,26 @@ class MetaWhatsAppAPI:
             "interactive": interactive_dict
         }
 
-        logger.info(f"[OUTGOING INTERACTIVE BUTTONS (PHOTO HEADER: {image_id}) -> {clean_phone}]\n{header_text}\n{body_text}")
+        logger.info(f"[OUTGOING INTERACTIVE BUTTONS -> {clean_phone}]\n{header_text or ''}\n{body_text}")
         res = await self._post_with_retry(payload)
 
-        # Fallback to plain text / image message if interactive button fails
+        # Check for 24-hour window restriction and fallback to Template Message if available
+        err_code = res.get("error", {}).get("code") if isinstance(res.get("error"), dict) else None
+        if err_code in {131047, 131042, 131026} and fallback_template:
+            logger.info(f"[AUTO-FALLBACK] Sending approved template '{fallback_template}' to +{clean_phone} to bypass 24h window.")
+            return await self.send_template_message(clean_phone, fallback_template, body_params=template_params or [])
+
+        # Fallback to plain text / image message if interactive button fails for non-24h reasons
         if "error" in res or res.get("error"):
             if image_id:
                 await self.send_image_message(clean_phone, image_id, caption=body_text)
             fallback_msg = f"{header_text or ''}\n\n{body_text}\n\n{footer_text or ''}".strip()
-            return await self.send_text_message(clean_phone, fallback_msg)
+            return await self.send_text_message(clean_phone, fallback_msg, fallback_template=fallback_template, template_params=template_params)
+            
         return res
 
     async def send_document_message(self, to_phone: str, document_url: str, filename: str, caption: str = "", local_file_path: str = None) -> dict:
-        """
-        Sends a PDF or Document file to WhatsApp recipient using Meta Media ID upload (primary) or direct URL (secondary).
-        """
+        """Sends a PDF or Document file to WhatsApp recipient."""
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
         
         if local_file_path and os.path.exists(local_file_path):
@@ -211,23 +224,47 @@ class MetaWhatsAppAPI:
         logger.info(f"[OUTGOING DOCUMENT via URL -> {clean_phone}]\nFile: {filename}\nURL: {document_url}")
         return await self._post_with_retry(url_payload)
 
-    async def send_template_message(self, to_phone: str, template_name: str, lang_code: str = "en") -> dict:
+    async def send_template_message(self, to_phone: str, template_name: str, lang_code: str = "en", body_params: list = None, header_image_id: str = None) -> dict:
         """
-        Sends an approved Meta WhatsApp Template message to the recipient phone number.
+        Sends an approved Meta WhatsApp Template message to recipient with dynamic parameters.
+        This bypasses the 24-hour customer service window completely!
         """
         clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": clean_phone,
-            "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {
-                    "code": lang_code
-                }
+        template_dict = {
+            "name": template_name,
+            "language": {
+                "code": lang_code
             }
         }
-        logger.info(f"[OUTGOING TEMPLATE '{template_name}' -> {clean_phone}]")
+
+        components = []
+        if body_params:
+            components.append({
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": str(p)} for p in body_params
+                ]
+            })
+
+        if header_image_id:
+            components.append({
+                "type": "header",
+                "parameters": [
+                    {"type": "image", "image": {"id": header_image_id}}
+                ]
+            })
+
+        if components:
+            template_dict["components"] = components
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "template",
+            "template": template_dict
+        }
+        logger.info(f"[OUTGOING TEMPLATE '{template_name}' WITH PARAMS -> {clean_phone}]: {body_params}")
         return await self._post_with_retry(payload)
 
 meta_api = MetaWhatsAppAPI()

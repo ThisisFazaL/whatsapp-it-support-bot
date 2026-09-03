@@ -141,7 +141,12 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
                     f"⏱️ *Please enter your Estimated Completion Time (e.g. 'Tomorrow 11 AM' or '2 hours'):*"
                 )
                 await set_user_state(session, mechanic.phone, "ws_enter_eta", {"ticket_id": ticket.ticket_id})
-                await meta_api.send_text_message(mechanic.phone, mech_alert)
+                await meta_api.send_text_message(
+                    mechanic.phone,
+                    mech_alert,
+                    fallback_template="workshop_job_alert",
+                    template_params=[mechanic.full_name, ticket.ticket_number, f"Truck #{truck_num} ({truck_model})", f"{ticket.category_name} - {ticket.subcategory_name}"]
+                )
         return True
 
     if text.startswith("btn_ws_qc_fail_"):

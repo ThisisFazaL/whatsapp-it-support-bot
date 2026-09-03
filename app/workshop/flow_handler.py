@@ -300,4 +300,11 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, d
             {"id": f"btn_ws_route_intern_{ticket.ticket_id}", "title": "🛠️ Handle Internally"},
             {"id": f"btn_ws_route_work_{ticket.ticket_id}", "title": "🏭 Send to Workshop"}
         ]
-        await meta_api.send_button_message(sup.phone, sup_msg, buttons, header_text="SUPERVISOR REVIEW")
+        await meta_api.send_button_message(
+            sup.phone,
+            sup_msg,
+            buttons,
+            header_text="SUPERVISOR REVIEW",
+            fallback_template="workshop_ticket_alert",
+            template_params=[sup.full_name, ticket.ticket_number, data.get('truck_info', 'Fleet Truck'), f"{ticket.category_name} - {ticket.subcategory_name}", ticket.description]
+        )

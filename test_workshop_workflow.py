@@ -24,14 +24,14 @@ from app.meta_api import meta_api
 
 captured_messages = []
 
-async def mock_send_text(to_phone: str, text: str):
-    captured_messages.append({"type": "text", "to": to_phone, "text": text})
+async def mock_send_text(to_phone: str, text: str, **kwargs):
+    captured_messages.append({"type": "text", "to": to_phone, "text": text, "kwargs": kwargs})
     print(f"\n[WhatsApp to +{to_phone}]:\n{text}\n" + "-"*50)
 
-async def mock_send_button(to_phone: str, body_text: str, buttons: list, header_text: str = None):
+async def mock_send_button(to_phone: str, body_text: str, buttons: list, header_text: str = None, **kwargs):
     btn_titles = [b.get("title") for b in buttons]
     btn_ids = [b.get("id") for b in buttons]
-    captured_messages.append({"type": "button", "to": to_phone, "text": body_text, "buttons": buttons})
+    captured_messages.append({"type": "button", "to": to_phone, "text": body_text, "buttons": buttons, "kwargs": kwargs})
     print(f"\n[WhatsApp Buttons to +{to_phone}]:\n[{header_text or 'MENU'}]\n{body_text}\nButtons: {btn_titles} (IDs: {btn_ids})\n" + "-"*50)
 
 meta_api.send_text_message = mock_send_text
