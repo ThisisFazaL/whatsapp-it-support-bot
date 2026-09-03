@@ -472,11 +472,11 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     if domain == "IT":
         # Extract location directly from employee's registered profile in database!
         emp_loc_id = employee.location_id if employee else None
-        emp_loc_name = employee.location.location_name if employee and employee.location else None
-        if not emp_loc_name and emp_loc_id:
+        loc_name = "On-Site"
+        if emp_loc_id:
             loc_obj = await session.get(Location, emp_loc_id)
-            emp_loc_name = loc_obj.location_name if loc_obj else None
-        loc_name = emp_loc_name or "On-Site"
+            if loc_obj:
+                loc_name = loc_obj.location_name
         location_id = emp_loc_id
         room_area = None
     else:
@@ -635,7 +635,12 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     # Send Alert with Claim / Resolve Buttons to target Support Admins
     emp_name = employee.full_name if employee else "Staff Reporter"
     emp_phone = employee.phone if employee else phone
-    dept_name = employee.department.department_name if employee and employee.department else ""
+    dept_name = ""
+    if employee and employee.department_id:
+        from app.database import Department
+        dept_obj = await session.get(Department, employee.department_id)
+        if dept_obj:
+            dept_name = dept_obj.department_name
     dept_str = f" ({dept_name})" if dept_name else ""
 
     header = f"🚨 NEW {domain_label} TICKET"

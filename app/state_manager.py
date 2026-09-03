@@ -14,10 +14,15 @@ def clean_phone_number(phone: str) -> str:
     return digits
 
 async def is_employee_registered(session: AsyncSession, phone: str) -> Optional[Employee]:
-    """Returns Employee if clean phone digits match and active == True."""
+    """Returns Employee if clean phone digits match and active == True with relationships eagerly loaded."""
+    from sqlalchemy.orm import selectinload
     clean_phone = clean_phone_number(phone)
     # Match exact or last 10 digits fallback
-    stmt = select(Employee).where(Employee.active == True)
+    stmt = (
+        select(Employee)
+        .options(selectinload(Employee.department), selectinload(Employee.location))
+        .where(Employee.active == True)
+    )
     res = await session.execute(stmt)
     employees = res.scalars().all()
     
