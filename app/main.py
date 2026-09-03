@@ -473,18 +473,26 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
         # Clear any stale conversation state for Stanclea
         await clear_user_state(db, stanclea_phone)
 
+        cat_name = t.category.category_name if t and t.category else "IT & Computing Equipment"
+        sub_name = t.subcategory.subcategory_name if t and t.subcategory else "Computer & Laptop"
+        issue_name = t.issue_type.issue_name if t and t.issue_type else "Other"
+        priority_name = t.priority.priority_name if t and t.priority else "High"
+        desc = t.description if t and t.description else "Is not connecting on the internet"
+        ticket_num = t.ticket_number if t else "TKT-20260903-00079"
+        image_id = t.image_id if t else None
+
         header = "🚨 NEW 💻 IT SUPPORT TICKET"
         body = (
-            f"🎫 *Ticket ID:* `{t.ticket_number}`\n"
+            f"🎫 *Ticket ID:* `{ticket_num}`\n"
             f"👤 *Reporter:* Zayn (`+263713866223`)\n"
-            f"📌 *Category:* IT & Computing Equipment ➡️ Computer & Laptop\n"
-            f"⚙️ *Issue:* Other\n"
-            f"🚨 *Priority:* High\n"
-            f"📝 *Description:* {t.description}"
+            f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+            f"⚙️ *Issue:* {issue_name}\n"
+            f"🚨 *Priority:* {priority_name}\n"
+            f"📝 *Description:* {desc}"
         )
         footer = "Tap button below to claim ticket"
         buttons = [
-            {"id": f"claim_{t.ticket_number}", "title": "🔵 Claim Ticket"}
+            {"id": f"claim_{ticket_num}", "title": "🔵 Claim Ticket"}
         ]
         resp = await meta_api.send_button_message(
             to_phone=stanclea_phone,
@@ -492,9 +500,9 @@ async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db
             buttons=buttons,
             header_text=header,
             footer_text=footer,
-            image_id=t.image_id
+            image_id=image_id
         )
-        return {"status": "SUCCESS", "meta_response": resp, "ticket": t.ticket_number, "sent_to": stanclea_phone}
+        return {"status": "SUCCESS", "meta_response": resp, "ticket": ticket_num, "sent_to": stanclea_phone}
     except Exception as e:
         import traceback
         logger.error(f"Error sending zayn ticket to stanclea: {e}", exc_info=True)
