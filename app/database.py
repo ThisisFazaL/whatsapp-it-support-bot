@@ -454,6 +454,14 @@ async def init_db_models():
         await session.execute(delete(AdminCategoryMapping))
         await session.commit()
 
+        # Sync Maintenance / Building Projects Categories (including Renovation & Expansion) on startup
+        try:
+            from seed_maintenance_data import seed_maintenance_data_in_session
+            await seed_maintenance_data_in_session(session)
+        except Exception as m_err:
+            import logging
+            logging.getLogger("database").warning(f"Maintenance categories init note: {m_err}")
+
         # Sync Workshop Taxonomy and Real Tagoneswa Fleet on startup
         try:
             from seed_workshop_data import seed_workshop_data_in_session
