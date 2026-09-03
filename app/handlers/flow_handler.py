@@ -87,9 +87,22 @@ async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee
 
 async def start_location_selection(session: AsyncSession, phone: str, domain: str = "MAINTENANCE"):
     """Presents project site location selection numbered text list for Building Projects."""
+    official_site_names = [
+        "Tagoneswa Hardware",
+        "LG Plast",
+        "Shop 5",
+        "Shop 6",
+        "Kreckle Foods",
+        "19 Mcloughlin Kensington",
+        "12 Divine Milton Park"
+    ]
     stmt = select(Location).order_by(Location.location_id)
     res = await session.execute(stmt)
-    locations = res.scalars().all()
+    all_locs = res.scalars().all()
+
+    locations = [loc for loc in all_locs if any(name.lower() in loc.location_name.lower() for name in official_site_names)]
+    if not locations:
+        locations = all_locs[:7]
 
     loc_list = []
     loc_map = {}

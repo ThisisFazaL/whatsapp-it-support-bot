@@ -285,7 +285,7 @@ async def init_db_models():
         if not res.scalars().all():
             session.add_all([Department(department_id=1, department_name="IT Support"), Department(department_id=2, department_name="Finance")])
         
-        # Guarantee Project and Branch Locations are synced safely without breaking foreign keys
+        # Guarantee 7 Official Building Projects Site Locations are synced
         desired_locations = [
             "Tagoneswa Hardware",
             "LG Plast",
@@ -293,9 +293,7 @@ async def init_db_models():
             "Shop 6",
             "Kreckle Foods",
             "19 Mcloughlin Kensington",
-            "12 Divine Milton Park",
-            "110 Coventry Road Workington",
-            "6 Austin Road Workington"
+            "12 Divine Milton Park"
         ]
         res = await session.execute(select(Location).order_by(Location.location_id))
         existing_locs = res.scalars().all()
