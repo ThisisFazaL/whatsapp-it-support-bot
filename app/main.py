@@ -275,6 +275,12 @@ async def process_webhook_payload(body: dict):
                 # Keep btn_id intact if present (e.g. "cmd_my_assigned_tickets" or "resolve_TKT-...")
                 message_text = btn_id if btn_id else btn_title
                 logger.info(f"Received Interactive Button click from {sender_phone}: id='{btn_id}', title='{btn_title}' -> text='{message_text}'")
+            elif msg_type == "button":
+                btn_obj = msg_obj.get("button", {})
+                payload = btn_obj.get("payload", "")
+                text_val = btn_obj.get("text", "")
+                message_text = payload if payload else text_val
+                logger.info(f"Received Template Quick Reply button click from {sender_phone}: payload='{payload}', text='{text_val}' -> text='{message_text}'")
             else:
                 logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
                 await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
