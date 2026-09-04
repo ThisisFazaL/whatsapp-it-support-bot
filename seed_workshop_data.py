@@ -77,13 +77,22 @@ PRODUCTION_STAFF = [
     {"full_name": "Panashe Mutamangira", "phone": "263777261203", "role": "LOGISTICS_ASSISTANT"},
     {"full_name": "Edward Chemhere", "phone": "263715025982", "role": "SUPERVISOR"},
     {"full_name": "Lydon Kandikire", "phone": "263718295309", "role": "PURCHASING"},
-    {"full_name": "Sajid", "phone": "263718093498", "role": "MECHANIC"},
-    {"full_name": "Fazal Saiyed (Supervisor)", "phone": "919265368695", "role": "SUPERVISOR"}
+    {"full_name": "Sajid", "phone": "263718093498", "role": "MECHANIC"}
 ]
 
 async def seed_workshop_data_in_session(session: AsyncSession):
     """Idempotently seeds standard fault taxonomies, fleet trucks, and registered staff."""
     
+    # Remove Fazal 919265368695 from WorkshopStaff table so he only receives info updates
+    stmt_fazal = select(WorkshopStaff).where(
+        (WorkshopStaff.phone == "919265368695") |
+        (WorkshopStaff.phone.endswith("9265368695"))
+    )
+    fazal_staff = (await session.execute(stmt_fazal)).scalars().all()
+    for fs in fazal_staff:
+        await session.delete(fs)
+    await session.flush()
+
     # 1. Seed Real Fleet Trucks
     for t in PRODUCTION_FLEET:
         stmt = select(WorkshopTruck).where(WorkshopTruck.truck_number == t["truck_number"])

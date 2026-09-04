@@ -322,3 +322,26 @@ async def finalize_ticket_logging(session: AsyncSession, staff: WorkshopStaff, d
             fallback_template="workshop_ticket_alert",
             template_params=[sup.full_name, ticket.ticket_number, data.get('truck_info', 'Fleet Truck'), f"{ticket.category_name} - {ticket.subcategory_name}", ticket.description]
         )
+
+    # 3. Informational Alert to Master Admin (Fazal Saiyed)
+    from app.config import settings
+    if settings.master_admin_phone and settings.master_admin_phone not in [s.phone for s in supervisors]:
+        if image_id:
+            await meta_api.send_image_message(
+                settings.master_admin_phone,
+                image_id,
+                caption=f"📸 Defect Photo for Fleet Ticket `{ticket.ticket_number}` ({data.get('truck_info', 'Fleet Truck')})"
+            )
+        master_ws_msg = (
+            f"ℹ️ *[MASTER ALERT] NEW FLEET / WORKSHOP TICKET RAISED*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+            f"🚚 *Vehicle:* {data.get('truck_info')}\n"
+            f"👤 *Logged By:* {staff.full_name}\n"
+            f"📌 *Fault:* {ticket.category_name} ➔ {ticket.subcategory_name}\n"
+            f"📝 *Notes:* {ticket.description}\n"
+            f"📸 *Photo:* {'Attached above' if image_id else 'None'}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏳ *Status: UNDER REVIEW* (Dispatched to Workshop Supervisor Edward Chemhere for triage)."
+        )
+        await meta_api.send_text_message(settings.master_admin_phone, master_ws_msg)
