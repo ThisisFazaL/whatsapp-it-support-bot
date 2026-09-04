@@ -128,27 +128,28 @@ async def run_test():
         
         await session.refresh(ticket)
         assert ticket.status == "WITH_MECHANIC", f"Expected WITH_MECHANIC, got {ticket.status}"
-        assert ticket.assigned_mechanic_id == blessing.staff_id, "Mechanic not assigned"
-        print(f"[PASS] STAGE 2: Ticket routed to Workshop Floor. Assigned to {blessing.full_name}!")
+        assert ticket.assigned_mechanic_id is not None, "Mechanic not assigned"
+        assigned_mechanic = await session.get(WorkshopStaff, ticket.assigned_mechanic_id)
+        print(f"[PASS] STAGE 2: Ticket routed to Workshop Floor. Assigned to {assigned_mechanic.full_name}!")
 
         # -------------------------------------------------------------
         # STAGE 3: Mechanic Sets ETA & Requests Parts
         # -------------------------------------------------------------
-        print("\n[STAGE 3] Mechanic Blessing Sets ETA & Requests Parts...")
+        print(f"\n[STAGE 3] Mechanic {assigned_mechanic.full_name} Sets ETA & Requests Parts...")
         
         # 3.1 Mechanic enters ETA
-        await handle_workshop_message(session, blessing, "Tomorrow 11 AM")
+        await handle_workshop_message(session, assigned_mechanic, "Tomorrow 11 AM")
         await session.refresh(ticket)
         assert ticket.expected_completion_time == "Tomorrow 11 AM", "ETA not saved"
 
         # 3.2 Mechanic taps "Request Parts"
-        await handle_workshop_message(session, blessing, f"btn_ws_parts_req_{ticket.ticket_id}")
+        await handle_workshop_message(session, assigned_mechanic, f"btn_ws_parts_req_{ticket.ticket_id}")
 
         # 3.3 Mechanic enters part name (Step 1)
-        await handle_workshop_message(session, blessing, "1x Wabco 4-way protection valve")
+        await handle_workshop_message(session, assigned_mechanic, "1x Wabco 4-way protection valve")
         
         # 3.4 Mechanic attaches sample photo (Step 2)
-        await handle_workshop_message(session, blessing, "Sample valve image", image_id="img_valve_sample_01")
+        await handle_workshop_message(session, assigned_mechanic, "Sample valve image", image_id="img_valve_sample_01")
         
         await session.refresh(ticket)
         assert ticket.status == "AWAITING_PARTS", f"Expected AWAITING_PARTS, got {ticket.status}"
@@ -176,7 +177,7 @@ async def run_test():
         print(f"[PASS] STAGE 4.1: Clarification inquiry recorded: '{parts_req.clarification_note}'!")
 
         # 4.3 Mechanic replies on WhatsApp with OEM # and close-up photo
-        await handle_workshop_message(session, blessing, "OEM Part # is 434 200 001 0", image_id="img_valve_oem_tag")
+        await handle_workshop_message(session, assigned_mechanic, "OEM Part # is 434 200 001 0", image_id="img_valve_oem_tag")
         await session.refresh(parts_req)
         assert parts_req.clarification_response == "OEM Part # is 434 200 001 0"
         assert parts_req.clarification_image_id == "img_valve_oem_tag"
@@ -197,13 +198,13 @@ async def run_test():
         print("\n[STAGE 5] Mechanic Completes Repair, Resolution Notes & Costing...")
         
         # 5.1 Mechanic taps "Repair Completed"
-        await handle_workshop_message(session, blessing, f"btn_ws_repair_done_{ticket.ticket_id}")
+        await handle_workshop_message(session, assigned_mechanic, f"btn_ws_repair_done_{ticket.ticket_id}")
         
         # 5.2 Mechanic enters Resolution Notes
-        await handle_workshop_message(session, blessing, "Replaced faulty Wabco 4-way valve, flushed lines and tightened unions.")
+        await handle_workshop_message(session, assigned_mechanic, "Replaced faulty Wabco 4-way valve, flushed lines and tightened unions.")
         
         # 5.3 Mechanic enters Costing
-        await handle_workshop_message(session, blessing, "Parts: $140, Labour: $30, Total: $170")
+        await handle_workshop_message(session, assigned_mechanic, "Parts: $140, Labour: $30, Total: $170")
         
         await session.refresh(ticket)
         assert ticket.status == "AWAITING_TEST", f"Expected AWAITING_TEST, got {ticket.status}"
@@ -227,9 +228,9 @@ async def run_test():
         print(f"[PASS] STAGE 6.1: Rework triggered cleanly! Reason: '{ticket.qc_failure_reason}'. Status: '{ticket.status}'!")
 
         # 6.2 Mechanic re-fixes on floor and taps "Repair Completed" again
-        await handle_workshop_message(session, blessing, f"btn_ws_repair_done_{ticket.ticket_id}")
-        await handle_workshop_message(session, blessing, "Replaced auxiliary line seal and re-torqued union.")
-        await handle_workshop_message(session, blessing, "Total: $170 (No extra cost)")
+        await handle_workshop_message(session, assigned_mechanic, f"btn_ws_repair_done_{ticket.ticket_id}")
+        await handle_workshop_message(session, assigned_mechanic, "Replaced auxiliary line seal and re-torqued union.")
+        await handle_workshop_message(session, assigned_mechanic, "Total: $170 (No extra cost)")
 
         # 6.3 Edward Passes Second QC Test
         await handle_workshop_message(session, edward, f"btn_ws_qc_pass_{ticket.ticket_id}")

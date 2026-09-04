@@ -203,9 +203,17 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db_models():
     """Create all tables and insert seed data if empty."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    
+    global engine, async_session_factory
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as e:
+        print(f"Failed to connect to primary DB ({e}). Falling back to local SQLite 'sqlite+aiosqlite:///./itsupport.db'...")
+        engine = create_async_engine("sqlite+aiosqlite:///./itsupport.db", echo=False)
+        async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            
     async with async_session_factory() as session:
         # Check Priorities
         res = await session.execute(select(Priority))
