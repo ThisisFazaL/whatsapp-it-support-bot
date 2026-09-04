@@ -19,9 +19,10 @@ async def get_ticket_with_truck(session: AsyncSession, ticket_id: int = None) ->
 async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, message_text: str, data: dict, state_step: str = None):
     phone = staff.phone
     text = (message_text or "").strip()
+    is_btn = text.startswith("btn_")
     
     # 1. State: Entering Reject Reason
-    if state_step == "ws_reject_reason":
+    if state_step == "ws_reject_reason" and not is_btn:
         ticket_id = data.get("ticket_id")
         ticket = await get_ticket_with_truck(session, ticket_id)
         if ticket:
@@ -62,7 +63,7 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
         return True
 
     # 2. State: Entering Internal Fix Notes
-    if state_step == "ws_internal_fix_notes":
+    if state_step == "ws_internal_fix_notes" and not is_btn:
         ticket_id = data.get("ticket_id")
         ticket = await get_ticket_with_truck(session, ticket_id)
         if ticket:
@@ -103,7 +104,7 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
         return True
 
     # 3. State: Entering QC Failure Reason (Rework Loop)
-    if state_step == "ws_qc_fail_reason":
+    if state_step == "ws_qc_fail_reason" and not is_btn:
         ticket_id = data.get("ticket_id")
         ticket = await get_ticket_with_truck(session, ticket_id)
         if ticket:

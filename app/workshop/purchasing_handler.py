@@ -13,9 +13,10 @@ async def get_ticket_with_truck(session: AsyncSession, ticket_id: int) -> Worksh
 
 async def handle_purchasing_action(session: AsyncSession, staff: WorkshopStaff, message_text: str, data: dict, state_step: str = None):
     phone = staff.phone
-    text = message_text.strip()
+    text = (message_text or "").strip()
+    is_btn = text.startswith("btn_")
     
-    if state_step == "ws_purchasing_inquiry":
+    if state_step == "ws_purchasing_inquiry" and not is_btn:
         req_id = data.get("request_id")
         parts_req = await session.get(WorkshopPartsRequest, req_id)
         if parts_req:

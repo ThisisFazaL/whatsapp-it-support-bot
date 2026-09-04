@@ -89,9 +89,10 @@ async def finalize_parts_request(session: AsyncSession, staff: WorkshopStaff, da
 
 async def handle_mechanic_action(session: AsyncSession, staff: WorkshopStaff, message_text: str, image_id: str, data: dict, state_step: str = None):
     phone = staff.phone
-    text = message_text.strip()
+    text = (message_text or "").strip()
+    is_btn = text.startswith("btn_")
 
-    if state_step == "ws_enter_eta":
+    if state_step == "ws_enter_eta" and not is_btn:
         ticket_id = data.get("ticket_id")
         ticket = await get_ticket_with_truck(session, ticket_id)
         if ticket:

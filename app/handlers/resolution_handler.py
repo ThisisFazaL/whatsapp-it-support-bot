@@ -93,7 +93,7 @@ async def handle_resolution_confirmation(
 
     t_num = ticket.ticket_number
 
-    if choice in ("1", "confirm_close_ticket", "confirm & close", "✅ confirm & close", "close", "confirm"):
+    if choice in ("1", "confirm_close_ticket", "confirm & close", "✅ confirm & close", "close", "confirm") or choice.startswith("confirm_close") or choice.startswith("confirm_resolve_"):
         # 1 = Close Ticket (status_id = 4)
         ticket.status_id = 4
         ticket.closed_at = datetime.datetime.utcnow()
@@ -146,7 +146,7 @@ async def handle_resolution_confirmation(
 
         return True
 
-    elif choice in ("2", "reopen_ticket", "reopen ticket", "🔄 reopen ticket", "reopen", "cancel"):
+    elif choice in ("2", "reopen_ticket", "reopen ticket", "🔄 reopen ticket", "reopen", "cancel") or choice.startswith("reopen_"):
         # 2 = Reopen Ticket (status_id = 1)
         ticket.status_id = 1
         ticket.updated_at = datetime.datetime.utcnow()

@@ -199,116 +199,6 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
 
     return True
 
-async def handle_admin_command(session: AsyncSession, sender_phone: str, message_text: str) -> bool:
-    """
-    Checks if message is an admin command (greeting, menu button, accept, or resolve command).
-    Returns True if handled, False otherwise.
-    """
-    text_strip = message_text.strip()
-    text_lower = text_strip.lower()
-
-    # Check if sender is an active support admin
-    admin = await is_admin(session, sender_phone)
-    if not admin:
-        return False
-
-    # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-...", "🔵 claim_TKT-...", "claim TKT-..."
-    claim_match = re.match(r"^(?:🔵\s*)?(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
-    # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "🟢 resolve_TKT-...", "resolve 1"
-    resolve_match = re.match(r"^(?:🟢\s*)?resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
-
-    # Check for bare button text: "🔵 Claim Ticket", "Claim Ticket", "claim", "accept"
-    is_bare_claim = not claim_match and (text_lower in {"claim ticket", "claim", "accept", "accept ticket", "🔵 claim ticket"} or "claim ticket" in text_lower)
-    is_bare_resolve = not resolve_match and (text_lower in {"resolve ticket", "resolve", "🟢 resolve ticket"} or "resolve ticket" in text_lower)
-
-    raw_ticket_arg = None
-    if is_bare_claim:
-        if admin.is_maintenance_admin:
-            m_assigned_subq = select(MaintenanceTicketAssignment.ticket_id)
-            latest_open_stmt = (
-                select(MaintenanceTicket)
-                .where(MaintenanceTicket.status_id == 1, MaintenanceTicket.ticket_id.not_in(m_assigned_subq))
-                .order_by(MaintenanceTicket.created_at.desc())
-            )
-            latest_t = (await session.execute(latest_open_stmt)).scalars().first()
-            if latest_t:
-                raw_ticket_arg = latest_t.ticket_number
-                claim_match = True
-        else:
-            it_assigned_subq = select(TicketAssignment.ticket_id)
-            latest_open_stmt = (
-                select(Ticket)
-                .where(Ticket.status_id == 1, Ticket.ticket_id.not_in(it_assigned_subq))
-                .order_by(Ticket.created_at.desc())
-            )
-            latest_t = (await session.execute(latest_open_stmt)).scalars().first()
-            if latest_t:
-                raw_ticket_arg = latest_t.ticket_number
-                claim_match = True
-
-    elif is_bare_resolve:
-        if admin.is_maintenance_admin:
-            m_asg_stmt = (
-                select(MaintenanceTicket)
-                .join(MaintenanceTicketAssignment, MaintenanceTicket.ticket_id == MaintenanceTicketAssignment.ticket_id)
-                .where(MaintenanceTicketAssignment.admin_id == admin.admin_id, MaintenanceTicket.status_id == 2)
-                .order_by(MaintenanceTicket.updated_at.desc())
-            )
-            assigned_t = (await session.execute(m_asg_stmt)).scalars().first()
-            if assigned_t:
-                raw_ticket_arg = assigned_t.ticket_number
-                resolve_match = True
-        else:
-            it_asg_stmt = (
-                select(Ticket)
-                .join(TicketAssignment, Ticket.ticket_id == TicketAssignment.ticket_id)
-                .where(TicketAssignment.admin_id == admin.admin_id, Ticket.status_id == 2)
-                .order_by(Ticket.updated_at.desc())
-            )
-            assigned_t = (await session.execute(it_asg_stmt)).scalars().first()
-            if assigned_t:
-                raw_ticket_arg = assigned_t.ticket_number
-                resolve_match = True
-
-    is_view_assigned = text_lower in {"cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets", "my assigned tickets", "my assigned ticket"} or text_strip.startswith("cmd_my_assigned_tickets")
-    is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
-    is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
-    raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
-    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
-        raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
-        text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
-        any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
-    )
-
-    state = await get_user_state(session, sender_phone)
-
-    # If admin is in active ticket creation flow (raise_ticket) AND not sending a greeting, admin command, or reset:
-    # Do NOT intercept description / text input as admin command! Let it flow to handle_flow!
-    if not (is_greeting or is_view_assigned or is_summary or is_raise_cmd):
-        if state and state.flow_name == "raise_ticket" and state.current_step in (
-            "awaiting_description", "awaiting_room_area", "awaiting_other_location",
-            "awaiting_category", "awaiting_subcategory", "awaiting_issue",
-            "select_priority", "select_safety_hazard", "awaiting_image", "select_location", "select_domain"
-        ):
-            if not (claim_match or resolve_match or text_strip.startswith(("cmd_", "btn_", "claim_", "resolve_")) or text_lower in {"reset", "cancel"}):
-                return False
-
-    # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
-    if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
-        if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
-            return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
-        # If admin is NOT in active draft or resolution flow, treating any general message as Admin Dashboard Greeting!
-        is_greeting = True
-
-    # Executive Observer check
-    if sender_phone in settings.executive_observer_phones and sender_phone != settings.master_admin_phone:
-        if claim_match or resolve_match:
-            await meta_api.send_text_message(
-                sender_phone,
-                "⚠️ *Access Denied*: You are registered as an Executive Observer. Only assigned Support Admins or Master Admin can resolve tickets."
-            )
-            return True
-
 async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admin: SupportAdmin, sender_phone: str):
     """
     Delivers all open, unclaimed pending tickets (from the period when 24h window was closed)
@@ -443,6 +333,117 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
 
     except Exception as e:
         logger.error(f"Error delivering pending unclaimed tickets to admin {sender_phone}: {e}", exc_info=True)
+
+
+async def handle_admin_command(session: AsyncSession, sender_phone: str, message_text: str) -> bool:
+    """
+    Checks if message is an admin command (greeting, menu button, accept, or resolve command).
+    Returns True if handled, False otherwise.
+    """
+    text_strip = message_text.strip()
+    text_lower = text_strip.lower()
+
+    # Check if sender is an active support admin
+    admin = await is_admin(session, sender_phone)
+    if not admin:
+        return False
+
+    # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-...", "🔵 claim_TKT-...", "claim TKT-..."
+    claim_match = re.match(r"^(?:🔵\s*)?(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+    # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "🟢 resolve_TKT-...", "resolve 1"
+    resolve_match = re.match(r"^(?:🟢\s*)?resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+
+    # Check for bare button text: "🔵 Claim Ticket", "Claim Ticket", "claim", "accept"
+    is_bare_claim = not claim_match and (text_lower in {"claim ticket", "claim", "accept", "accept ticket", "🔵 claim ticket"} or "claim ticket" in text_lower)
+    is_bare_resolve = not resolve_match and (text_lower in {"resolve ticket", "resolve", "🟢 resolve ticket"} or "resolve ticket" in text_lower)
+
+    raw_ticket_arg = None
+    if is_bare_claim:
+        if admin.is_maintenance_admin:
+            m_assigned_subq = select(MaintenanceTicketAssignment.ticket_id)
+            latest_open_stmt = (
+                select(MaintenanceTicket)
+                .where(MaintenanceTicket.status_id == 1, MaintenanceTicket.ticket_id.not_in(m_assigned_subq))
+                .order_by(MaintenanceTicket.created_at.desc())
+            )
+            latest_t = (await session.execute(latest_open_stmt)).scalars().first()
+            if latest_t:
+                raw_ticket_arg = latest_t.ticket_number
+                claim_match = True
+        else:
+            it_assigned_subq = select(TicketAssignment.ticket_id)
+            latest_open_stmt = (
+                select(Ticket)
+                .where(Ticket.status_id == 1, Ticket.ticket_id.not_in(it_assigned_subq))
+                .order_by(Ticket.created_at.desc())
+            )
+            latest_t = (await session.execute(latest_open_stmt)).scalars().first()
+            if latest_t:
+                raw_ticket_arg = latest_t.ticket_number
+                claim_match = True
+
+    elif is_bare_resolve:
+        if admin.is_maintenance_admin:
+            m_asg_stmt = (
+                select(MaintenanceTicket)
+                .join(MaintenanceTicketAssignment, MaintenanceTicket.ticket_id == MaintenanceTicketAssignment.ticket_id)
+                .where(MaintenanceTicketAssignment.admin_id == admin.admin_id, MaintenanceTicket.status_id == 2)
+                .order_by(MaintenanceTicket.updated_at.desc())
+            )
+            assigned_t = (await session.execute(m_asg_stmt)).scalars().first()
+            if assigned_t:
+                raw_ticket_arg = assigned_t.ticket_number
+                resolve_match = True
+        else:
+            it_asg_stmt = (
+                select(Ticket)
+                .join(TicketAssignment, Ticket.ticket_id == TicketAssignment.ticket_id)
+                .where(TicketAssignment.admin_id == admin.admin_id, Ticket.status_id == 2)
+                .order_by(Ticket.updated_at.desc())
+            )
+            assigned_t = (await session.execute(it_asg_stmt)).scalars().first()
+            if assigned_t:
+                raw_ticket_arg = assigned_t.ticket_number
+                resolve_match = True
+
+    is_view_assigned = text_lower in {"cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets", "my assigned tickets", "my assigned ticket"} or text_strip.startswith("cmd_my_assigned_tickets")
+    is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
+    is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
+    raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
+    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
+        raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
+        text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
+        any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
+    )
+
+    state = await get_user_state(session, sender_phone)
+
+    # If admin is in active ticket creation flow (raise_ticket) AND not sending a greeting, admin command, or reset:
+    # Do NOT intercept description / text input as admin command! Let it flow to handle_flow!
+    if not (is_greeting or is_view_assigned or is_summary or is_raise_cmd):
+        if state and state.flow_name == "raise_ticket" and state.current_step in (
+            "awaiting_description", "awaiting_room_area", "awaiting_other_location",
+            "awaiting_category", "awaiting_subcategory", "awaiting_issue",
+            "select_priority", "select_safety_hazard", "awaiting_image", "select_location", "select_domain"
+        ):
+            if not (claim_match or resolve_match or text_strip.startswith(("cmd_", "btn_", "claim_", "resolve_")) or text_lower in {"reset", "cancel"}):
+                return False
+
+    # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
+    if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
+        if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
+            return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
+        # If admin is NOT in active draft or resolution flow, treating any general message as Admin Dashboard Greeting!
+        is_greeting = True
+
+    # Executive Observer check
+    if sender_phone in settings.executive_observer_phones and sender_phone != settings.master_admin_phone:
+        if claim_match or resolve_match:
+            await meta_api.send_text_message(
+                sender_phone,
+                "⚠️ *Access Denied*: You are registered as an Executive Observer. Only assigned Support Admins or Master Admin can resolve tickets."
+            )
+            return True
 
     # 1. HANDLE GREETING / MENU
     if is_greeting:
@@ -618,8 +619,10 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
     # 4. HANDLE RAISE TICKET
     if is_raise_cmd:
         await clear_user_state(session, sender_phone)
-        await meta_api.send_text_message(sender_phone, "🆕 Starting ticket creation flow...")
-        return False
+        from app.handlers.flow_handler import start_ticket_creation_flow
+        emp_record = (await session.execute(select(Employee).where(Employee.phone == sender_phone))).scalars().first()
+        await start_ticket_creation_flow(session, sender_phone, emp_record)
+        return True
 
     # 5. HANDLE RESOLVE BUTTON TAP OR COMMAND -> PROMPT FOR NOTES
     if not raw_ticket_arg:
