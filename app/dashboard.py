@@ -15,7 +15,7 @@ logger = logging.getLogger("dashboard")
 
 router = APIRouter()
 
-SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503", "263780099291", "26377133602"}
+SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503", "263780099291", "263771333602"}
 
 def format_duration(seconds: float) -> str:
     """Formats time duration in seconds to clean string (e.g. 1h 25m)."""

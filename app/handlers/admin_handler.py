@@ -492,7 +492,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                     selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.category),
                     selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.subcategory),
                     selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.issue_type),
-                    selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.priority)
+                    selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.priority),
+                    selectinload(MaintenanceTicketAssignment.ticket).selectinload(MaintenanceTicket.location)
                 )
                 .where(MaintenanceTicketAssignment.admin_id == admin.admin_id)
             )
