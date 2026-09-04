@@ -285,9 +285,32 @@ async def login_page(request: Request):
     return HTMLResponse(content=html_content)
 
 @router.post("/login")
-async def process_login(response: Response, username: str = Form(...), password: str = Form(...)):
-    """Verifies credentials, generates signed session token, and sets HttpOnly cookie."""
-    user = authenticate_user(username, password)
+async def process_login(request: Request, response: Response):
+    """Verifies credentials via JSON or Form, generates signed session token, and sets HttpOnly cookie."""
+    content_type = request.headers.get("content-type", "")
+    username = ""
+    password = ""
+    
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            username = body.get("username", "")
+            password = body.get("password", "")
+        except Exception:
+            pass
+    else:
+        try:
+            form = await request.form()
+            username = form.get("username", "")
+            password = form.get("password", "")
+        except Exception:
+            from urllib.parse import parse_qs
+            raw = (await request.body()).decode("utf-8", errors="ignore")
+            parsed = parse_qs(raw)
+            username = parsed.get("username", [""])[0]
+            password = parsed.get("password", [""])[0]
+
+    user = authenticate_user(str(username), str(password))
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
