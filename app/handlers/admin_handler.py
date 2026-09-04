@@ -407,10 +407,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 resolve_match = True
 
     is_view_assigned = text_lower in {"cmd_my_assigned_tickets", "assigned", "my tickets", "view tickets", "my assigned tickets", "my assigned ticket"} or text_strip.startswith("cmd_my_assigned_tickets")
+    is_unassigned_cmd = text_lower in {"cmd_unassigned_tickets", "unassigned", "unassigned tickets", "unassigned ticket", "unclaimed", "unclaimed tickets", "open tickets", "pending tickets"} or text_strip.startswith("cmd_unassigned_tickets")
     is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
     is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
     raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
-    is_greeting = not is_view_assigned and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
+    is_greeting = not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
         raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
         text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
         any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
@@ -420,7 +421,7 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
 
     # If admin is in active ticket creation flow (raise_ticket) AND not sending a greeting, admin command, or reset:
     # Do NOT intercept description / text input as admin command! Let it flow to handle_flow!
-    if not (is_greeting or is_view_assigned or is_summary or is_raise_cmd):
+    if not (is_greeting or is_view_assigned or is_unassigned_cmd or is_summary or is_raise_cmd):
         if state and state.flow_name == "raise_ticket" and state.current_step in (
             "awaiting_description", "awaiting_room_area", "awaiting_other_location",
             "awaiting_category", "awaiting_subcategory", "awaiting_issue",
@@ -430,7 +431,7 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 return False
 
     # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
-    if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_summary and not is_raise_cmd:
+    if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd:
         if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
             return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
         # If admin is NOT in active draft or resolution flow, treating any general message as Admin Dashboard Greeting!
@@ -460,8 +461,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
         footer = "Tap a button to proceed"
         buttons = [
-            {"id": "cmd_my_assigned_tickets", "title": "📋 My Assigned Tickets"},
-            {"id": "cmd_admin_summary_report", "title": "📊 Summary Report"},
+            {"id": "cmd_my_assigned_tickets", "title": "📋 My Assigned"},
+            {"id": "cmd_unassigned_tickets", "title": "📬 Unassigned"},
             {"id": "cmd_raise_ticket", "title": "➕ Create Ticket"}
         ]
         await meta_api.send_button_message(
@@ -580,7 +581,155 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
                 logger.error(f"Error sending ticket card for {t.ticket_number}: {e}", exc_info=True)
         return True
 
-    # 3. HANDLE SUMMARY REPORT
+    # 3. HANDLE UNASSIGNED TICKETS
+    if is_unassigned_cmd:
+        await clear_user_state(session, sender_phone)
+        
+        unassigned_maint = []
+        unassigned_it = []
+
+        # 1. Projects / Maintenance Domain Unassigned Tickets
+        if admin.is_maintenance_admin or admin.is_master_admin:
+            m_assigned_subq = select(MaintenanceTicketAssignment.ticket_id)
+            m_stmt = (
+                select(MaintenanceTicket)
+                .options(
+                    selectinload(MaintenanceTicket.employee).selectinload(Employee.department),
+                    selectinload(MaintenanceTicket.employee).selectinload(Employee.location),
+                    selectinload(MaintenanceTicket.category),
+                    selectinload(MaintenanceTicket.subcategory),
+                    selectinload(MaintenanceTicket.issue_type),
+                    selectinload(MaintenanceTicket.priority),
+                    selectinload(MaintenanceTicket.location)
+                )
+                .where(
+                    MaintenanceTicket.status_id == 1,
+                    MaintenanceTicket.ticket_id.not_in(m_assigned_subq)
+                )
+                .order_by(MaintenanceTicket.created_at.asc())
+            )
+            m_res = await session.execute(m_stmt)
+            unassigned_maint = m_res.scalars().all()
+
+        # 2. IT Domain Unassigned Tickets (Only if IT Admin or Master Admin)
+        if not admin.is_maintenance_admin or admin.is_master_admin:
+            it_assigned_subq = select(TicketAssignment.ticket_id)
+            it_stmt = (
+                select(Ticket)
+                .options(
+                    selectinload(Ticket.employee).selectinload(Employee.department),
+                    selectinload(Ticket.employee).selectinload(Employee.location),
+                    selectinload(Ticket.category),
+                    selectinload(Ticket.subcategory),
+                    selectinload(Ticket.issue_type),
+                    selectinload(Ticket.priority),
+                    selectinload(Ticket.location)
+                )
+                .where(
+                    Ticket.status_id == 1,
+                    Ticket.ticket_id.not_in(it_assigned_subq)
+                )
+                .order_by(Ticket.created_at.asc())
+            )
+            it_res = await session.execute(it_stmt)
+            unassigned_it = it_res.scalars().all()
+
+        total_unassigned = len(unassigned_maint) + len(unassigned_it)
+        if total_unassigned == 0:
+            if admin.is_maintenance_admin:
+                dept_label = "Building Projects"
+            elif admin.is_master_admin:
+                dept_label = "all departments"
+            else:
+                dept_label = "IT Support"
+            no_msg = f"📬 *UNASSIGNED TICKETS (0)*\n\nHello *{admin.full_name}*,\nThere are currently *0 unassigned {dept_label} tickets*. All open tickets have been claimed!"
+            await meta_api.send_text_message(sender_phone, no_msg)
+            return True
+
+        header_notice = (
+            f"📬 *UNASSIGNED OPEN TICKETS ({total_unassigned})*\n\n"
+            f"Hello *{admin.full_name}*, here are the open ticket(s) currently awaiting claim:\n\n"
+            f"Tap **[ ✋ Claim Ticket ]** to assign a ticket to yourself:"
+        )
+        await meta_api.send_text_message(sender_phone, header_notice)
+
+        # Deliver Projects Unassigned Tickets
+        for t in unassigned_maint:
+            emp_name = t.employee.full_name if t.employee else "Staff Reporter"
+            emp_phone = t.employee.phone if t.employee else ""
+            cat_name = t.category.category_name if t.category else "Doors, Windows & Locks"
+            sub_name = t.subcategory.subcategory_name if t.subcategory else "Door Latch & Hinges"
+            issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
+            priority_name = t.priority.priority_name if t.priority else "Medium"
+            loc_name = t.location.location_name if t.location else (t.employee.location.location_name if t.employee and t.employee.location else "On-Site")
+            room_area = t.room_area or "N/A"
+
+            hazard_flag = "⚠️ URGENT SAFETY HAZARD | " if t.is_safety_hazard else ""
+            header = f"🚨 UNASSIGNED 🏗️ PROJECTS TICKET"
+            body = (
+                f"{hazard_flag}🎫 *Ticket ID:* `{t.ticket_number}`\n"
+                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                f"🏢 *Location:* {loc_name}\n"
+                f"📍 *Room / Area:* {room_area}\n"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"🚨 *Priority:* {priority_name}\n"
+                f"📝 *Description:* {t.description}"
+            )
+            footer = "Tap button below to claim ticket"
+            buttons = [
+                {"id": f"claim_{t.ticket_number}", "title": "🔵 Claim Ticket"},
+                {"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=sender_phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer,
+                image_id=t.image_id
+            )
+            await asyncio.sleep(0.5)
+
+        # Deliver IT Support Unassigned Tickets
+        for t in unassigned_it:
+            emp_name = t.employee.full_name if t.employee else "Staff Reporter"
+            emp_phone = t.employee.phone if t.employee else ""
+            cat_name = t.category.category_name if t.category else "IT Equipment"
+            sub_name = t.subcategory.subcategory_name if t.subcategory else "Computer & Laptop"
+            issue_name = t.issue_type.issue_name if t.issue_type else "IT Issue"
+            priority_name = t.priority.priority_name if t.priority else "Medium"
+            loc_name = t.location.location_name if t.location else (t.employee.location.location_name if t.employee and t.employee.location else "")
+            loc_str = f"🏢 *Location:* {loc_name}\n" if loc_name else ""
+
+            header = f"🚨 UNASSIGNED 💻 IT SUPPORT TICKET"
+            body = (
+                f"🎫 *Ticket ID:* `{t.ticket_number}`\n"
+                f"👤 *Reporter:* {emp_name} (`+{emp_phone}`)\n"
+                f"{loc_str}"
+                f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+                f"⚙️ *Issue:* {issue_name}\n"
+                f"🚨 *Priority:* {priority_name}\n"
+                f"📝 *Description:* {t.description}"
+            )
+            footer = "Tap button below to claim ticket"
+            buttons = [
+                {"id": f"claim_{t.ticket_number}", "title": "✋ Claim Ticket"},
+                {"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=sender_phone,
+                body_text=body,
+                buttons=buttons,
+                header_text=header,
+                footer_text=footer,
+                image_id=t.image_id
+            )
+            await asyncio.sleep(0.5)
+
+        return True
+
+    # 4. HANDLE SUMMARY REPORT
     if is_summary:
         await clear_user_state(session, sender_phone)
         total = 0
