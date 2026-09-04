@@ -21,7 +21,7 @@ from app.auth import (
 logger = logging.getLogger("dashboard")
 router = APIRouter()
 
-SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503", "263780099291", "263771333602"}
+IT_SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
 
 def format_duration(seconds: float) -> str:
     """Formats time duration in seconds to clean string (e.g. 1h 25m)."""
@@ -218,10 +218,10 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized session. Please log in.")
 
-    # 1. Fetch IT Support Admins
+    # 1. Fetch IT Support Admins (Kevin, Ellias, Faisal)
     admins_stmt = select(SupportAdmin).where(
         SupportAdmin.active == True,
-        SupportAdmin.phone.in_(SUPPORT_ADMIN_PHONES)
+        SupportAdmin.phone.in_(IT_SUPPORT_ADMIN_PHONES)
     )
     support_admins = (await db.execute(admins_stmt)).scalars().all()
 
@@ -602,29 +602,7 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- IT Admin SLA Cards -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
-                <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-                        <span>👨‍💻</span> IT Support Technicians Performance & SLA
-                    </h2>
-                    <span class="text-xs font-semibold text-slate-400">Real-Time Resolution Metrics</span>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="it-admin-cards"></div>
-            </div>
-
-            <!-- Category & Issue Breakdown Tree -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
-                <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-                        <span>🌳</span> Category, Subcategory & Specific Issue Breakdown
-                    </h2>
-                    <span class="text-xs font-semibold text-slate-400">Hierarchical Fault Occurrences</span>
-                </div>
-                <div id="it-category-tree" class="space-y-3"></div>
-            </div>
-
-            <!-- IT Table Section -->
+            <!-- IT Table Section (Main tickets info first) -->
             <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
                 <!-- Controls & Filters -->
                 <div class="p-5 border-b border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4 bg-slate-50/50">
@@ -672,6 +650,28 @@ async def dashboard_view(request: Request):
                         <tbody id="it-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
                     </table>
                 </div>
+            </div>
+
+            <!-- IT Admin SLA Cards (Kevin Chikati, Ellias Chigwida, Faisal) -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                        <span>👨‍💻</span> IT Support Technicians Performance & SLA
+                    </h2>
+                    <span class="text-xs font-semibold text-slate-400">Real-Time Resolution Metrics</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="it-admin-cards"></div>
+            </div>
+
+            <!-- Category & Issue Breakdown Tree -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                        <span>🌳</span> Category, Subcategory & Specific Issue Breakdown
+                    </h2>
+                    <span class="text-xs font-semibold text-slate-400">Hierarchical Fault Occurrences</span>
+                </div>
+                <div id="it-category-tree" class="space-y-3"></div>
             </div>
         </div>
 
