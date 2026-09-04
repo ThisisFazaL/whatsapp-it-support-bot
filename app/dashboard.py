@@ -1,6 +1,6 @@
 import logging
 import datetime
-from fastapi import APIRouter, Depends, Request, Response, Form, HTTPException, status
+from fastapi import APIRouter, Depends, Request, Response, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -45,7 +45,7 @@ def format_duration(seconds: float) -> str:
 # -------------------------------------------------------------
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    """Renders sleek glassmorphic login page with Tagoneswa branding."""
+    """Renders clean white-themed login page with Tagoneswa branding."""
     user = get_current_user_from_request(request)
     if user:
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
@@ -55,179 +55,46 @@ async def login_page(request: Request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tagoneswa Enterprise Portal — Secure Login</title>
+    <title>Tagoneswa Operations Portal — Secure Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --primary: #2563eb;
-            --primary-dark: #1d4ed8;
-            --bg-dark: #090d16;
-            --card-bg: rgba(17, 24, 39, 0.85);
-            --border-color: rgba(255, 255, 255, 0.1);
-            --text-main: #f3f4f6;
-            --text-muted: #9ca3af;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
-        body {
-            background: radial-gradient(circle at 50% 20%, #1e1b4b 0%, #090d16 80%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            color: var(--text-main);
-        }
-        .login-card {
-            background: var(--card-bg);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--border-color);
-            border-radius: 24px;
-            padding: 40px;
-            width: 100%;
-            max-width: 440px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
-            animation: fadeIn 0.5s ease-out;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .brand-header {
-            text-align: center;
-            margin-bottom: 32px;
-        }
-        .brand-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(37, 99, 235, 0.15);
-            border: 1px solid rgba(37, 99, 235, 0.3);
-            color: #60a5fa;
-            padding: 6px 14px;
-            border-radius: 9999px;
-            font-size: 0.82rem;
-            font-weight: 600;
-            margin-bottom: 16px;
-        }
-        .brand-title {
-            font-size: 1.65rem;
-            font-weight: 800;
-            letter-spacing: -0.02em;
-            background: linear-gradient(135deg, #ffffff 0%, #94a3b8 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 6px;
-        }
-        .brand-desc {
-            color: var(--text-muted);
-            font-size: 0.88rem;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        .form-label {
-            display: block;
-            font-size: 0.84rem;
-            font-weight: 600;
-            color: #e2e8f0;
-            margin-bottom: 8px;
-        }
-        .input-wrapper {
-            position: relative;
-        }
-        .form-input {
-            width: 100%;
-            background: rgba(15, 23, 42, 0.7);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 12px;
-            padding: 13px 16px;
-            color: #ffffff;
-            font-size: 0.95rem;
-            transition: all 0.2s;
-        }
-        .form-input:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
-            background: rgba(15, 23, 42, 0.95);
-        }
-        .toggle-pw {
-            position: absolute;
-            right: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 0.85rem;
-        }
-        .submit-btn {
-            width: 100%;
-            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-            color: #ffffff;
-            border: none;
-            border-radius: 12px;
-            padding: 14px;
-            font-size: 0.98rem;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.2s;
-            box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.4);
-            margin-top: 8px;
-        }
-        .submit-btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 14px 20px -3px rgba(37, 99, 235, 0.5);
-        }
-        .submit-btn:active { transform: translateY(0); }
-        .alert-error {
-            background: rgba(239, 68, 68, 0.15);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #f87171;
-            padding: 12px 16px;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            margin-bottom: 20px;
-            display: none;
-        }
-        .card-footer {
-            margin-top: 28px;
-            text-align: center;
-            font-size: 0.78rem;
-            color: #64748b;
-        }
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
     </style>
 </head>
-<body>
-    <div class="login-card">
-        <div class="brand-header">
-            <div class="brand-badge">🔒 Tagoneswa Security</div>
-            <h1 class="brand-title">Enterprise Console</h1>
-            <p class="brand-desc">IT Support • Building Projects • Fleet Workshop</p>
+<body class="bg-slate-100 text-slate-800 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white border border-slate-200 rounded-3xl shadow-xl w-full max-w-md p-8 md:p-10">
+        <div class="text-center mb-8">
+            <div class="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 px-3.5 py-1.5 rounded-full text-xs font-bold mb-4">
+                🔒 Enterprise Security
+            </div>
+            <h1 class="text-2xl font-extrabold text-slate-900 tracking-tight">Tagoneswa Portal</h1>
+            <p class="text-slate-500 text-sm mt-1">IT Support • Building Projects • Fleet Workshop</p>
         </div>
 
-        <div id="errorBox" class="alert-error"></div>
+        <div id="errorBox" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm mb-6 font-medium"></div>
 
-        <form id="loginForm">
-            <div class="form-group">
-                <label class="form-label" for="username">Username</label>
-                <input class="form-input" type="text" id="username" name="username" placeholder="e.g. admin, logistics" required autofocus autocomplete="username">
+        <form id="loginForm" class="space-y-5">
+            <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2" for="username">Username</label>
+                <input class="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition" type="text" id="username" name="username" placeholder="e.g. admin, logistics" required autofocus autocomplete="username">
             </div>
 
-            <div class="form-group">
-                <label class="form-label" for="password">Password</label>
-                <div class="input-wrapper">
-                    <input class="form-input" type="password" id="password" name="password" placeholder="••••••••••••" required autocomplete="current-password">
-                    <button type="button" class="toggle-pw" onclick="togglePassword()">Show</button>
+            <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2" for="password">Password</label>
+                <div class="relative">
+                    <input class="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition" type="password" id="password" name="password" placeholder="••••••••••••" required autocomplete="current-password">
+                    <button type="button" class="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 hover:text-slate-600" onclick="togglePassword()">Show</button>
                 </div>
             </div>
 
-            <button type="submit" class="submit-btn" id="loginBtn">Authenticate & Enter →</button>
+            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-md transition duration-150 text-sm flex items-center justify-center gap-2" id="loginBtn">
+                Sign In to Dashboard →
+            </button>
         </form>
 
-        <div class="card-footer">
+        <div class="mt-8 text-center text-xs text-slate-400 border-t border-slate-100 pt-6">
             Tagoneswa Holdings • Internal Management System
         </div>
     </div>
@@ -235,7 +102,7 @@ async def login_page(request: Request):
     <script>
         function togglePassword() {
             const pw = document.getElementById('password');
-            const btn = document.querySelector('.toggle-pw');
+            const btn = event.target;
             if (pw.type === 'password') {
                 pw.type = 'text';
                 btn.textContent = 'Hide';
@@ -249,9 +116,9 @@ async def login_page(request: Request):
             e.preventDefault();
             const errBox = document.getElementById('errorBox');
             const btn = document.getElementById('loginBtn');
-            errBox.style.display = 'none';
+            errBox.classList.add('hidden');
             btn.disabled = true;
-            btn.textContent = 'Verifying...';
+            btn.textContent = 'Authenticating...';
 
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value.trim();
@@ -259,24 +126,24 @@ async def login_page(request: Request):
             try {
                 const res = await fetch('/login', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({ username, password })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
                 });
 
                 const data = await res.json();
                 if (res.ok && data.status === 'success') {
                     window.location.href = data.redirect || '/dashboard';
                 } else {
-                    errBox.textContent = data.detail || 'Invalid username or password. Please try again.';
-                    errBox.style.display = 'block';
+                    errBox.textContent = data.detail || 'Invalid credentials. Please verify your password.';
+                    errBox.classList.remove('hidden');
                     btn.disabled = false;
-                    btn.textContent = 'Authenticate & Enter →';
+                    btn.textContent = 'Sign In to Dashboard →';
                 }
             } catch (err) {
-                errBox.textContent = 'Connection error. Please check your network.';
-                errBox.style.display = 'block';
+                errBox.textContent = 'Network error. Please check your connection.';
+                errBox.classList.remove('hidden');
                 btn.disabled = false;
-                btn.textContent = 'Authenticate & Enter →';
+                btn.textContent = 'Sign In to Dashboard →';
             }
         });
     </script>
@@ -318,18 +185,15 @@ async def process_login(request: Request, response: Response):
         )
 
     token = create_session_token(user["username"], user["role"])
-    
-    # Set HttpOnly, Secure cookie
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="lax",
-        secure=False # Set to True if strictly HTTPS
+        secure=False
     )
 
-    # Determine default redirect tab
     default_tab = "logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it")
     return {"status": "success", "redirect": f"/dashboard#{default_tab}", "user": user["name"], "role": user["role"]}
 
@@ -346,7 +210,7 @@ async def logout(response: Response):
 async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Returns complete live operational metrics partitioned cleanly across:
-    1. IT Support
+    1. IT Support (with Admin SLA & Category Issue Tree)
     2. Building Projects & Maintenance
     3. Workshop & Fleet Logistics
     """
@@ -416,11 +280,12 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         parts_map[p.ticket_id].append(p)
 
     # -----------------------------
-    # Process IT Support Records
+    # Process IT Support Records & Category Tree Map
     # -----------------------------
     it_records = []
     it_stats = {"total": len(it_tickets), "open": 0, "in_progress": 0, "resolved": 0, "closed": 0, "avg_resolution": "--"}
     it_res_times = []
+    category_tree_map = {}
     admin_stats_map = {
         sa.admin_id: {
             "admin_id": sa.admin_id, "full_name": sa.full_name, "phone": sa.phone,
@@ -435,6 +300,22 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         elif s_id == 2: it_stats["in_progress"] += 1
         elif s_id == 3: it_stats["resolved"] += 1
         elif s_id == 4: it_stats["closed"] += 1
+
+        cat_name = t.category.category_name if t.category else "Hardware & Devices"
+        sub_name = t.subcategory.subcategory_name if t.subcategory else "General Facilities"
+        issue_name = t.issue_type.issue_name if t.issue_type else "Custom Support Issue"
+
+        if cat_name not in category_tree_map:
+            category_tree_map[cat_name] = {"count": 0, "subcategories": {}}
+        category_tree_map[cat_name]["count"] += 1
+
+        if sub_name not in category_tree_map[cat_name]["subcategories"]:
+            category_tree_map[cat_name]["subcategories"][sub_name] = {"count": 0, "issues": {}}
+        category_tree_map[cat_name]["subcategories"][sub_name]["count"] += 1
+
+        if issue_name not in category_tree_map[cat_name]["subcategories"][sub_name]["issues"]:
+            category_tree_map[cat_name]["subcategories"][sub_name]["issues"][issue_name] = 0
+        category_tree_map[cat_name]["subcategories"][sub_name]["issues"][issue_name] += 1
 
         res_sec = None
         solving_str = "Active"
@@ -464,9 +345,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "employee_phone": emp.phone if emp else "",
             "department": emp.department.department_name if emp and emp.department else "General",
             "location": emp.location.location_name if emp and emp.location else "Headquarters",
-            "category": t.category.category_name if t.category else "Hardware",
-            "subcategory": t.subcategory.subcategory_name if t.subcategory else "General",
-            "issue": t.issue_type.issue_name if t.issue_type else "Custom Issue",
+            "category": cat_name,
+            "subcategory": sub_name,
+            "issue": issue_name,
             "priority": t.priority.priority_name if t.priority else "Medium",
             "status": t.status.status_name if t.status else "Open",
             "description": t.description,
@@ -481,10 +362,31 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
     it_admin_performance = []
     for a_id, ast in admin_stats_map.items():
         avg_s = sum(ast["res_list"]) / len(ast["res_list"]) if ast["res_list"] else 0
+        total_a = ast["total_assigned"]
+        res_count = ast["resolved_count"]
+        sla_pct = int((res_count / total_a) * 100) if total_a > 0 else 100
         it_admin_performance.append({
             "name": ast["full_name"], "phone": ast["phone"],
-            "pending": ast["pending_count"], "resolved": ast["resolved_count"],
-            "total": ast["total_assigned"], "avg_time": format_duration(avg_s) if avg_s > 0 else "--"
+            "pending": ast["pending_count"], "resolved": res_count,
+            "total": total_a, "sla_pct": sla_pct,
+            "avg_time": format_duration(avg_s) if avg_s > 0 else "--"
+        })
+
+    # Format Category Tree List
+    category_tree_list = []
+    for c_name, c_data in category_tree_map.items():
+        sub_list = []
+        for s_name, s_data in c_data["subcategories"].items():
+            iss_list = [{"issue_name": ik, "count": iv} for ik, iv in s_data["issues"].items()]
+            sub_list.append({
+                "subcategory_name": s_name,
+                "count": s_data["count"],
+                "issues": iss_list
+            })
+        category_tree_list.append({
+            "category_name": c_name,
+            "count": c_data["count"],
+            "subcategories": sub_list
         })
 
     # -----------------------------
@@ -583,7 +485,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         "it": {
             "stats": it_stats,
             "records": it_records,
-            "admins": it_admin_performance
+            "admins": it_admin_performance,
+            "category_tree": category_tree_list
         },
         "projects": {
             "stats": maint_stats,
@@ -601,7 +504,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
 # -------------------------------------------------------------
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_view(request: Request):
-    """Renders the high-end 3-Domain Operations Dashboard."""
+    """Renders the executive white-themed 3-Domain Operations Dashboard."""
     user = get_current_user_from_request(request)
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -611,540 +514,332 @@ async def dashboard_view(request: Request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tagoneswa Operations Console</title>
+    <title>Tagoneswa Multi-Domain Operations Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg-body: #0a0e1a;
-            --bg-card: rgba(17, 24, 39, 0.75);
-            --bg-card-hover: rgba(30, 41, 59, 0.85);
-            --border: rgba(255, 255, 255, 0.08);
-            --border-highlight: rgba(59, 130, 246, 0.4);
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-            --primary: #3b82f6;
-            --accent-green: #10b981;
-            --accent-amber: #f59e0b;
-            --accent-purple: #8b5cf6;
-            --accent-rose: #f43f5e;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
-        body {
-            background-color: var(--bg-body);
-            background-image: 
-                radial-gradient(at 10% 10%, rgba(37, 99, 235, 0.12) 0px, transparent 50%),
-                radial-gradient(at 90% 90%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
-            color: var(--text-main);
-            min-height: 100vh;
-            padding: 24px;
-        }
-        .container {
-            max-width: 1600px;
-            margin: 0 auto;
-        }
-        /* Top Navigation & Domain Switcher */
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: var(--bg-card);
-            backdrop-filter: blur(16px);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 16px 24px;
-            margin-bottom: 24px;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-        }
-        .brand-group {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-        .brand-logo {
-            width: 44px;
-            height: 44px;
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.4rem;
-            box-shadow: 0 8px 16px -4px rgba(37, 99, 235, 0.5);
-        }
-        .brand-text h1 {
-            font-size: 1.25rem;
-            font-weight: 800;
-            letter-spacing: -0.02em;
-        }
-        .brand-text p {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-
-        /* 3-Domain Switcher */
-        .domain-switcher {
-            display: flex;
-            background: rgba(15, 23, 42, 0.8);
-            border: 1px solid var(--border);
-            padding: 5px;
-            border-radius: 14px;
-            gap: 4px;
-        }
-        .domain-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            padding: 10px 20px;
-            border-radius: 10px;
-            font-size: 0.88rem;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .domain-btn:hover {
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        .tab-btn.active {
+            background-color: #2563eb;
             color: #ffffff;
-            background: rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         }
-        .domain-btn.active {
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
-            color: #ffffff;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
-        }
-
-        .user-nav {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        .user-pill {
-            text-align: right;
-        }
-        .user-name {
-            font-size: 0.88rem;
-            font-weight: 700;
-            color: #ffffff;
-        }
-        .user-role {
-            font-size: 0.75rem;
-            color: var(--accent-green);
-        }
-        .logout-btn {
-            background: rgba(239, 68, 68, 0.15);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #f87171;
-            padding: 8px 16px;
-            border-radius: 10px;
-            font-size: 0.82rem;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            transition: all 0.2s;
-        }
-        .logout-btn:hover {
-            background: rgba(239, 68, 68, 0.25);
-            color: #ffffff;
-        }
-
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 20px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: var(--bg-card);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--border);
-            border-radius: 18px;
-            padding: 20px 24px;
-            position: relative;
-            overflow: hidden;
-            transition: transform 0.2s;
-        }
-        .stat-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(255, 255, 255, 0.15);
-        }
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; height: 3px;
-        }
-        .stat-card.blue::before { background: #3b82f6; }
-        .stat-card.amber::before { background: #f59e0b; }
-        .stat-card.purple::before { background: #8b5cf6; }
-        .stat-card.green::before { background: #10b981; }
-        .stat-card.rose::before { background: #f43f5e; }
-
-        .stat-label {
-            font-size: 0.82rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            margin-bottom: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .stat-value {
-            font-size: 2rem;
-            font-weight: 800;
-            letter-spacing: -0.02em;
-            color: #ffffff;
-        }
-
-        /* Team Performance Section */
-        .section-title {
-            font-size: 1.1rem;
-            font-weight: 800;
-            margin-bottom: 14px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .team-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .team-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 16px 20px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        .team-info h4 {
-            font-size: 0.95rem;
-            font-weight: 700;
-        }
-        .team-info p {
-            font-size: 0.78rem;
-            color: var(--text-muted);
-        }
-        .team-metrics {
-            text-align: right;
-        }
-        .team-badge {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            background: rgba(16, 185, 129, 0.15);
-            color: #34d399;
-        }
-
-        /* Filter Controls */
-        .controls-bar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 14px 20px;
-            margin-bottom: 20px;
-        }
-        .search-input {
-            background: rgba(15, 23, 42, 0.8);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px 16px;
-            color: #ffffff;
-            font-size: 0.88rem;
-            width: 320px;
-        }
-        .search-input:focus {
-            outline: none;
-            border-color: #3b82f6;
-        }
-        .filter-select {
-            background: rgba(15, 23, 42, 0.8);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px 16px;
-            color: #ffffff;
-            font-size: 0.88rem;
-            cursor: pointer;
-        }
-
-        /* Data Tables */
-        .table-container {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            overflow: hidden;
-            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.4);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            text-align: left;
-        }
-        th {
-            background: rgba(15, 23, 42, 0.9);
-            padding: 14px 18px;
-            font-size: 0.78rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 1px solid var(--border);
-        }
-        td {
-            padding: 16px 18px;
-            font-size: 0.88rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-            color: #cbd5e1;
-        }
-        tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
-            color: #ffffff;
-        }
-        .ticket-badge {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.82rem;
-            font-weight: 700;
-            color: #60a5fa;
-            background: rgba(37, 99, 235, 0.15);
-            padding: 4px 8px;
-            border-radius: 6px;
-            border: 1px solid rgba(37, 99, 235, 0.3);
-        }
-        .status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 9999px;
-            font-size: 0.78rem;
-            font-weight: 700;
-        }
-        .status-open { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-        .status-progress { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
-        .status-resolved { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-        .status-closed { background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3); }
-        .status-rework { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-
         .domain-view { display: none; }
-        .domain-view.active { display: block; animation: fadeIn 0.3s ease-out; }
+        .domain-view.active { display: block; }
     </style>
 </head>
-<body>
-    <div class="container">
-        <!-- Header -->
-        <header class="header">
-            <div class="brand-group">
-                <div class="brand-logo">🚚</div>
-                <div class="brand-text">
-                    <h1>Tagoneswa Console</h1>
-                    <p>Enterprise Multi-Domain Operations</p>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+    <!-- Top Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row items-center justify-between gap-4">
+            <!-- Brand -->
+            <div class="flex items-center gap-3 w-full md:w-auto justify-between md:justify-start">
+                <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white text-xl font-bold shadow-md shadow-blue-500/20">
+                    🚚
+                </div>
+                <div>
+                    <h1 class="text-lg font-extrabold text-slate-900 tracking-tight leading-none">Tagoneswa Operations</h1>
+                    <p class="text-xs text-slate-500 font-medium mt-0.5">Multi-Domain Executive Console</p>
                 </div>
             </div>
 
             <!-- 3 Domain Switcher -->
-            <nav class="domain-switcher">
-                <button class="domain-btn active" id="btn-tab-it" onclick="switchDomain('it')">
-                    💻 IT Support
+            <nav class="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 w-full md:w-auto justify-center">
+                <button id="btn-tab-it" onclick="switchDomain('it')" class="tab-btn active px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5">
+                    <span>💻</span> IT Support
                 </button>
-                <button class="domain-btn" id="btn-tab-projects" onclick="switchDomain('projects')">
-                    🏗️ Building Projects
+                <button id="btn-tab-projects" onclick="switchDomain('projects')" class="tab-btn px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5">
+                    <span>🏗️</span> Building Projects
                 </button>
-                <button class="domain-btn" id="btn-tab-logistics" onclick="switchDomain('logistics')">
-                    🚚 Workshop & Fleet
+                <button id="btn-tab-logistics" onclick="switchDomain('logistics')" class="tab-btn px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5">
+                    <span>🚚</span> Workshop & Fleet
                 </button>
             </nav>
 
-            <div class="user-nav">
-                <div class="user-pill">
-                    <div class="user-name" id="userDisplayName">Authorized User</div>
-                    <div class="user-role" id="userRoleBadge">Online</div>
+            <!-- User Pill & Logout -->
+            <div class="flex items-center gap-4 w-full md:w-auto justify-end">
+                <div class="text-right hidden sm:block">
+                    <div class="text-xs font-bold text-slate-900" id="userDisplayName">Administrator</div>
+                    <div class="text-[11px] font-semibold text-emerald-600" id="userRoleBadge">Online</div>
                 </div>
-                <a href="/logout" class="logout-btn">Log Out</a>
+                <a href="/logout" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-bold px-3.5 py-2 rounded-lg transition">
+                    Log Out
+                </a>
             </div>
-        </header>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
         <!-- ========================================================= -->
         <!-- TAB 1: IT SUPPORT -->
         <!-- ========================================================= -->
-        <div id="view-it" class="domain-view active">
-            <div class="stats-grid">
-                <div class="stat-card blue">
-                    <div class="stat-label">Total IT Tickets</div>
-                    <div class="stat-value" id="it-stat-total">0</div>
+        <div id="view-it" class="domain-view active space-y-8">
+            <!-- IT Stats -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Total IT Tickets</div>
+                    <div class="text-3xl font-extrabold text-slate-900 mt-2" id="it-stat-total">0</div>
+                    <div class="text-xs text-blue-600 font-semibold mt-1">All Recorded IT Defect Logs</div>
                 </div>
-                <div class="stat-card amber">
-                    <div class="stat-label">Open / In Progress</div>
-                    <div class="stat-value" id="it-stat-active">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Open & In Progress</div>
+                    <div class="text-3xl font-extrabold text-amber-500 mt-2" id="it-stat-active">0</div>
+                    <div class="text-xs text-amber-600 font-semibold mt-1">Requiring IT Action</div>
                 </div>
-                <div class="stat-card green">
-                    <div class="stat-label">Resolved / Closed</div>
-                    <div class="stat-value" id="it-stat-resolved">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Resolved & Closed</div>
+                    <div class="text-3xl font-extrabold text-emerald-500 mt-2" id="it-stat-resolved">0</div>
+                    <div class="text-xs text-emerald-600 font-semibold mt-1">Successfully Solved</div>
                 </div>
-                <div class="stat-card purple">
-                    <div class="stat-label">Avg Resolution Time</div>
-                    <div class="stat-value" id="it-stat-avg-time">--</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Avg Resolution Time</div>
+                    <div class="text-3xl font-extrabold text-purple-600 mt-2" id="it-stat-avg-time">--</div>
+                    <div class="text-xs text-purple-600 font-semibold mt-1">SLA Speed Benchmark</div>
                 </div>
             </div>
 
-            <div class="section-title">👨‍💻 IT Support Admins Performance</div>
-            <div class="team-grid" id="it-admin-cards"></div>
-
-            <div class="controls-bar">
-                <input type="text" class="search-input" id="it-search" placeholder="🔍 Search employee, ticket #, issue..." oninput="filterITTable()">
-                <select class="filter-select" id="it-status-filter" onchange="filterITTable()">
-                    <option value="ALL">All Statuses</option>
-                    <option value="Open">Open</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Resolved">Resolved</option>
-                    <option value="Closed">Closed</option>
-                </select>
+            <!-- IT Admin SLA Cards -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                        <span>👨‍💻</span> IT Support Technicians Performance & SLA
+                    </h2>
+                    <span class="text-xs font-semibold text-slate-400">Real-Time Resolution Metrics</span>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4" id="it-admin-cards"></div>
             </div>
 
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Ticket #</th>
-                            <th>Employee</th>
-                            <th>Department & Location</th>
-                            <th>Category & Issue</th>
-                            <th>Status</th>
-                            <th>Assigned Admin</th>
-                            <th>Created</th>
-                            <th>Solving Time</th>
-                        </tr>
-                    </thead>
-                    <tbody id="it-table-body"></tbody>
-                </table>
+            <!-- Category & Issue Breakdown Tree -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                        <span>🌳</span> Category, Subcategory & Specific Issue Breakdown
+                    </h2>
+                    <span class="text-xs font-semibold text-slate-400">Hierarchical Fault Occurrences</span>
+                </div>
+                <div id="it-category-tree" class="space-y-3"></div>
+            </div>
+
+            <!-- IT Table Section -->
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <!-- Controls & Filters -->
+                <div class="p-5 border-b border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4 bg-slate-50/50">
+                    <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                        <input type="text" id="it-search" placeholder="🔍 Search employee, ticket #, issue..." oninput="filterITTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        
+                        <!-- Admin Filter -->
+                        <select id="it-admin-filter" onchange="filterITTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Support Admins</option>
+                        </select>
+
+                        <!-- Status Filter -->
+                        <select id="it-status-filter" onchange="filterITTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Statuses</option>
+                            <option value="Open">Open</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Resolved">Resolved</option>
+                            <option value="Closed">Closed</option>
+                        </select>
+                    </div>
+
+                    <!-- Dynamic Count Badge -->
+                    <div class="flex items-center gap-2">
+                        <span id="it-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                            Showing 0 tickets
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                            <tr>
+                                <th class="px-5 py-3.5">Ticket #</th>
+                                <th class="px-5 py-3.5">Employee</th>
+                                <th class="px-5 py-3.5">Department & Location</th>
+                                <th class="px-5 py-3.5">Category & Issue</th>
+                                <th class="px-5 py-3.5">Priority</th>
+                                <th class="px-5 py-3.5">Status</th>
+                                <th class="px-5 py-3.5">Assigned Admin</th>
+                                <th class="px-5 py-3.5">Solving Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="it-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
         <!-- ========================================================= -->
         <!-- TAB 2: BUILDING PROJECTS -->
         <!-- ========================================================= -->
-        <div id="view-projects" class="domain-view">
-            <div class="stats-grid">
-                <div class="stat-card blue">
-                    <div class="stat-label">Total Projects Tickets</div>
-                    <div class="stat-value" id="proj-stat-total">0</div>
+        <div id="view-projects" class="domain-view space-y-8">
+            <!-- Projects Stats -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Total Project Tickets</div>
+                    <div class="text-3xl font-extrabold text-slate-900 mt-2" id="proj-stat-total">0</div>
+                    <div class="text-xs text-blue-600 font-semibold mt-1">Building & Maintenance</div>
                 </div>
-                <div class="stat-card amber">
-                    <div class="stat-label">Active Work Orders</div>
-                    <div class="stat-value" id="proj-stat-active">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Active Work Orders</div>
+                    <div class="text-3xl font-extrabold text-amber-500 mt-2" id="proj-stat-active">0</div>
+                    <div class="text-xs text-amber-600 font-semibold mt-1">On-Site Work in Progress</div>
                 </div>
-                <div class="stat-card green">
-                    <div class="stat-label">Completed Facilities</div>
-                    <div class="stat-value" id="proj-stat-completed">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Completed Facilities</div>
+                    <div class="text-3xl font-extrabold text-emerald-500 mt-2" id="proj-stat-completed">0</div>
+                    <div class="text-xs text-emerald-600 font-semibold mt-1">Inspected & Closed</div>
                 </div>
-                <div class="stat-card purple">
-                    <div class="stat-label">Active Yards & Locations</div>
-                    <div class="stat-value" id="proj-stat-locations">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Active Branches / Yards</div>
+                    <div class="text-3xl font-extrabold text-purple-600 mt-2" id="proj-stat-locations">0</div>
+                    <div class="text-xs text-purple-600 font-semibold mt-1">Locations Serviced</div>
                 </div>
             </div>
 
-            <div class="controls-bar">
-                <input type="text" class="search-input" id="proj-search" placeholder="🔍 Search site, ticket #, repair..." oninput="filterProjectsTable()">
-                <select class="filter-select" id="proj-status-filter" onchange="filterProjectsTable()">
-                    <option value="ALL">All Statuses</option>
-                    <option value="Open">Open</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Closed">Closed</option>
-                </select>
-            </div>
+            <!-- Projects Table Section -->
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div class="p-5 border-b border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4 bg-slate-50/50">
+                    <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                        <input type="text" id="proj-search" placeholder="🔍 Search site, ticket #, repair..." oninput="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        
+                        <!-- Location Filter -->
+                        <select id="proj-loc-filter" onchange="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Branches & Yards</option>
+                        </select>
 
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Ticket #</th>
-                            <th>Reporter</th>
-                            <th>Site / Branch Location</th>
-                            <th>Facility Category</th>
-                            <th>Status</th>
-                            <th>Assigned Lead</th>
-                            <th>Created Date</th>
-                        </tr>
-                    </thead>
-                    <tbody id="proj-table-body"></tbody>
-                </table>
+                        <!-- Admin Filter -->
+                        <select id="proj-admin-filter" onchange="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Project Leads</option>
+                        </select>
+
+                        <!-- Status Filter -->
+                        <select id="proj-status-filter" onchange="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Statuses</option>
+                            <option value="Open">Open</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Closed">Closed</option>
+                        </select>
+                    </div>
+
+                    <span id="proj-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                        Showing 0 tickets
+                    </span>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                            <tr>
+                                <th class="px-5 py-3.5">Ticket #</th>
+                                <th class="px-5 py-3.5">Reporter</th>
+                                <th class="px-5 py-3.5">Site / Branch Location</th>
+                                <th class="px-5 py-3.5">Category & Description</th>
+                                <th class="px-5 py-3.5">Status</th>
+                                <th class="px-5 py-3.5">Assigned Lead</th>
+                                <th class="px-5 py-3.5">Date Created</th>
+                            </tr>
+                        </thead>
+                        <tbody id="proj-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
         <!-- ========================================================= -->
         <!-- TAB 3: WORKSHOP & FLEET LOGISTICS -->
         <!-- ========================================================= -->
-        <div id="view-logistics" class="domain-view">
-            <div class="stats-grid">
-                <div class="stat-card purple">
-                    <div class="stat-label">Active Fleet Fleet Vehicles</div>
-                    <div class="stat-value" id="ws-stat-fleet">39</div>
+        <div id="view-logistics" class="domain-view space-y-8">
+            <!-- Fleet Stats -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Active Fleet</div>
+                    <div class="text-3xl font-extrabold text-blue-600 mt-2" id="ws-stat-fleet">39</div>
+                    <div class="text-xs text-blue-600 font-semibold mt-1">Trucks in Database</div>
                 </div>
-                <div class="stat-card amber">
-                    <div class="stat-label">Under Supervisor Review</div>
-                    <div class="stat-value" id="ws-stat-review">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Supervisor Review</div>
+                    <div class="text-3xl font-extrabold text-amber-500 mt-2" id="ws-stat-review">0</div>
+                    <div class="text-xs text-amber-600 font-semibold mt-1">Gatekeeper Triage</div>
                 </div>
-                <div class="stat-card blue">
-                    <div class="stat-label">In Workshop Floor</div>
-                    <div class="stat-value" id="ws-stat-floor">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">In Workshop</div>
+                    <div class="text-3xl font-extrabold text-indigo-600 mt-2" id="ws-stat-floor">0</div>
+                    <div class="text-xs text-indigo-600 font-semibold mt-1">Active Wrenching</div>
                 </div>
-                <div class="stat-card rose">
-                    <div class="stat-label">Awaiting Spares / Parts</div>
-                    <div class="stat-value" id="ws-stat-parts">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">Awaiting Spares</div>
+                    <div class="text-3xl font-extrabold text-rose-500 mt-2" id="ws-stat-parts">0</div>
+                    <div class="text-xs text-rose-600 font-semibold mt-1">Purchasing Requisitions</div>
                 </div>
-                <div class="stat-card green">
-                    <div class="stat-label">Awaiting QC Road-Test</div>
-                    <div class="stat-value" id="ws-stat-qc">0</div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-400">QC Road-Test</div>
+                    <div class="text-3xl font-extrabold text-emerald-500 mt-2" id="ws-stat-qc">0</div>
+                    <div class="text-xs text-emerald-600 font-semibold mt-1">Awaiting Sign-off</div>
                 </div>
             </div>
 
-            <div class="controls-bar">
-                <input type="text" class="search-input" id="ws-search" placeholder="🔍 Search truck #, plate, fault notes..." oninput="filterFleetTable()">
-                <select class="filter-select" id="ws-status-filter" onchange="filterFleetTable()">
-                    <option value="ALL">All Workshop Stages</option>
-                    <option value="UNDER_REVIEW">Under Review</option>
-                    <option value="WITH_MECHANIC">With Mechanic</option>
-                    <option value="AWAITING_PARTS">Awaiting Parts</option>
-                    <option value="AWAITING_TEST">Awaiting QC Test</option>
-                    <option value="REWORK_REQUIRED">Rework Required</option>
-                    <option value="CLOSED">Closed / Returned to Fleet</option>
-                </select>
-            </div>
+            <!-- Fleet Table Section -->
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div class="p-5 border-b border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4 bg-slate-50/50">
+                    <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                        <input type="text" id="ws-search" placeholder="🔍 Search truck #, plate, fault notes..." oninput="filterFleetTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        
+                        <!-- Mechanic Filter -->
+                        <select id="ws-mech-filter" onchange="filterFleetTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Mechanics</option>
+                        </select>
 
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Ticket #</th>
-                            <th>Truck & Plate</th>
-                            <th>Vehicle Model</th>
-                            <th>Fault Category</th>
-                            <th>Logged By</th>
-                            <th>Mechanic & ETA</th>
-                            <th>Parts Requisition</th>
-                            <th>Costing</th>
-                            <th>Status & QC</th>
-                        </tr>
-                    </thead>
-                    <tbody id="ws-table-body"></tbody>
-                </table>
+                        <!-- Status Filter -->
+                        <select id="ws-status-filter" onchange="filterFleetTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="ALL">All Workshop Stages</option>
+                            <option value="UNDER_REVIEW">Under Review</option>
+                            <option value="WITH_MECHANIC">With Mechanic</option>
+                            <option value="AWAITING_PARTS">Awaiting Parts</option>
+                            <option value="AWAITING_TEST">Awaiting QC Test</option>
+                            <option value="REWORK_REQUIRED">Rework Required</option>
+                            <option value="CLOSED">Closed / Returned to Fleet</option>
+                        </select>
+                    </div>
+
+                    <span id="ws-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                        Showing 0 vehicles
+                    </span>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                            <tr>
+                                <th class="px-5 py-3.5">Ticket #</th>
+                                <th class="px-5 py-3.5">Truck & Plate</th>
+                                <th class="px-5 py-3.5">Vehicle Model</th>
+                                <th class="px-5 py-3.5">Fault Category & Description</th>
+                                <th class="px-5 py-3.5">Logged By</th>
+                                <th class="px-5 py-3.5">Mechanic & ETA</th>
+                                <th class="px-5 py-3.5">Parts Requisition</th>
+                                <th class="px-5 py-3.5">Costing</th>
+                                <th class="px-5 py-3.5">Status & QC</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ws-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
-    </div>
+    </main>
 
     <script>
         let cachedData = null;
 
         function switchDomain(domain) {
-            document.querySelectorAll('.domain-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
             document.querySelectorAll('.domain-view').forEach(view => view.classList.remove('active'));
 
             const targetBtn = document.getElementById('btn-tab-' + domain);
@@ -1166,7 +861,6 @@ async def dashboard_view(request: Request):
                 const data = await res.json();
                 cachedData = data;
 
-                // Update User Info
                 if (data.user) {
                     document.getElementById('userDisplayName').textContent = data.user.name;
                     document.getElementById('userRoleBadge').textContent = data.user.role.replace('_', ' ');
@@ -1176,13 +870,12 @@ async def dashboard_view(request: Request):
                 renderProjects(data.projects);
                 renderLogistics(data.logistics);
 
-                // Check URL hash for initial tab
                 const hash = window.location.hash.replace('#', '');
                 if (['it', 'projects', 'logistics'].includes(hash)) {
                     switchDomain(hash);
                 }
             } catch (err) {
-                console.error('Error loading dashboard data:', err);
+                console.error('Error loading dashboard:', err);
             }
         }
 
@@ -1193,50 +886,112 @@ async def dashboard_view(request: Request):
             document.getElementById('it-stat-resolved').textContent = it.stats.resolved + it.stats.closed;
             document.getElementById('it-stat-avg-time').textContent = it.stats.avg_resolution;
 
-            // Render IT Admins
+            // Render IT Admin SLA Cards
             const adminContainer = document.getElementById('it-admin-cards');
             adminContainer.innerHTML = it.admins.map(a => `
-                <div class="team-card">
-                    <div class="team-info">
-                        <h4>${a.name}</h4>
-                        <p>+${a.phone}</p>
+                <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                    <div>
+                        <div class="font-extrabold text-slate-900 text-sm">${a.name}</div>
+                        <div class="text-[11px] text-slate-500 font-mono">+${a.phone}</div>
+                        <div class="mt-2 flex items-center gap-2">
+                            <span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">${a.pending} Pending</span>
+                            <span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">${a.resolved} Solved</span>
+                        </div>
                     </div>
-                    <div class="team-metrics">
-                        <span class="team-badge">${a.resolved} Resolved</span>
-                        <p style="font-size:0.75rem; color:var(--text-muted); margin-top:4px;">Avg: ${a.avg_time}</p>
+                    <div class="text-right">
+                        <div class="text-base font-extrabold text-blue-600">${a.sla_pct}% SLA</div>
+                        <div class="text-[11px] text-slate-500 font-medium">Avg: ${a.avg_time}</div>
                     </div>
                 </div>
             `).join('');
+
+            // Populate Admin Filter
+            const adminFilter = document.getElementById('it-admin-filter');
+            const currentSelected = adminFilter.value;
+            const adminNames = [...new Set(it.records.map(r => r.assigned_admin))].filter(Boolean);
+            adminFilter.innerHTML = '<option value="ALL">All Support Admins</option>' + adminNames.map(name => `
+                <option value="${name}" ${currentSelected === name ? 'selected' : ''}>${name}</option>
+            `).join('');
+
+            // Render Category Issue Tree
+            const treeContainer = document.getElementById('it-category-tree');
+            if (it.category_tree && it.category_tree.length > 0) {
+                treeContainer.innerHTML = it.category_tree.map(cat => `
+                    <div class="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+                        <div class="p-3.5 bg-slate-100/80 font-extrabold text-xs text-slate-900 flex items-center justify-between">
+                            <span>📁 ${cat.category_name}</span>
+                            <span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full text-[10px]">${cat.count} tickets</span>
+                        </div>
+                        <div class="p-3 space-y-2 text-xs">
+                            ${cat.subcategories.map(sub => `
+                                <div class="pl-3 border-l-2 border-slate-300">
+                                    <div class="font-bold text-slate-700 flex items-center justify-between">
+                                        <span>↳ ${sub.subcategory_name}</span>
+                                        <span class="text-slate-400 font-medium text-[11px]">${sub.count} logs</span>
+                                    </div>
+                                    <div class="pl-3 mt-1 space-y-0.5 text-[11px] text-slate-500">
+                                        ${sub.issues.map(iss => `
+                                            <div class="flex items-center justify-between">
+                                                <span>• ${iss.issue_name}</span>
+                                                <span class="font-mono text-slate-600 font-bold">${iss.count}</span>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                treeContainer.innerHTML = '<div class="text-xs text-slate-400 p-3">No category issues logged yet.</div>';
+            }
 
             filterITTable();
         }
 
         function filterITTable() {
             if (!cachedData || !cachedData.it) return;
-            const q = document.getElementById('it-search').value.toLowerCase();
+            const q = document.getElementById('it-search').value.toLowerCase().trim();
             const statusFilter = document.getElementById('it-status-filter').value;
+            const adminFilter = document.getElementById('it-admin-filter').value;
+
             const records = cachedData.it.records.filter(r => {
-                const matchesQ = r.ticket_number.toLowerCase().includes(q) ||
+                const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.employee_name.toLowerCase().includes(q) ||
                                  r.issue.toLowerCase().includes(q) ||
-                                 r.description.toLowerCase().includes(q);
+                                 r.description.toLowerCase().includes(q) ||
+                                 r.category.toLowerCase().includes(q);
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
-                return matchesQ && matchesStatus;
+                const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
+                return matchesQ && matchesStatus && matchesAdmin;
             });
 
+            // Update Dynamic Count Badge
+            document.getElementById('it-count-badge').textContent = `Showing ${records.length} of ${cachedData.it.records.length} tickets`;
+
             const tbody = document.getElementById('it-table-body');
-            tbody.innerHTML = records.map(r => `
-                <tr>
-                    <td><span class="ticket-badge">${r.ticket_number}</span></td>
-                    <td><strong>${r.employee_name}</strong><br><small style="color:var(--text-muted)">+${r.employee_phone}</small></td>
-                    <td>${r.department}<br><small style="color:var(--text-muted)">📍 ${r.location}</small></td>
-                    <td>${r.category}<br><small style="color:var(--text-muted)">${r.issue}</small></td>
-                    <td><span class="status-pill status-${r.status.toLowerCase().replace(' ', '')}">${r.status}</span></td>
-                    <td>${r.assigned_admin}</td>
-                    <td>${r.created_at}</td>
-                    <td><strong>${r.resolution_time}</strong></td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = records.map(r => {
+                let statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
+                if (r.status === 'Resolved' || r.status === 'Closed') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                else if (r.status === 'In Progress') statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+
+                let pBadge = 'bg-slate-100 text-slate-700';
+                if (r.priority === 'Urgent') pBadge = 'bg-red-100 text-red-700 font-bold';
+                else if (r.priority === 'High') pBadge = 'bg-amber-100 text-amber-800 font-bold';
+
+                return `
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="px-5 py-3.5 font-mono font-bold text-blue-600">${r.ticket_number}</td>
+                        <td class="px-5 py-3.5"><strong>${r.employee_name}</strong><br><small class="text-slate-400 font-mono">+${r.employee_phone}</small></td>
+                        <td class="px-5 py-3.5">${r.department}<br><small class="text-slate-500 font-medium">📍 ${r.location}</small></td>
+                        <td class="px-5 py-3.5"><strong>${r.category}</strong> ➔ ${r.subcategory}<br><small class="text-slate-500">${r.issue}</small></td>
+                        <td class="px-5 py-3.5"><span class="px-2 py-0.5 rounded text-[10px] ${pBadge}">${r.priority}</span></td>
+                        <td class="px-5 py-3.5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold border ${statusBadge}">${r.status}</span></td>
+                        <td class="px-5 py-3.5 font-medium">${r.assigned_admin}</td>
+                        <td class="px-5 py-3.5 font-mono font-bold">${r.resolution_time}</td>
+                    </tr>
+                `;
+            }).join('');
         }
 
         function renderProjects(proj) {
@@ -1245,34 +1000,63 @@ async def dashboard_view(request: Request):
             document.getElementById('proj-stat-active').textContent = proj.stats.open + proj.stats.in_progress;
             document.getElementById('proj-stat-completed').textContent = proj.stats.resolved + proj.stats.closed;
             document.getElementById('proj-stat-locations').textContent = proj.stats.locations_count;
+
+            // Populate Location & Admin Filter
+            const locFilter = document.getElementById('proj-loc-filter');
+            const currentLoc = locFilter.value;
+            const locations = [...new Set(proj.records.map(r => r.location))].filter(Boolean);
+            locFilter.innerHTML = '<option value="ALL">All Branches & Yards</option>' + locations.map(loc => `
+                <option value="${loc}" ${currentLoc === loc ? 'selected' : ''}>${loc}</option>
+            `).join('');
+
+            const adminFilter = document.getElementById('proj-admin-filter');
+            const currentAdmin = adminFilter.value;
+            const admins = [...new Set(proj.records.map(r => r.assigned_admin))].filter(Boolean);
+            adminFilter.innerHTML = '<option value="ALL">All Project Leads</option>' + admins.map(a => `
+                <option value="${a}" ${currentAdmin === a ? 'selected' : ''}>${a}</option>
+            `).join('');
+
             filterProjectsTable();
         }
 
         function filterProjectsTable() {
             if (!cachedData || !cachedData.projects) return;
-            const q = document.getElementById('proj-search').value.toLowerCase();
+            const q = document.getElementById('proj-search').value.toLowerCase().trim();
+            const locFilter = document.getElementById('proj-loc-filter').value;
+            const adminFilter = document.getElementById('proj-admin-filter').value;
             const statusFilter = document.getElementById('proj-status-filter').value;
+
             const records = cachedData.projects.records.filter(r => {
-                const matchesQ = r.ticket_number.toLowerCase().includes(q) ||
+                const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.location.toLowerCase().includes(q) ||
-                                 r.category.toLowerCase().includes(q) ||
-                                 r.description.toLowerCase().includes(q);
+                                 r.description.toLowerCase().includes(q) ||
+                                 r.category.toLowerCase().includes(q);
+                const matchesLoc = locFilter === 'ALL' || r.location === locFilter;
+                const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
-                return matchesQ && matchesStatus;
+                return matchesQ && matchesLoc && matchesAdmin && matchesStatus;
             });
 
+            document.getElementById('proj-count-badge').textContent = `Showing ${records.length} of ${cachedData.projects.records.length} tickets`;
+
             const tbody = document.getElementById('proj-table-body');
-            tbody.innerHTML = records.map(r => `
-                <tr>
-                    <td><span class="ticket-badge">${r.ticket_number}</span></td>
-                    <td><strong>${r.employee_name}</strong><br><small style="color:var(--text-muted)">+${r.employee_phone}</small></td>
-                    <td>📍 <strong>${r.location}</strong></td>
-                    <td>${r.category}<br><small style="color:var(--text-muted)">${r.subcategory}</small></td>
-                    <td><span class="status-pill status-${r.status.toLowerCase().replace(' ', '')}">${r.status}</span></td>
-                    <td>${r.assigned_admin}</td>
-                    <td>${r.created_at}</td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = records.map(r => {
+                let statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
+                if (r.status === 'Resolved' || r.status === 'Closed') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                else if (r.status === 'In Progress') statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+
+                return `
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="px-5 py-3.5 font-mono font-bold text-blue-600">${r.ticket_number}</td>
+                        <td class="px-5 py-3.5"><strong>${r.employee_name}</strong><br><small class="text-slate-400 font-mono">+${r.employee_phone}</small></td>
+                        <td class="px-5 py-3.5 font-bold text-slate-800">📍 ${r.location}</td>
+                        <td class="px-5 py-3.5"><strong>${r.category}</strong><br><small class="text-slate-500">${r.description}</small></td>
+                        <td class="px-5 py-3.5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold border ${statusBadge}">${r.status}</span></td>
+                        <td class="px-5 py-3.5 font-medium">${r.assigned_admin}</td>
+                        <td class="px-5 py-3.5 text-slate-500">${r.created_at}</td>
+                    </tr>
+                `;
+            }).join('');
         }
 
         function renderLogistics(log) {
@@ -1282,51 +1066,64 @@ async def dashboard_view(request: Request):
             document.getElementById('ws-stat-floor').textContent = log.stats.in_workshop;
             document.getElementById('ws-stat-parts').textContent = log.stats.awaiting_parts;
             document.getElementById('ws-stat-qc').textContent = log.stats.awaiting_qc;
+
+            // Populate Mechanics Filter
+            const mechFilter = document.getElementById('ws-mech-filter');
+            const currentMech = mechFilter.value;
+            const mechs = [...new Set(log.records.map(r => r.assigned_mechanic))].filter(Boolean);
+            mechFilter.innerHTML = '<option value="ALL">All Mechanics</option>' + mechs.map(m => `
+                <option value="${m}" ${currentMech === m ? 'selected' : ''}>${m}</option>
+            `).join('');
+
             filterFleetTable();
         }
 
         function filterFleetTable() {
             if (!cachedData || !cachedData.logistics) return;
-            const q = document.getElementById('ws-search').value.toLowerCase();
+            const q = document.getElementById('ws-search').value.toLowerCase().trim();
             const statusFilter = document.getElementById('ws-status-filter').value;
+            const mechFilter = document.getElementById('ws-mech-filter').value;
+
             const records = cachedData.logistics.records.filter(r => {
-                const matchesQ = r.ticket_number.toLowerCase().includes(q) ||
+                const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.truck_number.toLowerCase().includes(q) ||
                                  r.plate_number.toLowerCase().includes(q) ||
                                  r.description.toLowerCase().includes(q) ||
                                  r.category.toLowerCase().includes(q);
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
-                return matchesQ && matchesStatus;
+                const matchesMech = mechFilter === 'ALL' || r.assigned_mechanic === mechFilter;
+                return matchesQ && matchesStatus && matchesMech;
             });
+
+            document.getElementById('ws-count-badge').textContent = `Showing ${records.length} of ${cachedData.logistics.records.length} vehicles`;
 
             const tbody = document.getElementById('ws-table-body');
             tbody.innerHTML = records.map(r => {
-                let statusClass = 'status-progress';
-                if (r.status === 'UNDER_REVIEW') statusClass = 'status-open';
-                else if (r.status === 'CLOSED') statusClass = 'status-closed';
-                else if (r.status === 'REWORK_REQUIRED') statusClass = 'status-rework';
-                else if (r.status === 'AWAITING_TEST') statusClass = 'status-resolved';
+                let statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+                if (r.status === 'UNDER_REVIEW') statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
+                else if (r.status === 'CLOSED') statusBadge = 'bg-slate-100 text-slate-700 border-slate-300';
+                else if (r.status === 'REWORK_REQUIRED') statusBadge = 'bg-red-100 text-red-700 border-red-200';
+                else if (r.status === 'AWAITING_TEST') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
 
                 return `
-                    <tr>
-                        <td><span class="ticket-badge">${r.ticket_number}</span></td>
-                        <td><strong>Truck #${r.truck_number}</strong><br><small style="color:var(--text-muted)">${r.plate_number}</small></td>
-                        <td>${r.truck_model}</td>
-                        <td><strong>${r.category}</strong><br><small style="color:var(--text-muted)">${r.description.substring(0, 40)}...</small></td>
-                        <td>${r.logged_by}</td>
-                        <td><strong>${r.assigned_mechanic}</strong><br><small style="color:#60a5fa">⏱️ ETA: ${r.eta}</small></td>
-                        <td><small style="color:#f59e0b">📦 ${r.parts_status}</small></td>
-                        <td><strong>${r.costing}</strong></td>
-                        <td>
-                            <span class="status-pill ${statusClass}">${r.status.replace('_', ' ')}</span><br>
-                            <small style="color:var(--text-muted)">QC: ${r.qc_result}</small>
+                    <tr class="hover:bg-slate-50/80 transition">
+                        <td class="px-5 py-3.5 font-mono font-bold text-blue-600">${r.ticket_number}</td>
+                        <td class="px-5 py-3.5"><strong>Truck #${r.truck_number}</strong><br><small class="text-slate-400 font-mono">${r.plate_number}</small></td>
+                        <td class="px-5 py-3.5 font-medium text-slate-800">${r.truck_model}</td>
+                        <td class="px-5 py-3.5"><strong>${r.category}</strong><br><small class="text-slate-500">${r.description.substring(0, 45)}...</small></td>
+                        <td class="px-5 py-3.5">${r.logged_by}</td>
+                        <td class="px-5 py-3.5"><strong>${r.assigned_mechanic}</strong><br><small class="text-blue-600 font-semibold">⏱️ ETA: ${r.eta}</small></td>
+                        <td class="px-5 py-3.5"><small class="bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded font-medium">📦 ${r.parts_status}</small></td>
+                        <td class="px-5 py-3.5 font-bold font-mono text-slate-900">${r.costing}</td>
+                        <td class="px-5 py-3.5">
+                            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold border ${statusBadge}">${r.status.replace('_', ' ')}</span><br>
+                            <small class="text-slate-400 mt-1 block">QC: ${r.qc_result}</small>
                         </td>
                     </tr>
                 `;
             }).join('');
         }
 
-        // Initialize on load and poll every 10 seconds
         fetchDashboard();
         setInterval(fetchDashboard, 10000);
     </script>
