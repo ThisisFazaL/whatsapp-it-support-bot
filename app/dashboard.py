@@ -226,6 +226,7 @@ async def api_logout():
 async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Returns live operational metrics strictly partitioned according to user allowed_domains.
+    Sorted in descending order (newest tickets first).
     1. IT Support (only for MASTER_ADMIN and IT_ADMIN)
     2. Building Projects (only for MASTER_ADMIN and PROJECTS_ADMIN)
     3. Workshop & Fleet Logistics (only for MASTER_ADMIN and LOGISTICS_ADMIN)
@@ -240,7 +241,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
     projects_payload = None
     logistics_payload = None
 
-    # 1. Process IT Support Domain (only if permitted)
+    # 1. Process IT Support Domain (only if permitted - newest first)
     if "it" in allowed:
         admins_stmt = select(SupportAdmin).where(
             SupportAdmin.active == True,
@@ -256,7 +257,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             selectinload(Ticket.issue_type),
             selectinload(Ticket.priority),
             selectinload(Ticket.status)
-        )
+        ).order_by(Ticket.ticket_id.desc())
         it_tickets = (await db.execute(it_stmt)).scalars().all()
 
         asg_stmt = select(TicketAssignment).options(selectinload(TicketAssignment.admin))
@@ -375,7 +376,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "category_tree": category_tree_list
         }
 
-    # 2. Process Building Projects Domain (only if permitted)
+    # 2. Process Building Projects Domain (only if permitted - newest first)
     if "projects" in allowed:
         maint_stmt = select(MaintenanceTicket).options(
             selectinload(MaintenanceTicket.employee).selectinload(Employee.department),
@@ -385,7 +386,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             selectinload(MaintenanceTicket.issue_type),
             selectinload(MaintenanceTicket.priority),
             selectinload(MaintenanceTicket.status)
-        )
+        ).order_by(MaintenanceTicket.ticket_id.desc())
         maint_tickets = (await db.execute(maint_stmt)).scalars().all()
 
         m_asg_stmt = select(MaintenanceTicketAssignment).options(selectinload(MaintenanceTicketAssignment.admin))
@@ -428,7 +429,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "records": maint_records
         }
 
-    # 3. Process Workshop & Fleet Logistics Domain (only if permitted)
+    # 3. Process Workshop & Fleet Logistics Domain (only if permitted - newest first)
     if "logistics" in allowed:
         ws_ticket_stmt = select(WorkshopTicket).options(
             selectinload(WorkshopTicket.truck),
@@ -1098,7 +1099,7 @@ async def dashboard_view(request: Request):
             const statusFilter = document.getElementById('it-status-filter').value;
             const adminFilter = document.getElementById('it-admin-filter').value;
 
-            const records = cachedData.it.records.filter(r => {{
+            let records = cachedData.it.records.filter(r => {{
                 const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.employee_name.toLowerCase().includes(q) ||
                                  r.issue.toLowerCase().includes(q) ||
@@ -1108,6 +1109,9 @@ async def dashboard_view(request: Request):
                 const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
                 return matchesQ && matchesStatus && matchesAdmin;
             }});
+
+            // Enforce newest tickets first (descending order by ticket_id)
+            records.sort((a, b) => (b.ticket_id || 0) - (a.ticket_id || 0));
 
             // Update Dynamic Count Badge
             document.getElementById('it-count-badge').textContent = `Showing ${{records.length}} of ${{cachedData.it.records.length}} tickets`;
@@ -1175,7 +1179,7 @@ async def dashboard_view(request: Request):
             const adminFilter = document.getElementById('proj-admin-filter').value;
             const statusFilter = document.getElementById('proj-status-filter').value;
 
-            const records = cachedData.projects.records.filter(r => {{
+            let records = cachedData.projects.records.filter(r => {{
                 const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.location.toLowerCase().includes(q) ||
                                  r.description.toLowerCase().includes(q) ||
@@ -1185,6 +1189,9 @@ async def dashboard_view(request: Request):
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
                 return matchesQ && matchesLoc && matchesAdmin && matchesStatus;
             }});
+
+            // Enforce newest tickets first (descending order by ticket_id)
+            records.sort((a, b) => (b.ticket_id || 0) - (a.ticket_id || 0));
 
             document.getElementById('proj-count-badge').textContent = `Showing ${{records.length}} of ${{cachedData.projects.records.length}} tickets`;
 
@@ -1237,7 +1244,7 @@ async def dashboard_view(request: Request):
             const statusFilter = document.getElementById('ws-status-filter').value;
             const mechFilter = document.getElementById('ws-mech-filter').value;
 
-            const records = cachedData.logistics.records.filter(r => {{
+            let records = cachedData.logistics.records.filter(r => {{
                 const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.truck_number.toLowerCase().includes(q) ||
                                  r.plate_number.toLowerCase().includes(q) ||
@@ -1247,6 +1254,9 @@ async def dashboard_view(request: Request):
                 const matchesMech = mechFilter === 'ALL' || r.assigned_mechanic === mechFilter;
                 return matchesQ && matchesStatus && matchesMech;
             }});
+
+            // Enforce newest tickets first (descending order by ticket_id)
+            records.sort((a, b) => (b.ticket_id || 0) - (a.ticket_id || 0));
 
             document.getElementById('ws-count-badge').textContent = `Showing ${{records.length}} of ${{cachedData.logistics.records.length}} vehicles`;
 
