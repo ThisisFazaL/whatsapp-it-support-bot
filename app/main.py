@@ -476,6 +476,39 @@ async def reinitiate_claim_ticket_2(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/admin/add-projects-reporter")
+async def add_projects_reporter(phone: str = "263780515663", name: str = "Faruk Patel", db: AsyncSession = Depends(get_db)):
+    """Sets an employee as an authorized Building Projects reporter and clears their conversation state."""
+    clean_p = phone.replace("+", "").replace(" ", "").strip()
+    stmt = select(Employee).where((Employee.phone == clean_p) | (Employee.phone.like(f"%{clean_p[-9:]}")))
+    emp = (await db.execute(stmt)).scalars().first()
+    if not emp:
+        emp = Employee(
+            employee_code=f"EMP_MNT_{clean_p[-4:]}",
+            full_name=name,
+            phone=clean_p,
+            is_maintenance_reporter=True,
+            active=True
+        )
+        db.add(emp)
+    else:
+        emp.is_maintenance_reporter = True
+        emp.active = True
+        if name and (not emp.full_name or emp.full_name == "Staff User"):
+            emp.full_name = name
+
+    from app.state_manager import clear_user_state
+    await clear_user_state(db, clean_p)
+    await db.commit()
+
+    return {
+        "status": "SUCCESS",
+        "employee_id": emp.employee_id,
+        "name": emp.full_name,
+        "phone": emp.phone,
+        "is_maintenance_reporter": emp.is_maintenance_reporter
+    }
+
 @app.get("/send-zayn-project-ticket-2-to-stanclea")
 @app.get("/trigger-send-zayn-ticket-to-stanclea")
 async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):

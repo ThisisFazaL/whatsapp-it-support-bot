@@ -428,6 +428,7 @@ async def init_db_models():
             {"name": "Soyab Patel", "phone": "263784077420"},
             {"name": "Batsirai Muradzikwa", "phone": "263711421202"},
             {"name": "Simbarashe Chaunoita", "phone": "263785571584"},
+            {"name": "Faruk Patel", "phone": "263780515663"},
             {"name": "Stanclea", "phone": "263780099291"},
             {"name": "Omar Arizai", "phone": "263771333602"},
         ]
