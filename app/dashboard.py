@@ -1292,7 +1292,16 @@ async def dashboard_view(request: Request):
         // Initialize dashboard
         switchDomain(initialDefaultTab);
         fetchDashboard();
-        setInterval(fetchDashboard, 15000);
+        setInterval(() => {{
+            if (!document.hidden) {{
+                fetchDashboard();
+            }}
+        }}, 15000);
+        document.addEventListener('visibilitychange', () => {{
+            if (!document.hidden) {{
+                fetchDashboard();
+            }}
+        }});
     </script>
 </body>
 </html>"""

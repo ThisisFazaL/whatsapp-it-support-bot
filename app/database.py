@@ -186,8 +186,14 @@ class ConversationState(Base):
     current_data = Column(JSON, default=dict)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-engine_kwargs = {"echo": False}
+engine_kwargs = {
+    "echo": False,
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+}
 if "postgresql" in settings.database_url:
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
     engine_kwargs["connect_args"] = {
         "ssl": "require",
         "statement_cache_size": 0,

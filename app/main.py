@@ -61,6 +61,28 @@ async def scheduled_daily_report_loop():
             logger.error(f"Error in scheduled daily report loop: {e}", exc_info=True)
             await asyncio.sleep(300)
 
+async def keep_alive_ping_loop():
+    """
+    Background keep-alive task to prevent Render Free-Tier instance cold starts (sleep after 15 mins inactivity).
+    Pings the public /health endpoint every 8 minutes.
+    """
+    await asyncio.sleep(45)  # Wait for full server boot
+    app_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("APP_URL") or "https://whatsapp-it-support-bot.onrender.com"
+    health_url = f"{app_url.rstrip('/')}/health"
+    
+    while True:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(health_url)
+                logger.info(f"Keep-alive self-ping sent to {health_url} (HTTP {res.status_code})")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug(f"Keep-alive self-ping attempt: {e}")
+        # Sleep for 8 minutes (480s) to guarantee Render doesn't hit 15m idle sleep
+        await asyncio.sleep(480)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle startup and shutdown hooks."""
@@ -70,8 +92,11 @@ async def lifespan(app: FastAPI):
 
     # Start 8 PM IST EOD report background task loop
     report_task = asyncio.create_task(scheduled_daily_report_loop())
+    # Start Keep-Alive self-ping background loop to prevent Render spin-downs
+    keepalive_task = asyncio.create_task(keep_alive_ping_loop())
     yield
     report_task.cancel()
+    keepalive_task.cancel()
     logger.info("Shutting down application...")
 
 app = FastAPI(
