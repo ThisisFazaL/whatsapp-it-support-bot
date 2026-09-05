@@ -18,6 +18,11 @@ from app.handlers.resolution_handler import handle_resolution_confirmation
 from app.handlers.flow_handler import handle_flow
 from app.handlers.my_tickets_handler import handle_my_tickets
 from app.reports import send_daily_report_to_master
+from app.auditor import (
+    execute_and_alert_daily_audit,
+    run_daily_button_audit,
+    LAST_AUDIT_RESULT
+)
 from app.meta_api import meta_api
 from app.dashboard import router as dashboard_router
 
@@ -25,6 +30,49 @@ logger = logging.getLogger("main")
 logging.basicConfig(level=logging.INFO)
 
 PROCESSED_WAMIDS: Set[str] = set()
+
+async def scheduled_daily_audit_loop():
+    """
+    Background scheduled loop to run Daily Bot Workflow & Button Audit at 04:00 UTC (06:00 AM CAT / 09:30 AM IST).
+    Also performs an initial warm-up audit ~30s after server startup.
+    """
+    await asyncio.sleep(30)  # Wait for DB initialization & server ready
+    try:
+        logger.info("Executing startup self-audit test...")
+        await execute_and_alert_daily_audit()
+    except Exception as e:
+        logger.error(f"Error during startup audit: {e}", exc_info=True)
+
+    last_audit_date = None
+    while True:
+        try:
+            now_utc = datetime.datetime.utcnow()
+            today_date_str = now_utc.strftime("%Y-%m-%d")
+
+            # Check if current time is past 04:00 UTC (6:00 AM CAT / 9:30 AM IST) and hasn't run today
+            target_utc = now_utc.replace(hour=4, minute=0, second=0, microsecond=0)
+
+            if now_utc >= target_utc and last_audit_date != today_date_str:
+                logger.info("04:00 UTC trigger window reached. Running Scheduled Daily Bot Workflow Audit...")
+                await execute_and_alert_daily_audit()
+                last_audit_date = today_date_str
+                logger.info("Daily Bot Workflow Audit completed.")
+
+            # Calculate next target (tomorrow 04:00 UTC if already run today, or check in up to 30 mins)
+            now_utc = datetime.datetime.utcnow()
+            next_target = now_utc.replace(hour=4, minute=0, second=0, microsecond=0)
+            if now_utc >= next_target:
+                next_target += datetime.timedelta(days=1)
+
+            sleep_seconds = (next_target - now_utc).total_seconds()
+            await asyncio.sleep(min(sleep_seconds, 1800))
+
+        except asyncio.CancelledError:
+            logger.info("Scheduled audit loop cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Error in scheduled daily audit loop: {e}", exc_info=True)
+            await asyncio.sleep(300)
 
 async def scheduled_daily_report_loop():
     """Background task loop to deliver Daily Master Executive Report at 8:00 PM IST (14:30 UTC) daily."""
@@ -94,9 +142,12 @@ async def lifespan(app: FastAPI):
     report_task = asyncio.create_task(scheduled_daily_report_loop())
     # Start Keep-Alive self-ping background loop to prevent Render spin-downs
     keepalive_task = asyncio.create_task(keep_alive_ping_loop())
+    # Start Daily Automated Audit loop (runs morning 04:00 UTC + startup verification)
+    audit_task = asyncio.create_task(scheduled_daily_audit_loop())
     yield
     report_task.cancel()
     keepalive_task.cancel()
+    audit_task.cancel()
     logger.info("Shutting down application...")
 
 app = FastAPI(
@@ -116,7 +167,28 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "whatsapp_it_support_bot"}
+    from app.auditor import LAST_AUDIT_RESULT
+    return {
+        "status": "healthy",
+        "service": "whatsapp_it_support_bot",
+        "bot_health": LAST_AUDIT_RESULT.get("status", "UNKNOWN"),
+        "last_audit": LAST_AUDIT_RESULT
+    }
+
+@app.get("/api/admin/run-audit")
+async def trigger_run_audit_endpoint():
+    """Triggers an on-demand synthetic audit across all 25+ WhatsApp interactive buttons and workflows."""
+    result = await run_daily_button_audit()
+    return {
+        "status": "success",
+        "audit_status": result.get("status"),
+        "total_tests": result.get("total_tests"),
+        "passed": result.get("passed"),
+        "failed": result.get("failed"),
+        "timestamp": result.get("timestamp"),
+        "failures": result.get("failures"),
+        "details": result.get("details")
+    }
 
 @app.get("/trigger-ticket-cleanup")
 async def trigger_ticket_cleanup_endpoint():

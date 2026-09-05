@@ -82,6 +82,14 @@ async def generate_daily_master_report_data(session: AsyncSession):
     resolved_count = sum(1 for t in today_tickets if t.status_id in (3, 4))
     hazard_count = sum(1 for t in today_tickets if getattr(t, "is_safety_hazard", False))
 
+    from app.auditor import LAST_AUDIT_RESULT
+
+    audit_badge = ""
+    if LAST_AUDIT_RESULT.get("status") == "HEALTHY":
+        audit_badge = f"• 🤖 Automated Bot Health: *✅ {LAST_AUDIT_RESULT['passed']}/{LAST_AUDIT_RESULT['total_tests']} Workflows Verified Operational*\n"
+    elif LAST_AUDIT_RESULT.get("status") == "DEGRADED":
+        audit_badge = f"• 🤖 Automated Bot Health: *⚠️ {LAST_AUDIT_RESULT['failed']} workflow issue(s) detected*\n"
+
     header = (
         f"📊 *DAILY MASTER EXECUTIVE SUPPORT REPORT*\n"
         f"📅 *Date:* {today_str}\n\n"
@@ -89,6 +97,7 @@ async def generate_daily_master_report_data(session: AsyncSession):
         f"• Total Tasks Today: *{total_count}* (💻 IT: *{it_count}* | 🏗️ Projects: *{maint_count}*)\n"
         f"• 🟡 Open: *{open_count}* | 🔵 In Progress: *{in_prog_count}* | 🟢 Fixed/Closed: *{resolved_count}*\n"
         f"• ⚠️ Urgent Safety Hazards: *{hazard_count}*\n"
+        f"{audit_badge}"
         f"------------------------------------\n"
     )
 
