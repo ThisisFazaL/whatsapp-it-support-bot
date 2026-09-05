@@ -1,0 +1,17 @@
+name: 24/7 Uptime Keep-Alive Pinger
+
+on:
+  schedule:
+    # Runs every 5 minutes (24/7)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    name: Ping WhatsApp Bot Production Endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Keep-Alive HTTP Ping to Render
+        run: |
+          echo "Sending 24/7 Keep-Alive Ping to Render Service..."
+          curl -fsS -m 20 https://whatsapp-it-support-bot.onrender.com/ping || echo "Keep-alive ping sent"

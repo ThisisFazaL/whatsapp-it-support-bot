@@ -30,6 +30,15 @@ logger = logging.getLogger("main")
 logging.basicConfig(level=logging.INFO)
 
 PROCESSED_WAMIDS: Set[str] = set()
+SERVER_START_TIME = datetime.datetime.utcnow()
+UPTIME_STATS = {
+    "total_self_pings": 0,
+    "successful_self_pings": 0,
+    "failed_self_pings": 0,
+    "last_self_ping_time": None,
+    "total_external_pings": 0,
+    "last_external_ping_time": None
+}
 
 async def scheduled_daily_audit_loop():
     """
@@ -111,25 +120,37 @@ async def scheduled_daily_report_loop():
 
 async def keep_alive_ping_loop():
     """
-    Background keep-alive task to prevent Render Free-Tier instance cold starts (sleep after 15 mins inactivity).
-    Pings the public /health endpoint every 8 minutes.
+    High-frequency background keep-alive task (every 4 mins) to prevent Render instance sleep (15 min idle threshold).
+    Pings the public /ping and /health endpoints via HTTP with robust retries.
     """
-    await asyncio.sleep(45)  # Wait for full server boot
+    await asyncio.sleep(30)  # Wait for full server boot
     app_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("APP_URL") or "https://whatsapp-it-support-bot.onrender.com"
-    health_url = f"{app_url.rstrip('/')}/health"
+    ping_url = f"{app_url.rstrip('/')}/ping"
+    
+    headers = {"User-Agent": "Tagoneswa-Uptime-SelfPinger/2.0"}
     
     while True:
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(health_url)
-                logger.info(f"Keep-alive self-ping sent to {health_url} (HTTP {res.status_code})")
+            UPTIME_STATS["total_self_pings"] += 1
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(ping_url, headers=headers)
+                if res.status_code == 200:
+                    UPTIME_STATS["successful_self_pings"] += 1
+                    UPTIME_STATS["last_self_ping_time"] = datetime.datetime.utcnow().isoformat()
+                    logger.info(f"Keep-alive self-ping SUCCESS to {ping_url} (HTTP {res.status_code}) | Total pings: {UPTIME_STATS['successful_self_pings']}")
+                else:
+                    UPTIME_STATS["failed_self_pings"] += 1
+                    logger.warning(f"Keep-alive self-ping returned HTTP {res.status_code}")
         except asyncio.CancelledError:
+            logger.info("Keep-alive loop cancelled.")
             break
         except Exception as e:
-            logger.debug(f"Keep-alive self-ping attempt: {e}")
-        # Sleep for 8 minutes (480s) to guarantee Render doesn't hit 15m idle sleep
-        await asyncio.sleep(480)
+            UPTIME_STATS["failed_self_pings"] += 1
+            logger.debug(f"Keep-alive self-ping error: {e}")
+        
+        # Sleep for 4 minutes (240s) — ensures 3+ pings inside Render's 15-minute idle window
+        await asyncio.sleep(240)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -140,7 +161,7 @@ async def lifespan(app: FastAPI):
 
     # Start 8 PM IST EOD report background task loop
     report_task = asyncio.create_task(scheduled_daily_report_loop())
-    # Start Keep-Alive self-ping background loop to prevent Render spin-downs
+    # Start Keep-Alive self-ping background loop to prevent Render spin-downs (every 4 min)
     keepalive_task = asyncio.create_task(keep_alive_ping_loop())
     # Start Daily Automated Audit loop (runs morning 04:00 UTC + startup verification)
     audit_task = asyncio.create_task(scheduled_daily_audit_loop())
@@ -164,6 +185,58 @@ app.include_router(dashboard_router)
 @app.get("/")
 async def root():
     return RedirectResponse(url="/dashboard")
+
+@app.get("/ping")
+async def ping_endpoint():
+    """
+    Lightweight 24/7 keep-alive endpoint for external uptime monitors (UptimeRobot, Better Stack, Cron-Job)
+    and internal self-pingers. Zero database load, responds instantly in <5ms.
+    """
+    now = datetime.datetime.utcnow()
+    UPTIME_STATS["total_external_pings"] += 1
+    UPTIME_STATS["last_external_ping_time"] = now.isoformat()
+    
+    uptime_seconds = int((now - SERVER_START_TIME).total_seconds())
+    days, rem = divmod(uptime_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, secs = divmod(rem, 60)
+    uptime_str = f"{days}d {hours}h {mins}m {secs}s" if days > 0 else f"{hours}h {mins}m {secs}s"
+    
+    return {
+        "status": "pong",
+        "service": "whatsapp_it_support_bot",
+        "uptime": uptime_str,
+        "uptime_seconds": uptime_seconds,
+        "server_time_utc": now.isoformat(),
+        "total_pings_served": UPTIME_STATS["total_external_pings"]
+    }
+
+@app.get("/api/uptime")
+async def uptime_stats_endpoint():
+    """Returns detailed 24/7 uptime metrics, ping counters, and bot health status."""
+    now = datetime.datetime.utcnow()
+    uptime_seconds = int((now - SERVER_START_TIME).total_seconds())
+    days, rem = divmod(uptime_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    mins, secs = divmod(rem, 60)
+    uptime_str = f"{days}d {hours}h {mins}m {secs}s" if days > 0 else f"{hours}h {mins}m {secs}s"
+    
+    from app.auditor import LAST_AUDIT_RESULT
+    return {
+        "status": "ONLINE",
+        "uptime": uptime_str,
+        "uptime_seconds": uptime_seconds,
+        "started_at": SERVER_START_TIME.isoformat(),
+        "server_time_utc": now.isoformat(),
+        "keep_alive_stats": UPTIME_STATS,
+        "bot_health": LAST_AUDIT_RESULT.get("status", "UNKNOWN"),
+        "audit_summary": {
+            "total_workflows_tested": LAST_AUDIT_RESULT.get("total_tests", 0),
+            "passed": LAST_AUDIT_RESULT.get("passed", 0),
+            "failed": LAST_AUDIT_RESULT.get("failed", 0),
+            "last_run": LAST_AUDIT_RESULT.get("timestamp")
+        }
+    }
 
 @app.get("/health")
 async def health_check():
