@@ -174,6 +174,14 @@ async def handle_flow(
 
     # Global Reset Check
     if text_clean in GLOBAL_RESET_KEYWORDS or not state or not state.current_step:
+        # Check if admin or user tapped domain button or typed domain keyword directly:
+        if "domain_it" in text_clean or text_clean in {"it support", "it", "💻 it support"}:
+            await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
+            return
+        elif "domain_maint" in text_clean or text_clean in {"projects", "project", "maintenance", "🏗️ projects"}:
+            await start_location_selection(session, phone, domain="MAINTENANCE")
+            return
+
         # If user is a SupportAdmin, sending 'hi' / 'menu' / 'reset' or having no state MUST show Admin Dashboard!
         from app.state_manager import is_admin
         admin_obj = await is_admin(session, phone)
