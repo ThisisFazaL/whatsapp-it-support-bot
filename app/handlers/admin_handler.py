@@ -410,8 +410,10 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     is_unassigned_cmd = text_lower in {"cmd_unassigned_tickets", "unassigned", "unassigned tickets", "unassigned ticket", "unclaimed", "unclaimed tickets", "open tickets", "pending tickets"} or text_strip.startswith("cmd_unassigned_tickets")
     is_summary = text_lower in {"cmd_admin_summary_report", "summary", "report", "summary report", "daily report"} or text_strip.startswith("cmd_admin_summary_report")
     is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
+    is_start_shift = text_lower in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day"} or text_strip.startswith("cmd_start_shift")
     raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
     is_greeting = not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
+        is_start_shift or
         raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
         text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
         any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
@@ -446,19 +448,28 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             )
             return True
 
-    # 1. HANDLE GREETING / MENU
+    # 1. HANDLE GREETING / MENU / START SHIFT
     if is_greeting:
         await clear_user_state(session, sender_phone)
 
         # Deliver all unclaimed open tickets that were queued / missed during 24h window
         await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
 
-        header = "🛠️ SUPPORT ADMIN PORTAL"
-        body = (
-            f"Hello *{admin.full_name}*! 👋\n\n"
-            f"Welcome to the Support Admin Dashboard.\n\n"
-            f"Please select an option below to manage your tickets:"
-        )
+        if is_start_shift:
+            header = "🟢 SHIFT ACTIVE (24H OPEN)"
+            body = (
+                f"🌅 *Good Morning, {admin.full_name}!* 🟢\n\n"
+                f"Your 24-hour WhatsApp support window is now open for today.\n"
+                f"You will receive all new ticket notifications in real-time.\n\n"
+                f"Please select an option below to manage tasks:"
+            )
+        else:
+            header = "🛠️ SUPPORT ADMIN PORTAL"
+            body = (
+                f"Hello *{admin.full_name}*! 👋\n\n"
+                f"Welcome to the Support Admin Dashboard.\n\n"
+                f"Please select an option below to manage your tickets:"
+            )
         footer = "Tap a button to proceed"
         buttons = [
             {"id": "cmd_my_assigned_tickets", "title": "📋 My Assigned"},

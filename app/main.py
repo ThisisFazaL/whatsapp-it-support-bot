@@ -118,6 +118,58 @@ async def scheduled_daily_report_loop():
             logger.error(f"Error in scheduled daily report loop: {e}", exc_info=True)
             await asyncio.sleep(300)
 
+async def send_morning_shift_opener(session: AsyncSession):
+    """Dispatches the morning shift opener with [ ☀️ Start My Shift ] button to all real admins and workshop staff."""
+    from app.database import SupportAdmin
+    from app.workshop.models import WorkshopStaff
+    
+    # 1. Support Admins (Kevin, Ellias, Stanclea, Omar, Faisal)
+    adm_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
+    admins = (await session.execute(adm_stmt)).scalars().all()
+    for adm in admins:
+        if adm.phone != settings.master_admin_phone:
+            msg = (
+                f"🌅 *Good Morning, {adm.full_name}!* 👋\n\n"
+                f"Welcome to today's support shift.\n\n"
+                f"Please tap **Start My Shift** below to activate your portal and open your active 24-hour window for ticket alerts."
+            )
+            buttons = [
+                {"id": "cmd_start_shift", "title": "☀️ Start My Shift"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=adm.phone,
+                body_text=msg,
+                buttons=buttons,
+                header_text="☀️ DAILY SHIFT OPENER",
+                fallback_template="tagoneswa_launch_announcement"
+            )
+            await asyncio.sleep(0.5)
+
+    # 2. Real Workshop Staff (Edward Supervisor, Sajid Mechanic, Lydon Purchasing, Panashe Logistics Assistant)
+    ws_stmt = select(WorkshopStaff).where(WorkshopStaff.active == True)
+    ws_staff = (await session.execute(ws_stmt)).scalars().all()
+    for ws in ws_staff:
+        # Exclude mock test staff / Master Admin phone
+        if any(test_name in ws.full_name.lower() for test_name in ["sarah", "john mechanic", "clerk mock"]) or ws.phone == settings.master_admin_phone or ws.phone.startswith(("263775555555", "263776666666")):
+            continue
+
+        ws_msg = (
+            f"🌅 *Good Morning, {ws.full_name}!* 👋\n\n"
+            f"Role: *{ws.role}*\n"
+            f"Please tap **Start My Shift** below to activate your workshop portal and open your 24-hour window for vehicle breakdown notifications."
+        )
+        ws_buttons = [
+            {"id": "cmd_start_shift", "title": "☀️ Start My Shift"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=ws.phone,
+            body_text=ws_msg,
+            buttons=ws_buttons,
+            header_text="☀️ WORKSHOP SHIFT OPENER",
+            fallback_template="tagoneswa_launch_announcement"
+        )
+        await asyncio.sleep(0.5)
+
 async def scheduled_morning_staff_wakeup_loop():
     """
     Background task to send a morning queue update & 24h window keep-alive
@@ -135,54 +187,7 @@ async def scheduled_morning_staff_wakeup_loop():
             if now_utc >= target_utc and last_wakeup_date != today_date_str:
                 logger.info("08:00 AM CAT reached. Sending morning portal wake-up to Support Admins and Workshop Staff...")
                 async with async_session_factory() as session:
-                    from app.database import SupportAdmin
-                    from app.workshop.models import WorkshopStaff
-                    
-                    # 1. Support Admins
-                    adm_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
-                    admins = (await session.execute(adm_stmt)).scalars().all()
-                    for adm in admins:
-                        if adm.phone != settings.master_admin_phone:
-                            msg = (
-                                f"🌅 *Good Morning, {adm.full_name}!*\n\n"
-                                f"Your Support Admin Portal is ready for today's shift.\n"
-                                f"Tap a button below to inspect your assigned tickets or claim new tasks:"
-                            )
-                            buttons = [
-                                {"id": "cmd_my_assigned_tickets", "title": "📋 My Assigned"},
-                                {"id": "cmd_unassigned_tickets", "title": "📬 Unassigned"}
-                            ]
-                            await meta_api.send_button_message(
-                                to_phone=adm.phone,
-                                body_text=msg,
-                                buttons=buttons,
-                                header_text="☀️ DAILY SHIFT OPENER",
-                                fallback_template="tagoneswa_launch_announcement"
-                            )
-                            await asyncio.sleep(0.5)
-
-                    # 2. Workshop Staff (Supervisor, Mechanic, Buyer)
-                    ws_stmt = select(WorkshopStaff).where(WorkshopStaff.active == True)
-                    ws_staff = (await session.execute(ws_stmt)).scalars().all()
-                    for ws in ws_staff:
-                        ws_msg = (
-                            f"🌅 *Good Morning, {ws.full_name}!*\n\n"
-                            f"Workshop & Fleet operations are active for today.\n"
-                            f"Role: *{ws.role}*\n"
-                            f"Reply anytime or tap below to check your vehicle workshop queue:"
-                        )
-                        ws_buttons = [
-                            {"id": "btn_ws_open_ticket_", "title": "🚛 View Queue"}
-                        ]
-                        await meta_api.send_button_message(
-                            to_phone=ws.phone,
-                            body_text=ws_msg,
-                            buttons=ws_buttons,
-                            header_text="☀️ WORKSHOP SHIFT OPENER",
-                            fallback_template="tagoneswa_launch_announcement"
-                        )
-                        await asyncio.sleep(0.5)
-
+                    await send_morning_shift_opener(session)
                 last_wakeup_date = today_date_str
                 logger.info("Morning staff wake-up pings sent successfully!")
 
@@ -346,6 +351,12 @@ async def trigger_run_audit_endpoint():
         "failures": result.get("failures"),
         "details": result.get("details")
     }
+
+@app.get("/api/admin/trigger-morning-opener")
+async def trigger_morning_opener_endpoint(db: AsyncSession = Depends(get_db)):
+    """Triggers the 08:00 AM CAT morning shift opener with [ ☀️ Start My Shift ] button to all real admins & workshop staff."""
+    await send_morning_shift_opener(db)
+    return {"status": "SUCCESS", "message": "Morning shift opener sent to all real Support Admins and Workshop Staff!"}
 
 @app.get("/trigger-ticket-cleanup")
 async def trigger_ticket_cleanup_endpoint():
