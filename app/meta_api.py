@@ -7,6 +7,8 @@ from app.config import settings
 logger = logging.getLogger("meta_api")
 logging.basicConfig(level=logging.INFO)
 
+DEFAULT_APPROVED_TEMPLATE = "tagoneswa_launch_announcement"
+
 class MetaWhatsAppAPI:
     def __init__(self):
         self.phone_number_id = settings.phone_number_id
@@ -104,9 +106,15 @@ class MetaWhatsAppAPI:
         
         # Check for 24-hour window restriction and fallback to Template Message if available
         err_code = res.get("error", {}).get("code") if isinstance(res.get("error"), dict) else None
-        if err_code in {131047, 131042, 131026} and fallback_template:
-            logger.info(f"[AUTO-FALLBACK] Sending approved template '{fallback_template}' to +{clean_phone} to bypass 24h window.")
-            return await self.send_template_message(clean_phone, fallback_template, body_params=template_params or [])
+        if err_code in {131047, 131042, 131026}:
+            template_name = fallback_template or DEFAULT_APPROVED_TEMPLATE
+            logger.info(f"[AUTO-FALLBACK] 24h window expired for +{clean_phone}. Sending approved template '{template_name}' to bypass 24h restriction.")
+            tpl_res = await self.send_template_message(clean_phone, template_name, body_params=template_params or [])
+            if tpl_res.get("error", {}).get("code") == 132000 and template_name != DEFAULT_APPROVED_TEMPLATE:
+                # If custom template name not found, retry with default approved template
+                logger.info(f"[RETRY APPROVED TEMPLATE] Retrying with approved template '{DEFAULT_APPROVED_TEMPLATE}'...")
+                return await self.send_template_message(clean_phone, DEFAULT_APPROVED_TEMPLATE)
+            return tpl_res
             
         return res
 
@@ -174,9 +182,14 @@ class MetaWhatsAppAPI:
 
         # Check for 24-hour window restriction and fallback to Template Message if available
         err_code = res.get("error", {}).get("code") if isinstance(res.get("error"), dict) else None
-        if err_code in {131047, 131042, 131026} and fallback_template:
-            logger.info(f"[AUTO-FALLBACK] Sending approved template '{fallback_template}' to +{clean_phone} to bypass 24h window.")
-            return await self.send_template_message(clean_phone, fallback_template, body_params=template_params or [])
+        if err_code in {131047, 131042, 131026}:
+            template_name = fallback_template or DEFAULT_APPROVED_TEMPLATE
+            logger.info(f"[AUTO-FALLBACK] 24h window expired for +{clean_phone}. Sending approved template '{template_name}' to bypass 24h restriction.")
+            tpl_res = await self.send_template_message(clean_phone, template_name, body_params=template_params or [])
+            if tpl_res.get("error", {}).get("code") == 132000 and template_name != DEFAULT_APPROVED_TEMPLATE:
+                logger.info(f"[RETRY APPROVED TEMPLATE] Retrying with approved template '{DEFAULT_APPROVED_TEMPLATE}'...")
+                return await self.send_template_message(clean_phone, DEFAULT_APPROVED_TEMPLATE)
+            return tpl_res
 
         # Fallback to plain text / image message if interactive button fails for non-24h reasons
         if "error" in res or res.get("error"):

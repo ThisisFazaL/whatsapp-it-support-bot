@@ -118,6 +118,87 @@ async def scheduled_daily_report_loop():
             logger.error(f"Error in scheduled daily report loop: {e}", exc_info=True)
             await asyncio.sleep(300)
 
+async def scheduled_morning_staff_wakeup_loop():
+    """
+    Background task to send a morning queue update & 24h window keep-alive
+    to all Support Admins and Workshop Staff every morning at 06:00 UTC (08:00 AM CAT).
+    """
+    last_wakeup_date = None
+    while True:
+        try:
+            now_utc = datetime.datetime.utcnow()
+            today_date_str = now_utc.strftime("%Y-%m-%d")
+            
+            # Check if current time is past 06:00 UTC (08:00 AM CAT) and hasn't sent today
+            target_utc = now_utc.replace(hour=6, minute=0, second=0, microsecond=0)
+            
+            if now_utc >= target_utc and last_wakeup_date != today_date_str:
+                logger.info("08:00 AM CAT reached. Sending morning portal wake-up to Support Admins and Workshop Staff...")
+                async with async_session_factory() as session:
+                    from app.database import SupportAdmin
+                    from app.workshop.models import WorkshopStaff
+                    
+                    # 1. Support Admins
+                    adm_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
+                    admins = (await session.execute(adm_stmt)).scalars().all()
+                    for adm in admins:
+                        if adm.phone != settings.master_admin_phone:
+                            msg = (
+                                f"🌅 *Good Morning, {adm.full_name}!*\n\n"
+                                f"Your Support Admin Portal is ready for today's shift.\n"
+                                f"Tap a button below to inspect your assigned tickets or claim new tasks:"
+                            )
+                            buttons = [
+                                {"id": "cmd_my_assigned_tickets", "title": "📋 My Assigned"},
+                                {"id": "cmd_unassigned_tickets", "title": "📬 Unassigned"}
+                            ]
+                            await meta_api.send_button_message(
+                                to_phone=adm.phone,
+                                body_text=msg,
+                                buttons=buttons,
+                                header_text="☀️ DAILY SHIFT OPENER",
+                                fallback_template="tagoneswa_launch_announcement"
+                            )
+                            await asyncio.sleep(0.5)
+
+                    # 2. Workshop Staff (Supervisor, Mechanic, Buyer)
+                    ws_stmt = select(WorkshopStaff).where(WorkshopStaff.active == True)
+                    ws_staff = (await session.execute(ws_stmt)).scalars().all()
+                    for ws in ws_staff:
+                        ws_msg = (
+                            f"🌅 *Good Morning, {ws.full_name}!*\n\n"
+                            f"Workshop & Fleet operations are active for today.\n"
+                            f"Role: *{ws.role}*\n"
+                            f"Reply anytime or tap below to check your vehicle workshop queue:"
+                        )
+                        ws_buttons = [
+                            {"id": "btn_ws_open_ticket_", "title": "🚛 View Queue"}
+                        ]
+                        await meta_api.send_button_message(
+                            to_phone=ws.phone,
+                            body_text=ws_msg,
+                            buttons=ws_buttons,
+                            header_text="☀️ WORKSHOP SHIFT OPENER",
+                            fallback_template="tagoneswa_launch_announcement"
+                        )
+                        await asyncio.sleep(0.5)
+
+                last_wakeup_date = today_date_str
+                logger.info("Morning staff wake-up pings sent successfully!")
+
+            # Sleep until next check
+            now_utc = datetime.datetime.utcnow()
+            next_target = now_utc.replace(hour=6, minute=0, second=0, microsecond=0)
+            if now_utc >= next_target:
+                next_target += datetime.timedelta(days=1)
+            sleep_seconds = (next_target - now_utc).total_seconds()
+            await asyncio.sleep(min(sleep_seconds, 1800))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in morning staff wakeup loop: {e}", exc_info=True)
+            await asyncio.sleep(300)
+
 async def keep_alive_ping_loop():
     """
     High-frequency background keep-alive task (every 4 mins) to prevent Render instance sleep (15 min idle threshold).
@@ -165,10 +246,13 @@ async def lifespan(app: FastAPI):
     keepalive_task = asyncio.create_task(keep_alive_ping_loop())
     # Start Daily Automated Audit loop (runs morning 04:00 UTC + startup verification)
     audit_task = asyncio.create_task(scheduled_daily_audit_loop())
+    # Start 8:00 AM CAT Morning Staff Wakeup Loop
+    wakeup_task = asyncio.create_task(scheduled_morning_staff_wakeup_loop())
     yield
     report_task.cancel()
     keepalive_task.cancel()
     audit_task.cancel()
+    wakeup_task.cancel()
     logger.info("Shutting down application...")
 
 app = FastAPI(
