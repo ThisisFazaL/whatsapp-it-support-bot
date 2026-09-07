@@ -202,7 +202,7 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#E2E8F0'), spaceAfter=6))
 
     story.append(Paragraph("Logistics & Fleet Operations Guide", doc_title_style))
-    story.append(Paragraph("Standard Operating Procedures for Drivers, Supervisors, Mechanics, Purchasing & Management", doc_subtitle_style))
+    story.append(Paragraph("Standard Operating Procedures for Drivers, Supervisors, Workshop Mechanic, Purchasing & Management", doc_subtitle_style))
     story.append(Spacer(1, 3))
 
     # Executive Overview Box
@@ -228,7 +228,8 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
     # =========================================================================
     story.append(Paragraph("1. Role Overview & System Responsibilities", h1_style))
     story.append(Paragraph(
-        "The logistics ecosystem assigns specific permissions and automated WhatsApp menus based on each staff member's registered role:",
+        "The logistics ecosystem assigns specific permissions and automated WhatsApp menus based on each staff member's registered role. "
+        "All workshop repairs are handled by the dedicated <b>Workshop Mechanic</b>:",
         body_style
     ))
 
@@ -247,12 +248,12 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
         ],
         [
             Paragraph("<b>Supervisor</b><br/><font color='#64748B'>GATEKEEPER</font>", table_cell_style),
-            Paragraph("Triage faults, assign mechanics &amp; conduct final QC road-tests.", table_cell_style),
+            Paragraph("Triage faults, route to workshop &amp; conduct final QC road-tests.", table_cell_style),
             Paragraph("Receives instant triage alerts with buttons: [Handle Internally] vs [Send to Workshop].", table_cell_style),
             Paragraph("Approves repairs &amp; Signs off QC Road-Test", table_cell_bold),
         ],
         [
-            Paragraph("<b>Mechanic</b><br/><font color='#64748B'>TECHNICIAN</font>", table_cell_style),
+            Paragraph("<b>Workshop Mechanic</b><br/><font color='#64748B'>TECHNICIAN</font>", table_cell_style),
             Paragraph("Execute mechanical repairs, request spares &amp; log costing.", table_cell_style),
             Paragraph("Enters repair ETA, requests spare parts with photo, marks repair done with cost.", table_cell_style),
             Paragraph("SLA Compliance &amp; Repair Notes", table_cell_bold),
@@ -311,13 +312,13 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
             Paragraph("<b>2. Gatekeeper Triage</b>", table_cell_style),
             Paragraph("<font color='#2563EB'><b>WITH_MECHANIC</b></font>", table_cell_style),
             Paragraph("Supervisor", table_cell_style),
-            Paragraph("Supervisor evaluates severity: routes minor faults internally or assigns mechanic for workshop repair.", table_cell_style),
+            Paragraph("Supervisor evaluates severity: routes minor faults internally or sends truck to the workshop mechanic.", table_cell_style),
         ],
         [
             Paragraph("<b>3. Mechanic Assessment</b>", table_cell_style),
             Paragraph("<font color='#4F46E5'><b>IN_PROGRESS</b></font>", table_cell_style),
-            Paragraph("Mechanic", table_cell_style),
-            Paragraph("Assigned mechanic inspects truck, commits repair ETA (e.g. 'Today 4 PM'), and begins floor wrenching.", table_cell_style),
+            Paragraph("Workshop Mechanic", table_cell_style),
+            Paragraph("Mechanic inspects truck, commits repair ETA (e.g. 'Today 4 PM'), and begins floor wrenching.", table_cell_style),
         ],
         [
             Paragraph("<b>4. Spares Requisition</b>", table_cell_style),
@@ -413,7 +414,7 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
         "<b>Gatekeeper Triage (Instant Decision):</b> When a ticket is submitted, the Supervisor receives an instant WhatsApp alert with two one-tap buttons:<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• <b>[🛠️ Handle Internally]:</b> For minor fixes (e.g. bulb swap, wiper blade, air top-up). The ticket is solved on the spot without taking bay space.<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• <b>[🏭 Send to Workshop]:</b> For mechanical issues requiring tooling, spares, or bay inspection.",
-        "<b>Mechanic Assignment:</b> If routed to the workshop, the Supervisor selects an active mechanic from the roster (e.g. <i>Sajid, Farai, Simba</i>).",
+        "<b>Automatic Workshop Routing:</b> When routed to the workshop, the job is assigned directly to the dedicated Workshop Mechanic.",
         "<b>Live Floor Supervision:</b> The Supervisor monitors job progress, spares requisitions, and supplier delays from WhatsApp or the Live Dashboard.",
         "<b>QC Road-Test Inspection:</b> When the mechanic marks work done, the Supervisor receives the QC testing notification:<br/>"
         "&nbsp;&nbsp;&nbsp;&nbsp;• <b>[✅ Passed QC Test]:</b> Vehicle passes safety/road test. Status changes to <b>CLOSED</b> and vehicle returns to active fleet.<br/>"
@@ -424,14 +425,14 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
     story.append(Spacer(1, 8))
 
     # --- ROLE 3: WORKSHOP MECHANIC ---
-    story.append(Paragraph("ROLE 3: Workshop Mechanics &amp; Technicians (Repairs &amp; Spares)", h2_style))
+    story.append(Paragraph("ROLE 3: Workshop Mechanic (Repairs &amp; Spares)", h2_style))
     story.append(Paragraph(
-        "Mechanics receive assigned work orders on WhatsApp, commit completion times, order spare parts, and record job costing:",
+        "The dedicated Workshop Mechanic receives assigned work orders on WhatsApp, commits completion times, orders spare parts, and records job costing:",
         body_style
     ))
 
     mech_steps = [
-        "<b>Job Alert &amp; ETA Commitment:</b> Mechanic receives assignment with truck details, fault notes, and photo. Mechanic replies with expected completion time (e.g. <i>'Today 3 PM'</i> or <i>'Tomorrow 10 AM'</i>).",
+        "<b>Job Alert &amp; ETA Commitment:</b> The mechanic receives assignment with truck details, fault notes, and photo. Mechanic replies with expected completion time (e.g. <i>'Today 3 PM'</i> or <i>'Tomorrow 10 AM'</i>).",
         "<b>Ordering Spare Parts:</b> If parts are required, mechanic taps <b>[📦 Request Parts]</b> &rarr; enters part description (e.g. <i>'Brake booster diaphragm &amp; air valve'</i>) &rarr; snaps and uploads photo of the worn component.",
         "<b>Purchasing Inquiries:</b> If Purchasing asks for clarification, mechanic replies directly on WhatsApp with dimensions or OEM numbers.",
         "<b>Marking Work Completed:</b> When mechanical repairs are done, mechanic taps <b>[✅ Mark Work Done]</b> &rarr; enters resolution notes &rarr; enters parts cost (e.g. <code>$140</code>) &rarr; enters labor hours &rarr; submits for Supervisor QC inspection.",
@@ -580,7 +581,7 @@ def create_logistics_guide_pdf(filename="Tagoneswa_Logistics_Fleet_Operations_Gu
         "<b>Operational Best Practices for Fleet Teams:</b><br/>"
         "• <b>Clear Defect Notes:</b> Drivers should include specific symptoms (e.g. speed, gear, or temperature when fault occurred).<br/>"
         "• <b>Clear Photos:</b> Take well-lit, close-up photos of leaks, cracked springs, or worn tyres to speed up supervisor approval.<br/>"
-        "• <b>Timely ETA Updates:</b> Mechanics must enter realistic ETAs so logistics controllers can plan vehicle load dispatches.<br/>"
+        "• <b>Timely ETA Updates:</b> The mechanic must enter realistic ETAs so logistics controllers can plan vehicle load dispatches.<br/>"
         "• <b>Mandatory QC Road-Test:</b> No truck is returned to the active fleet without a documented supervisor road-test sign-off."
     )
     t_bp = Table([[Paragraph(best_practice_text, callout_style)]], colWidths=[7.0 * inch])

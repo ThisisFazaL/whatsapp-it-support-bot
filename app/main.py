@@ -376,20 +376,6 @@ async def download_daily_report_pdf(db: AsyncSession = Depends(get_db)):
         filename=f"Daily_IT_Support_Master_Report_{datetime.datetime.now().strftime('%d%b%Y')}.pdf"
     )
 
-@app.get("/logistics-guide.pdf")
-@app.get("/api/download-logistics-guide")
-async def download_logistics_guide_pdf():
-    """Serves the Tagoneswa Logistics & Fleet Operations Standard Guide PDF."""
-    pdf_path = "Tagoneswa_Logistics_Fleet_Operations_Guide.pdf"
-    if not os.path.exists(pdf_path):
-        from generate_logistics_guide_pdf import create_logistics_guide_pdf
-        create_logistics_guide_pdf(pdf_path)
-    return FileResponse(
-        pdf_path,
-        media_type="application/pdf",
-        filename="Tagoneswa_Logistics_Fleet_Operations_Guide.pdf"
-    )
-
 @app.get("/trigger-daily-report")
 async def trigger_daily_report(db: AsyncSession = Depends(get_db)):
     """API endpoint to manually trigger 8 PM IST Daily Master Report on demand."""

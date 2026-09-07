@@ -881,9 +881,6 @@ async def dashboard_view(request: Request):
                     </div>
 
                     <div class="flex items-center justify-between sm:justify-end gap-2">
-                        <a href="/logistics-guide.pdf" target="_blank" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold px-3 py-1.5 rounded-full transition flex items-center gap-1.5 cursor-pointer shadow-xs" title="Download Standard Operating Guide PDF">
-                            <span>📄</span> Guide (PDF)
-                        </a>
                         <span id="ws-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
                             Showing 0 vehicles
                         </span>
