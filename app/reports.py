@@ -197,6 +197,8 @@ async def send_daily_report_to_master(session: AsyncSession):
     local_path = "Daily_IT_Support_Master_Report_Sample.pdf"
     try:
         create_daily_report_pdf(local_path, today_tickets=today_tickets, asg_map=asg_map)
+        import gc
+        gc.collect()
         pdf_url = "https://whatsapp-it-support-bot.onrender.com/daily-report.pdf"
 
         # 3. Send PDF Document Attachment via WhatsApp Meta Cloud API (Media ID Upload + Direct URL Fallback)

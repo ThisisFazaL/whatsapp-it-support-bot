@@ -40,7 +40,7 @@ async def setup_test_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    return session_factory
+    return engine, session_factory
 
 async def seed_master_data(session: AsyncSession):
     # Priorities & Status
@@ -111,7 +111,7 @@ async def run_daily_button_audit() -> Dict[str, Any]:
             "details": details
         })
 
-    session_factory = await setup_test_db()
+    test_engine, session_factory = await setup_test_db()
     
     try:
         # Mock Meta API so no real WhatsApp calls are made during the audit
@@ -303,6 +303,13 @@ async def run_daily_button_audit() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error during button audit execution: {e}", exc_info=True)
         record_test("System Error", "Audit Runner", False, str(e))
+    finally:
+        try:
+            await test_engine.dispose()
+        except Exception:
+            pass
+        import gc
+        gc.collect()
 
     passed_count = sum(1 for r in test_results if r["status"] == "PASS")
     failed_count = sum(1 for r in test_results if r["status"] == "FAIL")

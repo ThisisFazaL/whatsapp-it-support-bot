@@ -40,6 +40,30 @@ UPTIME_STATS = {
     "last_external_ping_time": None
 }
 
+def get_memory_usage_mb() -> float:
+    """Returns current process Resident Set Size (RSS) memory usage in Megabytes."""
+    try:
+        if os.path.exists("/proc/self/status"):
+            with open("/proc/self/status", "r") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        return round(int(parts[1]) / 1024.0, 2)
+        import resource
+        rusage = resource.getrusage(resource.RUSAGE_SELF)
+        import platform
+        if platform.system() == "Darwin":
+            return round(rusage.ru_maxrss / (1024.0 * 1024.0), 2)
+        else:
+            return round(rusage.ru_maxrss / 1024.0, 2)
+    except Exception:
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            return round(process.memory_info().rss / (1024.0 * 1024.0), 2)
+        except Exception:
+            return 0.0
+
 async def scheduled_daily_audit_loop():
     """
     Background scheduled loop to run Daily Bot Workflow & Button Audit at 04:00 UTC (06:00 AM CAT / 09:30 AM IST).
@@ -235,6 +259,10 @@ async def keep_alive_ping_loop():
             UPTIME_STATS["failed_self_pings"] += 1
             logger.debug(f"Keep-alive self-ping error: {e}")
         
+        # Periodic garbage collection to maintain minimal memory footprint (<60MB)
+        import gc
+        gc.collect()
+        
         # Sleep for 4 minutes (240s) — ensures 3+ pings inside Render's 15-minute idle window
         await asyncio.sleep(240)
 
@@ -296,13 +324,14 @@ async def ping_endpoint():
         "service": "whatsapp_it_support_bot",
         "uptime": uptime_str,
         "uptime_seconds": uptime_seconds,
+        "memory_usage_mb": get_memory_usage_mb(),
         "server_time_utc": now.isoformat(),
         "total_pings_served": UPTIME_STATS["total_external_pings"]
     }
 
 @app.get("/api/uptime")
 async def uptime_stats_endpoint():
-    """Returns detailed 24/7 uptime metrics, ping counters, and bot health status."""
+    """Returns detailed 24/7 uptime metrics, ping counters, bot health, and live memory status."""
     now = datetime.datetime.utcnow()
     uptime_seconds = int((now - SERVER_START_TIME).total_seconds())
     days, rem = divmod(uptime_seconds, 86400)
@@ -315,6 +344,7 @@ async def uptime_stats_endpoint():
         "status": "ONLINE",
         "uptime": uptime_str,
         "uptime_seconds": uptime_seconds,
+        "memory_usage_mb": get_memory_usage_mb(),
         "started_at": SERVER_START_TIME.isoformat(),
         "server_time_utc": now.isoformat(),
         "keep_alive_stats": UPTIME_STATS,
@@ -333,6 +363,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "whatsapp_it_support_bot",
+        "memory_usage_mb": get_memory_usage_mb(),
         "bot_health": LAST_AUDIT_RESULT.get("status", "UNKNOWN"),
         "last_audit": LAST_AUDIT_RESULT
     }

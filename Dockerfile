@@ -22,5 +22,5 @@ COPY . .
 # Expose port 8000
 EXPOSE 8000
 
-# Start production server with Gunicorn + Uvicorn workers
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Start production server with single high-performance async worker for optimal memory efficiency (<60MB)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
