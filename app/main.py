@@ -147,27 +147,26 @@ async def send_morning_shift_opener(session: AsyncSession):
     from app.database import SupportAdmin
     from app.workshop.models import WorkshopStaff
     
-    # 1. Support Admins (Kevin, Ellias, Stanclea, Omar, Faisal)
+    # 1. Support Admins (Kevin, Ellias, Stanclea, Omar, Faisal, Fazal Master Admin)
     adm_stmt = select(SupportAdmin).where(SupportAdmin.active == True)
     admins = (await session.execute(adm_stmt)).scalars().all()
     for adm in admins:
-        if adm.phone != settings.master_admin_phone:
-            msg = (
-                f"🌅 *Good Morning, {adm.full_name}!* 👋\n\n"
-                f"Welcome to today's support shift.\n\n"
-                f"Please tap **Start My Shift** below to activate your portal and open your active 24-hour window for ticket alerts."
-            )
-            buttons = [
-                {"id": "cmd_start_shift", "title": "☀️ Start My Shift"}
-            ]
-            await meta_api.send_button_message(
-                to_phone=adm.phone,
-                body_text=msg,
-                buttons=buttons,
-                header_text="☀️ DAILY SHIFT OPENER",
-                fallback_template="tagoneswa_launch_announcement"
-            )
-            await asyncio.sleep(0.5)
+        msg = (
+            f"🌅 *Good Morning, {adm.full_name}!* 👋\n\n"
+            f"Welcome to today's support shift.\n\n"
+            f"Please tap **Start My Shift** below to activate your portal and open your active 24-hour window for ticket alerts."
+        )
+        buttons = [
+            {"id": "cmd_start_shift", "title": "☀️ Start My Shift"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=adm.phone,
+            body_text=msg,
+            buttons=buttons,
+            header_text="☀️ DAILY SHIFT OPENER",
+            fallback_template="tagoneswa_launch_announcement"
+        )
+        await asyncio.sleep(0.5)
 
     # 2. Real Workshop Staff (Edward Supervisor, Sajid Mechanic, Lydon Purchasing, Panashe Logistics Assistant)
     ws_stmt = select(WorkshopStaff).where(WorkshopStaff.active == True)
