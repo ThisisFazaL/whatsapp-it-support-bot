@@ -352,6 +352,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     claim_match = re.match(r"^(?:🔵\s*)?(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
     # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "🟢 resolve_TKT-...", "resolve 1"
     resolve_match = re.match(r"^(?:🟢\s*)?resolve[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
+    # Match UNASSIGN command: "unassign TKT-...", "unassign_TKT-...", "release TKT-...", "unclaim TKT-..."
+    unassign_match = re.match(r"^(?:⚪\s*)?(?:unassign|release|unclaim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
 
     # Check for bare button text: "🔵 Claim Ticket", "Claim Ticket", "claim", "accept"
     is_bare_claim = not claim_match and (text_lower in {"claim ticket", "claim", "accept", "accept ticket", "🔵 claim ticket"} or "claim ticket" in text_lower)
@@ -412,7 +414,7 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
     is_start_shift = text_lower in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day"} or text_strip.startswith("cmd_start_shift")
     raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
-    is_greeting = not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and (
+    is_greeting = not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and not unassign_match and (
         is_start_shift or
         raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
         text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
@@ -797,10 +799,12 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
 
     # 5. HANDLE RESOLVE BUTTON TAP OR COMMAND -> PROMPT FOR NOTES
     if not raw_ticket_arg:
-        if hasattr(claim_match, "group"):
+        if hasattr(claim_match, "group") and claim_match:
             raw_ticket_arg = claim_match.group(1).upper()
-        elif hasattr(resolve_match, "group"):
+        elif hasattr(resolve_match, "group") and resolve_match:
             raw_ticket_arg = resolve_match.group(1).upper()
+        elif hasattr(unassign_match, "group") and unassign_match:
+            raw_ticket_arg = unassign_match.group(1).upper()
 
     if not raw_ticket_arg:
         return False
@@ -1006,6 +1010,31 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             f"_(e.g., 'Replaced broken door latch and tested clip')_"
         )
         await meta_api.send_text_message(sender_phone, prompt_msg)
+        return True
+
+    # ----------------------------------------------------
+    # HANDLE UNASSIGN COMMAND: "unassign TKT-...", "release TKT-..."
+    # ----------------------------------------------------
+    if unassign_match:
+        if is_maint_ticket:
+            await session.execute(
+                delete(MaintenanceTicketAssignment).where(MaintenanceTicketAssignment.ticket_id == ticket.ticket_id)
+            )
+        else:
+            await session.execute(
+                delete(TicketAssignment).where(TicketAssignment.ticket_id == ticket.ticket_id)
+            )
+        ticket.status_id = 1  # Back to Open
+        ticket.updated_at = datetime.datetime.utcnow()
+        await session.commit()
+
+        unassign_confirm_msg = (
+            f"⚪ *TICKET MARKED AS UNASSIGNED*\n\n"
+            f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+            f"📊 *Status:* 🟡 OPEN / UNASSIGNED\n\n"
+            f"This ticket has been released and is now back in the unassigned pool for any admin to claim."
+        )
+        await meta_api.send_text_message(sender_phone, unassign_confirm_msg)
         return True
 
     return False

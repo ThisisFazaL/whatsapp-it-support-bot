@@ -388,6 +388,67 @@ async def trigger_morning_opener_endpoint(db: AsyncSession = Depends(get_db)):
     await send_morning_shift_opener(db)
     return {"status": "SUCCESS", "message": "Morning shift opener sent to all real Support Admins and Workshop Staff!"}
 
+@app.get("/api/admin/unassign-ticket")
+async def unassign_ticket_endpoint(ticket_number: str = "TKT-20260903-00076", db: AsyncSession = Depends(get_db)):
+    """Unassigns a ticket, deletes its assignment record, sets status back to Open (1), and notifies Master Admin."""
+    from app.database import Ticket, MaintenanceTicket, TicketAssignment, MaintenanceTicketAssignment, delete
+    from sqlalchemy import select
+    from app.meta_api import meta_api
+    from app.config import settings
+
+    t_num = ticket_number.strip().upper()
+    is_maint = "TKT-MNT" in t_num
+
+    if is_maint:
+        stmt = select(MaintenanceTicket).where(
+            (MaintenanceTicket.ticket_number == t_num) |
+            (MaintenanceTicket.ticket_number.endswith(f"-{t_num.zfill(5)}")) |
+            (MaintenanceTicket.ticket_number.endswith(t_num))
+        )
+        res = await db.execute(stmt)
+        ticket = res.scalars().first()
+        if not ticket:
+            return {"status": "error", "message": f"Maintenance ticket '{t_num}' not found."}
+        
+        await db.execute(delete(MaintenanceTicketAssignment).where(MaintenanceTicketAssignment.ticket_id == ticket.ticket_id))
+    else:
+        stmt = select(Ticket).where(
+            (Ticket.ticket_number == t_num) |
+            (Ticket.ticket_number.endswith(f"-{t_num.zfill(5)}")) |
+            (Ticket.ticket_number.endswith(t_num))
+        )
+        res = await db.execute(stmt)
+        ticket = res.scalars().first()
+        if not ticket:
+            return {"status": "error", "message": f"IT ticket '{t_num}' not found."}
+
+        await db.execute(delete(TicketAssignment).where(TicketAssignment.ticket_id == ticket.ticket_id))
+
+    ticket.status_id = 1 # Open / Unassigned
+    ticket.updated_at = datetime.datetime.utcnow()
+    await db.commit()
+
+    # Notify Master Admin on WhatsApp
+    msg = (
+        f"⚪ *TICKET UNASSIGNED SUCCESSFULLY*\n\n"
+        f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+        f"📊 *Status:* 🟡 OPEN / UNASSIGNED\n\n"
+        f"This ticket has been released and returned to the unassigned queue."
+    )
+    if settings.master_admin_phone:
+        try:
+            await meta_api.send_text_message(settings.master_admin_phone, msg)
+        except Exception as e:
+            logger.error(f"Failed to send unassign confirmation to master admin: {e}")
+
+    return {
+        "status": "success",
+        "ticket_number": ticket.ticket_number,
+        "new_status_id": 1,
+        "status_name": "Open / Unassigned",
+        "message": f"Ticket {ticket.ticket_number} successfully unassigned and marked Open!"
+    }
+
 @app.get("/trigger-ticket-cleanup")
 async def trigger_ticket_cleanup_endpoint():
     """Removes test maintenance tickets 1-4, renumbers ticket 5 as TKT-MNT-20260827-00001 and sends alert to admins."""
