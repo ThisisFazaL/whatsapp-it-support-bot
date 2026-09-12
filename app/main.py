@@ -109,31 +109,33 @@ async def scheduled_daily_audit_loop():
 
 async def scheduled_daily_report_loop():
     """Background task loop to deliver Daily Master Executive Report at 8:00 PM IST (14:30 UTC) daily."""
-    last_sent_date = None
+    now_init = datetime.datetime.utcnow()
+    target_today_utc = now_init.replace(hour=14, minute=30, second=0, microsecond=0)
+    last_sent_date = now_init.strftime("%Y-%m-%d") if now_init > (target_today_utc + datetime.timedelta(minutes=15)) else None
+
     while True:
         try:
             now_utc = datetime.datetime.utcnow()
             today_date_str = now_utc.strftime("%Y-%m-%d")
             
-            # Check if current time is past 14:30 UTC (8:00 PM IST) and hasn't sent today
+            # Check if current time is within 14:30 UTC (8:00 PM IST) window and hasn't sent today
             target_utc = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
             
-            if now_utc >= target_utc and last_sent_date != today_date_str:
+            if target_utc <= now_utc < (target_utc + datetime.timedelta(minutes=30)) and last_sent_date != today_date_str:
                 logger.info("8:00 PM IST trigger window reached. Executing Daily Master Report delivery...")
                 async with async_session_factory() as session:
                     await send_daily_report_to_master(session)
                 last_sent_date = today_date_str
                 logger.info("Daily Master Report delivered successfully!")
 
-            # Calculate next target (tomorrow 14:30 UTC if sent, or check again in 60s)
+            # Calculate next target (tomorrow 14:30 UTC if sent, or check again in 30 mins)
             now_utc = datetime.datetime.utcnow()
             next_target = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
             if now_utc >= next_target:
                 next_target += datetime.timedelta(days=1)
 
             sleep_seconds = (next_target - now_utc).total_seconds()
-            logger.info(f"Next Daily Master Report scheduled in {sleep_seconds/3600:.2f} hours (at 8:00 PM IST / {next_target.isoformat()}).")
-            await asyncio.sleep(min(sleep_seconds, 3600))
+            await asyncio.sleep(min(sleep_seconds, 1800))
 
         except asyncio.CancelledError:
             logger.info("Scheduled report loop cancelled.")
@@ -195,26 +197,31 @@ async def send_morning_shift_opener(session: AsyncSession):
 
 async def scheduled_morning_staff_wakeup_loop():
     """
-    Background task to send a morning queue update & 24h window keep-alive
-    to all Support Admins and Workshop Staff every morning at 06:00 UTC (08:00 AM CAT).
+    Background task to send a morning shift opener & 24h window keep-alive
+    to all Support Admins and Workshop Staff strictly once daily at 08:00 AM Zimbabwe Time (06:00 UTC / 08:00 AM CAT).
     """
-    last_wakeup_date = None
+    now_init = datetime.datetime.utcnow()
+    target_today_utc = now_init.replace(hour=6, minute=0, second=0, microsecond=0)
+    # If starting up AFTER 06:15 UTC (past today's 8:00 AM CAT window), do not send retroactively today.
+    last_wakeup_date = now_init.strftime("%Y-%m-%d") if now_init > (target_today_utc + datetime.timedelta(minutes=15)) else None
+
     while True:
         try:
             now_utc = datetime.datetime.utcnow()
             today_date_str = now_utc.strftime("%Y-%m-%d")
             
-            # Check if current time is past 06:00 UTC (08:00 AM CAT) and hasn't sent today
+            # Target is 06:00 UTC (08:00 AM CAT / Zimbabwe time)
             target_utc = now_utc.replace(hour=6, minute=0, second=0, microsecond=0)
             
-            if now_utc >= target_utc and last_wakeup_date != today_date_str:
-                logger.info("08:00 AM CAT reached. Sending morning portal wake-up to Support Admins and Workshop Staff...")
+            # Only trigger within a 30-minute window starting at 06:00 UTC and only once per day
+            if target_utc <= now_utc < (target_utc + datetime.timedelta(minutes=30)) and last_wakeup_date != today_date_str:
+                logger.info("08:00 AM Zimbabwe CAT reached (06:00 UTC). Sending morning shift opener to Support Admins and Workshop Staff...")
                 async with async_session_factory() as session:
                     await send_morning_shift_opener(session)
                 last_wakeup_date = today_date_str
-                logger.info("Morning staff wake-up pings sent successfully!")
+                logger.info("Morning staff shift opener sent successfully for today!")
 
-            # Sleep until next check
+            # Sleep until next check (recalculate next 06:00 UTC target)
             now_utc = datetime.datetime.utcnow()
             next_target = now_utc.replace(hour=6, minute=0, second=0, microsecond=0)
             if now_utc >= next_target:

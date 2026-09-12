@@ -464,9 +464,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if is_greeting:
         await clear_user_state(session, sender_phone)
 
-        # Deliver all unclaimed open tickets that were queued / missed during 24h window
-        await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
-
         if is_start_shift:
             header = "🟢 SHIFT ACTIVE (24H OPEN)"
             body = (
@@ -501,9 +498,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if is_view_assigned:
         await clear_user_state(session, sender_phone)
         
-        # Deliver all unclaimed open tickets that were queued / missed during 24h window
-        await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
-
         tickets = []
 
         if admin.is_maintenance_admin or admin.is_master_admin:
