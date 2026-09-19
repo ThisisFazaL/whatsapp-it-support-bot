@@ -46,8 +46,14 @@ async def generate_ticket_number(session: AsyncSession, domain: str = "IT") -> s
 async def start_ticket_creation_flow(session: AsyncSession, phone: str, employee: Employee = None):
     """
     Starts ticket creation flow.
+    Checks if employee is Salesperson (gets 2 buttons: IT Support vs Fleet Approval).
     Checks if employee or admin is authorized for Maintenance. If dual-role, presents 2 Interactive Buttons.
     """
+    from app.handlers.fleet_approval_handler import is_salesperson, send_sales_portal_menu
+    if await is_salesperson(session, phone, employee):
+        await send_sales_portal_menu(session, phone, employee)
+        return
+
     is_maint_reporter = employee.is_maintenance_reporter if employee else False
     is_master = False
     is_maint_admin = False
@@ -181,6 +187,13 @@ async def handle_flow(
         elif "domain_maint" in text_clean or text_clean in {"projects", "project", "maintenance", "🏗️ projects"}:
             await start_location_selection(session, phone, domain="MAINTENANCE")
             return
+        elif "domain_fleet" in text_clean or text_clean in {"fleet approval", "fleet", "🚛 fleet approval"}:
+            from app.handlers.fleet_approval_handler import is_salesperson, handle_fleet_approval_flow
+            if await is_salesperson(session, phone, employee):
+                await handle_fleet_approval_flow(session, phone, employee, message_text, state)
+            else:
+                await meta_api.send_text_message(phone, "⚠️ *Access Denied*: Fleet trip approval requests are restricted to authorized Sales personnel.")
+            return
 
         # If user is a SupportAdmin, sending 'hi' / 'menu' / 'reset' or having no state MUST show Admin Dashboard!
         from app.state_manager import is_admin
@@ -191,6 +204,23 @@ async def handle_flow(
             return
         await start_ticket_creation_flow(session, phone, employee)
         return
+
+    # Check Fleet Approval Flow
+    if state and state.flow_name == "fleet_approval":
+        from app.handlers.fleet_approval_handler import handle_fleet_approval_flow
+        if await handle_fleet_approval_flow(session, phone, employee, message_text, state):
+            return
+
+    # Check Sales Portal Domain Selection
+    if state and state.flow_name == "sales_portal":
+        if "domain_fleet" in text_clean or text_clean in {"fleet approval", "fleet", "🚛 fleet approval"}:
+            from app.handlers.fleet_approval_handler import handle_fleet_approval_flow
+            await handle_fleet_approval_flow(session, phone, employee, message_text, state)
+            return
+        else:
+            # Default to IT Support
+            await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
+            return
 
     step = state.current_step
     data = state.current_data or {}

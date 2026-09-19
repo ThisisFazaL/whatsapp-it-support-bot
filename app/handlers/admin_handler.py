@@ -348,6 +348,32 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if not admin:
         return False
 
+    # Master Admin Live One-Word Role Switching & Salesperson Interception
+    from app.handlers.fleet_approval_handler import (
+        handle_role_switch_command,
+        is_salesperson,
+        send_sales_portal_menu,
+        handle_fleet_approval_flow
+    )
+    if await handle_role_switch_command(session, sender_phone, message_text):
+        return True
+
+    # If Master Admin is currently in SALES testing mode, delegate to sales flow
+    if await is_salesperson(session, sender_phone):
+        state = await get_user_state(session, sender_phone)
+        if await handle_fleet_approval_flow(session, sender_phone, None, message_text, state):
+            return True
+
+        if text_lower in {"btn_domain_it", "it support", "💻 it support"}:
+            return False  # Let flow_handler process IT Support categories
+
+        clean_kw = re.sub(r"[^\w\s]", "", text_lower).strip()
+        if clean_kw in {"hi", "hello", "menu", "admin", "start", "btn_sales_menu"} or text_lower in {"hi", "hello", "menu", "admin", "start", "btn_sales_menu"}:
+            await clear_user_state(session, sender_phone)
+            emp_obj = (await session.execute(select(Employee).where(Employee.phone == sender_phone))).scalars().first()
+            await send_sales_portal_menu(session, sender_phone, emp_obj)
+            return True
+
     # Match ACCEPT / CLAIM command: "accept TKT-...", "claim_TKT-...", "🔵 claim_TKT-...", "claim TKT-..."
     claim_match = re.match(r"^(?:🔵\s*)?(?:accept|claim)[_\s]+([A-Z0-9-]+)$", text_strip, re.IGNORECASE)
     # Match RESOLVE command: "resolve TKT-...", "resolve_TKT-...", "🟢 resolve_TKT-...", "resolve 1"

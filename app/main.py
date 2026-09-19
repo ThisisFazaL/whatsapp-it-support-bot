@@ -2,6 +2,7 @@ import logging
 import asyncio
 import datetime
 import os
+import re
 from typing import Set
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, Query, Depends, HTTPException
@@ -456,6 +457,18 @@ async def unassign_ticket_endpoint(ticket_number: str = "TKT-20260903-00076", db
         "message": f"Ticket {ticket.ticket_number} successfully unassigned and marked Open!"
     }
 
+@app.get("/api/favlogix/verify-trip")
+async def verify_favlogix_trip_endpoint(trip_id: str):
+    """Bridge endpoint allowing cloud Render service to extract live Favlogix trip data from local Chrome session."""
+    from app.services.favlogix_browser_service import FavlogixBrowserService
+    try:
+        browser = FavlogixBrowserService()
+        data = browser.extract_trip_data(trip_id)
+        return {"success": True, **data}
+    except Exception as e:
+        logger.error(f"Bridge extraction failed for trip '{trip_id}': {e}")
+        return {"success": False, "trip_id": trip_id, "error": str(e)}
+
 @app.get("/trigger-ticket-cleanup")
 async def trigger_ticket_cleanup_endpoint():
     """Removes test maintenance tickets 1-4, renumbers ticket 5 as TKT-MNT-20260827-00001 and sends alert to admins."""
@@ -673,6 +686,45 @@ async def process_webhook_payload(body: dict):
                 )
                 await meta_api.send_text_message(sender_phone, warning_msg)
                 return
+
+            # Step 1.5: Master Admin Role Switch & Salesperson Fleet Flow Check
+            from app.handlers.fleet_approval_handler import (
+                handle_role_switch_command,
+                is_salesperson,
+                handle_fleet_approval_flow,
+                send_sales_portal_menu
+            )
+            if await handle_role_switch_command(db, sender_phone, message_text):
+                return
+
+            if await is_salesperson(db, sender_phone, employee):
+                state = await get_user_state(db, sender_phone)
+                # 1. Handle Fleet Approval workflow actions
+                if await handle_fleet_approval_flow(db, sender_phone, employee, message_text, state):
+                    return
+
+                clean_txt = message_text.strip().lower()
+                # 2. Handle [ 💻 IT Support ] button
+                if clean_txt in {"btn_domain_it", "it support", "it", "💻 it support"}:
+                    from app.handlers.flow_handler import send_categories_menu
+                    await send_categories_menu(db, sender_phone, domain="IT", data={"domain": "IT"})
+                    return
+
+                # 3. Handle Greeting / Reset -> Show Sales Portal (2 Buttons: IT Support & Fleet Approval)
+                from app.handlers.flow_handler import GLOBAL_RESET_KEYWORDS
+                clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
+                if clean_kw in GLOBAL_RESET_KEYWORDS or clean_txt in GLOBAL_RESET_KEYWORDS or clean_txt in {"btn_sales_menu", "/menu"}:
+                    from app.state_manager import clear_user_state
+                    await clear_user_state(db, sender_phone)
+                    await send_sales_portal_menu(db, sender_phone, employee)
+                    return
+
+            # Security check: Non-sales employees cannot access fleet commands
+            clean_txt = message_text.strip().lower()
+            if "domain_fleet" in clean_txt or clean_txt in {"fleet approval", "fleet", "🚛 fleet approval"}:
+                if not await is_salesperson(db, sender_phone, employee):
+                    await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: Fleet trip approval requests are restricted to authorized Sales personnel.")
+                    return
 
             # Step 2: Admin Command Check (Process Admin Commands FIRST for active Support Admins!)
             if admin:
