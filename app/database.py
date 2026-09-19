@@ -211,12 +211,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def init_db_models():
     """Create all tables and insert seed data if empty."""
     global engine, async_session_factory
-    try:
-        import asyncio
-        async with engine.begin() as conn:
-            await asyncio.wait_for(conn.run_sync(Base.metadata.create_all), timeout=5.0)
-    except Exception as e:
-        print(f"Schema verification note: {e}")
+    if "sqlite" in settings.database_url:
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+        except Exception as e:
+            print(f"Schema verification note: {e}")
             
     async with async_session_factory() as session:
         # Check Priorities
