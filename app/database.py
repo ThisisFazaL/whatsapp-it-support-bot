@@ -2,7 +2,7 @@ import datetime
 import json
 from typing import AsyncGenerator
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON
+    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float
 )
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship, selectinload
@@ -186,6 +186,23 @@ class ConversationState(Base):
     current_data = Column(JSON, default=dict)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
+class FleetTripApproval(Base):
+    __tablename__ = "fleet_trip_approvals"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trip_id = Column(String(100), nullable=False, index=True)
+    salesperson_phone = Column(String(30), nullable=False, index=True)
+    salesperson_name = Column(String(100), nullable=True)
+    destination_city = Column(String(100), nullable=False)
+    route = Column(String(100), nullable=True)
+    trip_sales_value = Column(Float, nullable=False, default=0.0)
+    required_minimum = Column(Float, nullable=False, default=0.0)
+    shortfall = Column(Float, nullable=False, default=0.0)
+    transport_charge = Column(Float, nullable=False, default=0.0)
+    has_shortfall = Column(Boolean, default=False)
+    status = Column(String(50), default="SHORTFALL_RECORDED")  # "SHORTFALL_RECORDED", "APPROVED", "DISPATCHED"
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
@@ -217,6 +234,32 @@ async def init_db_models():
                 await conn.run_sync(Base.metadata.create_all)
         except Exception as e:
             print(f"Schema verification note: {e}")
+    else:
+        try:
+            from sqlalchemy import text
+            async with engine.begin() as conn:
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fleet_trip_approvals (
+                        id SERIAL PRIMARY KEY,
+                        trip_id VARCHAR(100) NOT NULL,
+                        salesperson_phone VARCHAR(30) NOT NULL,
+                        salesperson_name VARCHAR(100),
+                        destination_city VARCHAR(100) NOT NULL,
+                        route VARCHAR(100),
+                        trip_sales_value DOUBLE PRECISION DEFAULT 0.0,
+                        required_minimum DOUBLE PRECISION DEFAULT 0.0,
+                        shortfall DOUBLE PRECISION DEFAULT 0.0,
+                        transport_charge DOUBLE PRECISION DEFAULT 0.0,
+                        has_shortfall BOOLEAN DEFAULT FALSE,
+                        status VARCHAR(50) DEFAULT 'SHORTFALL_RECORDED',
+                        raw_data JSONB,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fleet_trip_id ON fleet_trip_approvals(trip_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fleet_sales_phone ON fleet_trip_approvals(salesperson_phone)"))
+        except Exception as e:
+            print(f"Fleet approvals table init note: {e}")
             
     async with async_session_factory() as session:
         # Check Priorities

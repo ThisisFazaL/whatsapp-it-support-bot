@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Favlogix Automation & Bridge Configuration
     favlogix_bridge_url: str = "https://uninjured-seducing-cycle.ngrok-free.dev"  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome
     favlogix_url: str = "https://erp.favlogix.com"
+    favlogix_packaging_lists_path: str = "/inventory/packaging-lists"
     favlogix_remote_debug_port: int = 9222
     favlogix_timeout_seconds: int = 30
 

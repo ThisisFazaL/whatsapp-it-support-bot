@@ -130,14 +130,15 @@ class FavlogixBrowserService:
             )
 
         # Step 2: Ensure on packaging-lists page
-        target_url = "https://erp.favlogix.com/inventory/packaging-lists"
-        if "inventory/packaging-lists" not in driver.current_url:
+        packaging_path = getattr(settings, "favlogix_packaging_lists_path", "/inventory/packaging-lists").lstrip("/")
+        target_url = f"{settings.favlogix_url.rstrip('/')}/{packaging_path}"
+        if packaging_path not in driver.current_url:
             driver.get(target_url)
             time.sleep(1.5)
 
         # Step 3: Check if modal is already open
         modal_open = False
-        close_btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Close') or @data-slot='dialog-close']")
+        close_btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Close') or @data-slot='dialog-close' or @data-slot='sheet-close']")
         for cb in close_btns:
             if cb.is_displayed():
                 modal_open = True
@@ -178,47 +179,73 @@ class FavlogixBrowserService:
 
         trip_trigger = trip_triggers[0]
         cleaned_search = trip_id.strip().upper().replace("TRIP-", "")
+        tokens = [t for t in re.split(r"[-_\s]+", cleaned_search) if len(t) >= 3]
 
         # Open dropdown if closed
         if trip_trigger.get_attribute("data-state") != "open":
             trip_trigger.click()
             time.sleep(0.6)
 
-        # Step 6: Find matching trip in options
-        options = driver.find_elements(By.XPATH, "//*[@role='option'] | //*[@data-slot='select-item']")
-        target_option = None
-        matched_trip_name = ""
+        # Step 6: Find matching trip in options (with support for 100+ items & virtualized lists)
+        def _search_in_options():
+            opts = driver.find_elements(By.XPATH, "//*[@role='option'] | //*[@data-slot='select-item']")
+            for opt in opts:
+                txt = opt.text.strip().upper()
+                if cleaned_search in txt:
+                    return opt, opt.text.strip()
+            if tokens:
+                for opt in opts:
+                    txt = opt.text.strip().upper()
+                    if any(t in txt for t in tokens):
+                        return opt, opt.text.strip()
+            return None, ""
 
-        # Substring match
-        for opt in options:
-            opt_text = opt.text.strip().upper()
-            if cleaned_search in opt_text:
-                target_option = opt
-                matched_trip_name = opt.text.strip()
-                break
+        target_option, matched_trip_name = _search_in_options()
 
-        # Fuzzy match across tokens
+        # If not immediately visible, scroll container down incrementally to handle virtualized or long lists
         if not target_option:
-            tokens = [t for t in re.split(r"[-_\s]+", cleaned_search) if len(t) >= 3]
-            for opt in options:
-                opt_text = opt.text.strip().upper()
-                if any(t in opt_text for t in tokens):
-                    target_option = opt
-                    matched_trip_name = opt.text.strip()
-                    break
+            viewports = driver.find_elements(
+                By.CSS_SELECTOR,
+                "[data-radix-select-viewport], [data-slot='select-content'], [role='listbox'], div[class*='overflow-y-auto']"
+            )
+            if viewports:
+                vp = viewports[0]
+                for _ in range(15):
+                    driver.execute_script("arguments[0].scrollTop += 300;", vp)
+                    time.sleep(0.15)
+                    target_option, matched_trip_name = _search_in_options()
+                    if target_option:
+                        break
+
+        if not target_option:
+            # Try scrolling back to top and checking once more
+            viewports = driver.find_elements(By.CSS_SELECTOR, "[data-radix-select-viewport], [data-slot='select-content']")
+            if viewports:
+                driver.execute_script("arguments[0].scrollTop = 0;", viewports[0])
+                time.sleep(0.2)
+                target_option, matched_trip_name = _search_in_options()
 
         if not target_option:
             ActionChains(driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(0.3)
             self._close_modal(driver)
-            avail = [o.text.strip().splitlines()[0] for o in options if o.text.strip()]
-            avail_str = ", ".join(avail[:6]) if avail else "None"
+            all_opts = driver.find_elements(By.XPATH, "//*[@role='option'] | //*[@data-slot='select-item']")
+            avail = [o.text.strip().splitlines()[0] for o in all_opts if o.text.strip()]
+            avail_str = ", ".join(avail[:8]) if avail else "None"
             raise TripNotFoundError(
-                f"Trip ID '{trip_id}' not found in active Favlogix trips.\nAvailable trips include: {avail_str}"
+                f"Trip ID '{trip_id}' not found in active Favlogix trips (searched {len(all_opts)} options).\nAvailable trips include: {avail_str}"
             )
 
-        # Click the target trip option
-        target_option.click()
+        # Scroll into center of view and click via JS (100% reliable even with 100+ items off-screen)
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", target_option)
+            time.sleep(0.3)
+            driver.execute_script("arguments[0].click();", target_option)
+        except Exception:
+            try:
+                ActionChains(driver).move_to_element(target_option).click().perform()
+            except Exception:
+                target_option.click()
         time.sleep(1.2)
 
         # Step 7: Ensure orders are selected in the trip

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.database import Employee, Department, ConversationState
+from app.database import Employee, Department, ConversationState, FleetTripApproval
 from app.state_manager import set_user_state, clear_user_state, get_user_state
 from app.meta_api import meta_api
 from app.services.trip_verification_service import trip_verification_service
@@ -177,6 +177,18 @@ async def handle_fleet_approval_flow(
     if text_lower.startswith(("btn_accept_fleet_", "btn_dispatch_")):
         trip_id = text_strip.replace("btn_accept_fleet_", "").replace("btn_dispatch_", "").strip()
         await clear_user_state(session, phone)
+
+        # Update latest record in fleet_trip_approvals
+        rec_stmt = (
+            select(FleetTripApproval)
+            .where(FleetTripApproval.trip_id == trip_id)
+            .order_by(FleetTripApproval.id.desc())
+        )
+        rec = (await session.execute(rec_stmt)).scalars().first()
+        if rec:
+            rec.status = "DISPATCHED"
+            await session.commit()
+
         ack = (
             f"✅ *TRIP DISPATCH AUTHORIZED*\n"
             f"────────────────────\n"
@@ -238,7 +250,7 @@ async def handle_fleet_approval_flow(
             await meta_api.send_text_message(phone, fail_card)
             return True
 
-        # Successful verification -> Build Report Card
+        # Successful verification -> Build Report Card & Persist in Database
         trip_id = result.get("trip_id", trip_query)
         dest = result.get("destination_city", "Unknown")
         route = result.get("route", "")
@@ -250,6 +262,24 @@ async def handle_fleet_approval_flow(
         is_approved = result.get("approved", False)
 
         clean_btn_id = re.sub(r"[^\w-]", "", trip_id)[:50]
+
+        # 1. Save record in database for audit and future dashboard visualization
+        approval_record = FleetTripApproval(
+            trip_id=trip_id,
+            salesperson_phone=phone,
+            salesperson_name=employee.full_name if employee else "Sales Colleague",
+            destination_city=dest,
+            route=route,
+            trip_sales_value=sales_val,
+            required_minimum=req_min,
+            shortfall=shortfall,
+            transport_charge=transport_charge,
+            has_shortfall=not is_approved,
+            status="APPROVED_MEETS_MINIMUM" if is_approved else "SHORTFALL_LOGGED",
+            raw_data=result
+        )
+        session.add(approval_record)
+        await session.commit()
 
         if is_approved:
             card_body = (
@@ -275,6 +305,8 @@ async def handle_fleet_approval_flow(
                 header_text="🚛 TRIP VERIFICATION PASSED"
             )
         else:
+            # When shortfall is detected: NO BUTTONS!
+            # Transport charge & shortfall are stored in DB and presented purely as information.
             card_body = (
                 f"📋 *FLEET TRIP VERIFICATION*\n"
                 f"────────────────────\n"
@@ -285,19 +317,13 @@ async def handle_fleet_approval_flow(
                 f"⚠️ *SHORTFALL DETECTED:* ${shortfall:,.2f}\n"
                 f"💸 *Transport Charge (4%):* *${transport_charge:,.2f}*\n"
                 f"────────────────────\n"
-                f"⚠️ This trip is below the minimum required sales threshold. A transport charge of *${transport_charge:,.2f}* is required for dispatch approval."
+                f"⚠️ *Status:* Recorded in Fleet System\n\n"
+                f"This trip is below the minimum required sales threshold.\n"
+                f"The transport charge of *${transport_charge:,.2f}* has been logged and recorded for management review.\n\n"
+                f"💡 _Reply 'hi' or 'menu' to return to the main menu._"
             )
-            buttons = [
-                {"id": f"btn_accept_fleet_{clean_btn_id}", "title": "✅ Accept & Dispatch"},
-                {"id": f"btn_cancel_fleet_{clean_btn_id}", "title": "❌ Cancel Request"}
-            ]
-            await set_user_state(session, phone, "awaiting_decision", {"trip_id": trip_id, "charge": transport_charge}, flow_name="fleet_approval")
-            await meta_api.send_button_message(
-                to_phone=phone,
-                body_text=card_body,
-                buttons=buttons,
-                header_text="⚠️ TRIP SHORTFALL DETECTED"
-            )
+            await clear_user_state(session, phone)
+            await meta_api.send_text_message(phone, card_body)
         return True
 
     return False

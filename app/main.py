@@ -3,7 +3,7 @@ import asyncio
 import datetime
 import os
 import re
-from typing import Set
+from typing import Set, Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, Query, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -468,6 +468,52 @@ async def verify_favlogix_trip_endpoint(trip_id: str):
     except Exception as e:
         logger.error(f"Bridge extraction failed for trip '{trip_id}': {e}")
         return {"success": False, "trip_id": trip_id, "error": str(e)}
+
+@app.get("/api/fleet/trip-approvals")
+async def list_fleet_trip_approvals(
+    limit: int = 50,
+    has_shortfall: Optional[bool] = None,
+    trip_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """API endpoint for future dashboards to query all fleet trip verifications, shortfalls, and transport charges."""
+    from app.database import FleetTripApproval
+    stmt = select(FleetTripApproval).order_by(FleetTripApproval.created_at.desc())
+    if has_shortfall is not None:
+        stmt = stmt.where(FleetTripApproval.has_shortfall == has_shortfall)
+    if trip_id:
+        stmt = stmt.where(FleetTripApproval.trip_id.ilike(f"%{trip_id}%"))
+    stmt = stmt.limit(limit)
+
+    res = await db.execute(stmt)
+    records = res.scalars().all()
+
+    total_shortfall = sum(r.shortfall for r in records if r.has_shortfall)
+    total_transport_charge = sum(r.transport_charge for r in records if r.has_shortfall)
+
+    return {
+        "count": len(records),
+        "total_shortfall": round(total_shortfall, 2),
+        "total_transport_charge": round(total_transport_charge, 2),
+        "approvals": [
+            {
+                "id": r.id,
+                "trip_id": r.trip_id,
+                "salesperson_name": r.salesperson_name,
+                "salesperson_phone": r.salesperson_phone,
+                "destination_city": r.destination_city,
+                "route": r.route,
+                "trip_sales_value": r.trip_sales_value,
+                "required_minimum": r.required_minimum,
+                "shortfall": r.shortfall,
+                "transport_charge": r.transport_charge,
+                "has_shortfall": r.has_shortfall,
+                "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else None
+            }
+            for r in records
+        ]
+    }
 
 @app.get("/trigger-ticket-cleanup")
 async def trigger_ticket_cleanup_endpoint():
