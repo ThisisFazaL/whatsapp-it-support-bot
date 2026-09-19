@@ -1,6 +1,6 @@
 import datetime
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional, List
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float
 )
@@ -198,9 +198,23 @@ class FleetTripApproval(Base):
     required_minimum = Column(Float, nullable=False, default=0.0)
     shortfall = Column(Float, nullable=False, default=0.0)
     transport_charge = Column(Float, nullable=False, default=0.0)
+    amount_charged_to_customer = Column(Float, nullable=False, default=0.0)
+    pending_balance_recorded = Column(Float, nullable=False, default=0.0)
+    dispatch_option = Column(String(50), nullable=True)
     has_shortfall = Column(Boolean, default=False)
     status = Column(String(50), default="SHORTFALL_RECORDED")  # "SHORTFALL_RECORDED", "APPROVED", "DISPATCHED"
     raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class FleetPendingLedger(Base):
+    __tablename__ = "fleet_pending_ledger"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    salesperson_phone = Column(String(30), nullable=False, index=True)
+    salesperson_name = Column(String(100), nullable=True)
+    trip_id = Column(String(100), nullable=True, index=True)
+    entry_type = Column(String(50), nullable=False)  # "SHORTFALL_PARTIAL_BALANCE", "SHORTFALL_FULL_UNCHARGED", "RECOVERY_SURPLUS"
+    amount = Column(Float, nullable=False, default=0.0)  # Positive = pending deficit, Negative = surplus recovered
+    notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 engine_kwargs = {
@@ -250,6 +264,9 @@ async def init_db_models():
                         required_minimum DOUBLE PRECISION DEFAULT 0.0,
                         shortfall DOUBLE PRECISION DEFAULT 0.0,
                         transport_charge DOUBLE PRECISION DEFAULT 0.0,
+                        amount_charged_to_customer DOUBLE PRECISION DEFAULT 0.0,
+                        pending_balance_recorded DOUBLE PRECISION DEFAULT 0.0,
+                        dispatch_option VARCHAR(50),
                         has_shortfall BOOLEAN DEFAULT FALSE,
                         status VARCHAR(50) DEFAULT 'SHORTFALL_RECORDED',
                         raw_data JSONB,
@@ -258,8 +275,26 @@ async def init_db_models():
                 """))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fleet_trip_id ON fleet_trip_approvals(trip_id)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fleet_sales_phone ON fleet_trip_approvals(salesperson_phone)"))
+                await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS amount_charged_to_customer DOUBLE PRECISION DEFAULT 0.0"))
+                await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS pending_balance_recorded DOUBLE PRECISION DEFAULT 0.0"))
+                await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS dispatch_option VARCHAR(50)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fleet_pending_ledger (
+                        id SERIAL PRIMARY KEY,
+                        salesperson_phone VARCHAR(30) NOT NULL,
+                        salesperson_name VARCHAR(100),
+                        trip_id VARCHAR(100),
+                        entry_type VARCHAR(50) NOT NULL,
+                        amount DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                        notes TEXT,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fpl_sales_phone ON fleet_pending_ledger(salesperson_phone)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fpl_trip_id ON fleet_pending_ledger(trip_id)"))
         except Exception as e:
-            print(f"Fleet approvals table init note: {e}")
+            print(f"Fleet approvals & ledger table init note: {e}")
             
     async with async_session_factory() as session:
         # Check Priorities
@@ -525,3 +560,60 @@ async def init_db_models():
         except Exception as ws_err:
             import logging
             logging.getLogger("database").warning(f"Workshop tables init note: {ws_err}")
+
+
+async def get_sales_rep_pending_balance(session: AsyncSession, phone: str) -> float:
+    """
+    Computes net pending balance for a salesperson from fleet_pending_ledger.
+    Positive amounts represent deficit to recover.
+    Negative amounts represent surplus recovered from trips.
+    Net balance = SUM(amount).
+    """
+    clean_phone = phone.replace("+", "").strip() if phone else ""
+    stmt = (
+        select(func.coalesce(func.sum(FleetPendingLedger.amount), 0.0))
+        .where(FleetPendingLedger.salesperson_phone == clean_phone)
+    )
+    result = await session.execute(stmt)
+    val = result.scalar()
+    return round(float(val or 0.0), 2)
+
+
+async def get_sales_rep_ledger_entries(session: AsyncSession, phone: str, limit: int = 5):
+    """Fetches recent ledger entries for a salesperson."""
+    clean_phone = phone.replace("+", "").strip() if phone else ""
+    stmt = (
+        select(FleetPendingLedger)
+        .where(FleetPendingLedger.salesperson_phone == clean_phone)
+        .order_by(FleetPendingLedger.id.desc())
+        .limit(limit)
+    )
+    res = await session.execute(stmt)
+    return res.scalars().all()
+
+
+async def record_pending_ledger_entry(
+    session: AsyncSession,
+    phone: str,
+    name: Optional[str],
+    trip_id: Optional[str],
+    entry_type: str,
+    amount: float,
+    notes: Optional[str] = None
+) -> FleetPendingLedger:
+    """Records an entry in fleet_pending_ledger and commits."""
+    clean_phone = phone.replace("+", "").strip() if phone else ""
+    entry = FleetPendingLedger(
+        salesperson_phone=clean_phone,
+        salesperson_name=name,
+        trip_id=trip_id,
+        entry_type=entry_type,
+        amount=round(float(amount), 2),
+        notes=notes,
+        created_at=datetime.datetime.utcnow()
+    )
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry
+

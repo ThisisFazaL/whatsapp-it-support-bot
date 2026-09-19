@@ -490,11 +490,15 @@ async def list_fleet_trip_approvals(
 
     total_shortfall = sum(r.shortfall for r in records if r.has_shortfall)
     total_transport_charge = sum(r.transport_charge for r in records if r.has_shortfall)
+    total_charged_customer = sum(getattr(r, "amount_charged_to_customer", 0.0) for r in records)
+    total_pending_recorded = sum(getattr(r, "pending_balance_recorded", 0.0) for r in records)
 
     return {
         "count": len(records),
         "total_shortfall": round(total_shortfall, 2),
         "total_transport_charge": round(total_transport_charge, 2),
+        "total_charged_customer": round(total_charged_customer, 2),
+        "total_pending_recorded": round(total_pending_recorded, 2),
         "approvals": [
             {
                 "id": r.id,
@@ -507,8 +511,54 @@ async def list_fleet_trip_approvals(
                 "required_minimum": r.required_minimum,
                 "shortfall": r.shortfall,
                 "transport_charge": r.transport_charge,
+                "amount_charged_to_customer": getattr(r, "amount_charged_to_customer", 0.0),
+                "pending_balance_recorded": getattr(r, "pending_balance_recorded", 0.0),
+                "dispatch_option": getattr(r, "dispatch_option", None),
                 "has_shortfall": r.has_shortfall,
                 "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else None
+            }
+            for r in records
+        ]
+    }
+
+@app.get("/api/fleet/pending-ledger")
+async def list_fleet_pending_ledger(
+    phone: Optional[str] = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    """API endpoint for future dashboards to query sales rep pending recovery balances and transactions."""
+    from app.database import FleetPendingLedger
+    stmt = select(FleetPendingLedger).order_by(FleetPendingLedger.created_at.desc())
+    if phone:
+        clean_p = phone.replace("+", "").strip()
+        stmt = stmt.where(FleetPendingLedger.salesperson_phone == clean_p)
+    stmt = stmt.limit(limit)
+
+    res = await db.execute(stmt)
+    records = res.scalars().all()
+
+    balances_by_phone = {}
+    for r in records:
+        p = r.salesperson_phone
+        balances_by_phone[p] = round(balances_by_phone.get(p, 0.0) + r.amount, 2)
+
+    total_backlog = round(sum(r.amount for r in records), 2)
+
+    return {
+        "count": len(records),
+        "total_backlog": total_backlog,
+        "balances_by_phone": balances_by_phone,
+        "entries": [
+            {
+                "id": r.id,
+                "salesperson_phone": r.salesperson_phone,
+                "salesperson_name": r.salesperson_name,
+                "trip_id": r.trip_id,
+                "entry_type": r.entry_type,
+                "amount": r.amount,
+                "notes": r.notes,
                 "created_at": r.created_at.isoformat() if r.created_at else None
             }
             for r in records
