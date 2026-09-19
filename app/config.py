@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     test_user_role: str = "SALES"  # Set to "SALES" to test Fleet Approval; "MASTER_ADMIN" to revert in one word
 
     # Favlogix Automation & Bridge Configuration
-    favlogix_bridge_url: str = ""  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome
+    favlogix_bridge_url: str = "https://uninjured-seducing-cycle.ngrok-free.dev"  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome
     favlogix_url: str = "https://erp.favlogix.com"
     favlogix_remote_debug_port: int = 9222
     favlogix_timeout_seconds: int = 30
@@ -46,14 +46,10 @@ class Settings(BaseSettings):
         elif v_str.startswith("postgres+asyncpg://"):
             v_str = "postgresql+asyncpg://" + v_str[19:]
 
-        # On local Windows without IPv6 routing, direct supabase domain fails DNS; fallback to IPv4 pooler
+        # Ensure IPv4 transaction pooler for Supabase (resolves both IPv6 Windows DNS issues and connection limits)
         if "db.pzprdduzmcagpzkxzlhz.supabase.co" in v_str:
-            import socket
-            try:
-                socket.getaddrinfo("db.pzprdduzmcagpzkxzlhz.supabase.co", 5432)
-            except socket.gaierror:
-                v_str = v_str.replace("db.pzprdduzmcagpzkxzlhz.supabase.co:5432", "aws-0-ap-south-1.pooler.supabase.com:6543")
-                v_str = v_str.replace("postgres:SupportIt_2026_Pass!", "postgres.pzprdduzmcagpzkxzlhz:SupportIt_2026_Pass!")
+            v_str = v_str.replace("db.pzprdduzmcagpzkxzlhz.supabase.co:5432", "aws-0-ap-south-1.pooler.supabase.com:6543")
+            v_str = v_str.replace("postgres:SupportIt_2026_Pass!", "postgres.pzprdduzmcagpzkxzlhz:SupportIt_2026_Pass!")
 
         return v_str
 

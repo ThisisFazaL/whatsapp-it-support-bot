@@ -380,25 +380,19 @@ async def init_db_models():
                 active=True
             ))
 
-        # Sync location mappings for registered Austin Road employees
-        austin_phones = {
+        # Sync location mappings for registered Austin Road employees (batched)
+        austin_phones = [
             "263776477481", "263711421202", "263784077420", "263781343668", "263714282265",
             "263774522586", "263774308083", "263778861934", "263788500565", "263780099335",
             "263785322640", "263780216289", "263788071001", "263780573092", "263780543771",
             "263780100545", "263780100288", "263787348969", "263780806954"
-        }
+        ]
         if austin_loc:
-            for p_num in austin_phones:
-                emp_obj = (await session.execute(select(Employee).where(Employee.phone == p_num))).scalars().first()
-                if emp_obj:
-                    emp_obj.location_id = austin_loc.location_id
-
-        if coventry_loc:
-            # Map remaining employees to Coventry Road
-            all_emps = (await session.execute(select(Employee))).scalars().all()
-            for emp in all_emps:
-                if emp.phone not in austin_phones and (emp.location_id is None or emp.location_id in [1, 2, 3]):
-                    emp.location_id = coventry_loc.location_id
+            austin_emps = (await session.execute(
+                select(Employee).where(Employee.phone.in_(austin_phones), Employee.location_id != austin_loc.location_id)
+            )).scalars().all()
+            for emp in austin_emps:
+                emp.location_id = austin_loc.location_id
 
         # Guarantee Projects Support Admins (Stanclea & Omar Arizai) are synced with correct phone numbers
         maint_admins_data = [
@@ -422,7 +416,7 @@ async def init_db_models():
                     active=True
                 ))
 
-        # Guarantee Authorized Building Projects Reporters are synced
+        # Guarantee Authorized Building Projects Reporters are synced in single batch
         maint_reporters_data = [
             {"name": "Fazal Saiyed", "phone": "919265368695"},
             {"name": "Arif", "phone": "263732786786"},
@@ -436,15 +430,17 @@ async def init_db_models():
             {"name": "Stanclea", "phone": "263780099291"},
             {"name": "Omar Arizai", "phone": "263771333602"},
         ]
-        for rep in maint_reporters_data:
-            r_phone = rep["phone"]
-            r_name = rep["name"]
-            e_res = await session.execute(select(Employee).where(Employee.phone == r_phone))
-            emp = e_res.scalars().first()
-            if emp:
-                emp.is_maintenance_reporter = True
-                emp.active = True
-            else:
+        reps_by_phone = {rep["phone"]: rep["name"] for rep in maint_reporters_data}
+        existing_reps = (await session.execute(
+            select(Employee).where(Employee.phone.in_(list(reps_by_phone.keys())))
+        )).scalars().all()
+        found_phones = set()
+        for emp in existing_reps:
+            found_phones.add(emp.phone)
+            emp.is_maintenance_reporter = True
+            emp.active = True
+        for r_phone, r_name in reps_by_phone.items():
+            if r_phone not in found_phones:
                 session.add(Employee(
                     employee_code=f"EMP_MNT_{r_phone[-4:]}",
                     full_name=r_name,
@@ -454,16 +450,17 @@ async def init_db_models():
                 ))
 
         # Explicitly remove Kevin Chikati from maintenance reporters
-        k_res = await session.execute(select(Employee).where(Employee.phone == "263718627526"))
-        kevin = k_res.scalars().first()
+        kevin = (await session.execute(select(Employee).where(Employee.phone == "263718627526"))).scalars().first()
         if kevin:
             kevin.is_maintenance_reporter = False
 
         await session.commit()
 
-        # Clean up legacy / incorrect AdminCategoryMapping rows
-        await session.execute(delete(AdminCategoryMapping))
-        await session.commit()
+        # Clean up legacy / incorrect AdminCategoryMapping rows if any exist
+        has_mappings = (await session.execute(select(AdminCategoryMapping.mapping_id).limit(1))).scalars().first()
+        if has_mappings:
+            await session.execute(delete(AdminCategoryMapping))
+            await session.commit()
 
         # Sync Maintenance / Building Projects Categories (only if not seeded)
         try:
