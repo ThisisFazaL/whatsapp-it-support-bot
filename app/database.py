@@ -465,45 +465,23 @@ async def init_db_models():
         await session.execute(delete(AdminCategoryMapping))
         await session.commit()
 
-        # Sync Maintenance / Building Projects Categories (including Renovation & Expansion) on startup
+        # Sync Maintenance / Building Projects Categories (only if not seeded)
         try:
             from seed_maintenance_data import seed_maintenance_data_in_session
-            await seed_maintenance_data_in_session(session)
+            m_chk = await session.execute(select(Category).where(Category.domain.ilike("MAINTENANCE")))
+            if not m_chk.scalars().first():
+                await seed_maintenance_data_in_session(session)
         except Exception as m_err:
             import logging
             logging.getLogger("database").warning(f"Maintenance categories init note: {m_err}")
 
-        # Sync Workshop Taxonomy and Real Tagoneswa Fleet on startup
+        # Sync Workshop Taxonomy and Real Tagoneswa Fleet on startup (only if empty)
         try:
+            from app.workshop.models import WorkshopTruck
             from seed_workshop_data import seed_workshop_data_in_session
-            await seed_workshop_data_in_session(session)
+            wt_chk = await session.execute(select(WorkshopTruck))
+            if not wt_chk.scalars().first():
+                await seed_workshop_data_in_session(session)
         except Exception as ws_err:
             import logging
             logging.getLogger("database").warning(f"Workshop tables init note: {ws_err}")
-
-    # Sync all PostgreSQL sequences and ensure columns exist to prevent runtime errors
-    async with engine.begin() as conn:
-        from sqlalchemy import text
-        col_queries = [
-            "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES locations(location_id);",
-            "ALTER TABLE maintenance_tickets ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES locations(location_id);"
-        ]
-        for cq in col_queries:
-            try:
-                await conn.execute(text(cq))
-            except Exception:
-                pass
-
-        seq_queries = [
-            "SELECT setval('maintenance_ticket_assignments_assignment_id_seq', COALESCE((SELECT MAX(assignment_id) FROM maintenance_ticket_assignments), 0) + 1, false);",
-            "SELECT setval('maintenance_tickets_ticket_id_seq', COALESCE((SELECT MAX(ticket_id) FROM maintenance_tickets), 0) + 1, false);",
-            "SELECT setval('ticket_assignments_assignment_id_seq', COALESCE((SELECT MAX(assignment_id) FROM ticket_assignments), 0) + 1, false);",
-            "SELECT setval('tickets_ticket_id_seq', COALESCE((SELECT MAX(ticket_id) FROM tickets), 0) + 1, false);",
-            "SELECT setval('support_admins_admin_id_seq', COALESCE((SELECT MAX(admin_id) FROM support_admins), 0) + 1, false);",
-            "SELECT setval('employees_employee_id_seq', COALESCE((SELECT MAX(employee_id) FROM employees), 0) + 1, false);"
-        ]
-        for q in seq_queries:
-            try:
-                await conn.execute(text(q))
-            except Exception:
-                pass
