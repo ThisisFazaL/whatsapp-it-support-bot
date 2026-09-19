@@ -212,14 +212,11 @@ async def init_db_models():
     """Create all tables and insert seed data if empty."""
     global engine, async_session_factory
     try:
+        import asyncio
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await asyncio.wait_for(conn.run_sync(Base.metadata.create_all), timeout=5.0)
     except Exception as e:
-        print(f"Failed to connect to primary DB ({e}). Falling back to local SQLite 'sqlite+aiosqlite:///./itsupport.db'...")
-        engine = create_async_engine("sqlite+aiosqlite:///./itsupport.db", echo=False)
-        async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        print(f"Schema verification note: {e}")
             
     async with async_session_factory() as session:
         # Check Priorities
