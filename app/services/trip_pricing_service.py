@@ -74,7 +74,11 @@ CITY_ALIASES: Dict[str, str] = {
     "bikita": "nyika",
     "darwin": "mt darwin",
     "mount darwin": "mt darwin",
-    "harare": "local"
+    "harare": "local",
+    "hre": "local",
+    "wlk": "local",
+    "walk": "local",
+    "chit": "local"
 }
 
 

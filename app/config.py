@@ -14,7 +14,15 @@ class Settings(BaseSettings):
     master_admin_phone: str = "919265368695"
     test_user_role: str = "SALES"  # Set to "SALES" to test Fleet Approval; "MASTER_ADMIN" to revert in one word
 
-    # Favlogix Automation & Bridge Configuration
+    # Favlogix Direct Background API Configuration (Option 1 - Headless)
+    favlogix_api_enabled: bool = True
+    favlogix_api_url: str = "https://api.favlogix.com/api"
+    favlogix_organization: str = "sandbox"  # Organization name (e.g. 'sandbox') or organization ID ('019bdf9df302700')
+    favlogix_email: str = "faizanpatel@favlogix.com"
+    favlogix_password: str = ""
+    favlogix_auth_token: str = ""
+
+    # Favlogix Automation & Bridge Configuration (Fallback)
     favlogix_bridge_url: str = "https://uninjured-seducing-cycle.ngrok-free.dev"  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome
     favlogix_url: str = "https://erp.favlogix.com"
     favlogix_packaging_lists_path: str = "/inventory/packaging-lists"
