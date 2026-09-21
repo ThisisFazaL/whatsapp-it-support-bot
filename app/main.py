@@ -795,18 +795,37 @@ async def process_webhook_payload(body: dict):
 
             if await is_salesperson(db, sender_phone, employee):
                 state = await get_user_state(db, sender_phone)
+                # 0. Handle active Product Requirement workflow actions
+                if state and state.flow_name == "product_requirement":
+                    from app.handlers.requirement_handler import handle_requirement_flow
+                    await handle_requirement_flow(
+                        session=db,
+                        employee=employee,
+                        message_text=message_text,
+                        state=state,
+                        image_id=image_id,
+                        sender_phone=sender_phone
+                    )
+                    return
+
                 # 1. Handle Fleet Approval workflow actions
                 if await handle_fleet_approval_flow(db, sender_phone, employee, message_text, state):
                     return
 
                 clean_txt = message_text.strip().lower()
+                # Handle [ 📦 Product Req ] button or keywords
+                if clean_txt in {"btn_product_req", "btn_product_requirement", "product requirement", "requirement", "market demand", "new product", "product", "1", "1️⃣ product requirement"}:
+                    from app.handlers.requirement_handler import start_product_requirement_flow
+                    await start_product_requirement_flow(db, sender_phone, employee, initial_text=message_text)
+                    return
+
                 # 2. Handle [ 💻 IT Support ] button
                 if clean_txt in {"btn_domain_it", "it support", "it", "💻 it support"}:
                     from app.handlers.flow_handler import send_categories_menu
                     await send_categories_menu(db, sender_phone, domain="IT", data={"domain": "IT"})
                     return
 
-                # 3. Handle Greeting / Reset -> Show Sales Portal (2 Buttons: IT Support & Fleet Approval)
+                # 3. Handle Greeting / Reset -> Show Sales Portal
                 from app.handlers.flow_handler import GLOBAL_RESET_KEYWORDS
                 clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
                 if clean_kw in GLOBAL_RESET_KEYWORDS or clean_txt in GLOBAL_RESET_KEYWORDS or clean_txt in {"btn_sales_menu", "/menu"}:
@@ -845,6 +864,24 @@ async def process_webhook_payload(body: dict):
                     message_text=message_text,
                     current_data=state.current_data or {}
                 )
+                return
+
+            # Step 5.5: Check Product Requirement Flow for any authorized user
+            if state and state.flow_name == "product_requirement":
+                from app.handlers.requirement_handler import handle_requirement_flow
+                await handle_requirement_flow(
+                    session=db,
+                    employee=employee,
+                    message_text=message_text,
+                    state=state,
+                    image_id=image_id,
+                    sender_phone=sender_phone
+                )
+                return
+
+            if clean_txt in {"btn_product_req", "btn_product_requirement", "product requirement", "report requirement", "market demand", "new product"}:
+                from app.handlers.requirement_handler import start_product_requirement_flow
+                await start_product_requirement_flow(db, sender_phone, employee, initial_text=message_text)
                 return
 
             # Step 6: Multi-Step Ticket Flow Execution (with optional image)

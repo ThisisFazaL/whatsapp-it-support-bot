@@ -1,15 +1,29 @@
+from __future__ import annotations
 import re
 import time
 import logging
 from typing import Dict, Any, Optional
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import WebDriverException, TimeoutException
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import WebDriverException, TimeoutException
+    HAS_SELENIUM = True
+except ImportError:
+    webdriver = None
+    Options = None
+    By = None
+    Keys = None
+    ActionChains = None
+    WebDriverWait = None
+    EC = None
+    WebDriverException = Exception
+    TimeoutException = Exception
+    HAS_SELENIUM = False
 
 from app.config import settings
 
@@ -48,9 +62,9 @@ class FavlogixBrowserService:
         self.port = port or getattr(settings, "favlogix_remote_debug_port", 9222)
         self.base_url = base_url or getattr(settings, "favlogix_url", "https://erp.favlogix.com")
         self.timeout = timeout or getattr(settings, "favlogix_timeout_seconds", 30)
-        self._driver: Optional[webdriver.Chrome] = None
+        self._driver: Optional[Any] = None
 
-    def get_driver(self) -> webdriver.Chrome:
+    def get_driver(self) -> Any:
         """Connects to the already running Chrome session."""
         if self._driver is not None:
             try:

@@ -217,6 +217,49 @@ class FleetPendingLedger(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class Product(Base):
+    __tablename__ = "products"
+    product_id = Column(Integer, primary_key=True, autoincrement=True)
+    product_code = Column(String(50), unique=True, nullable=True)
+    product_name = Column(String(150), nullable=False, index=True)
+    category = Column(String(100), nullable=False) # "Conduit Pipes", "Conduit Fittings", etc.
+    size_spec = Column(String(50), nullable=True)  # "20mm", "25mm", "32mm"
+    unit_of_measure = Column(String(20), default="pcs")
+    standard_price = Column(Float, nullable=True)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class ProductRequirement(Base):
+    __tablename__ = "product_requirements"
+    requirement_id = Column(Integer, primary_key=True, autoincrement=True)
+    requirement_number = Column(String(30), unique=True, nullable=False) # REQ-YYYYMMDD-XXXXX
+    salesperson_id = Column(Integer, ForeignKey("employees.employee_id"), nullable=False)
+    customer_name = Column(String(150), nullable=False) # Customer / Shop Name
+    customer_phone = Column(String(50), nullable=True)
+    requirement_type = Column(String(30), nullable=False) # "EXISTING_UNAVAILABLE" or "NEW_PRODUCT"
+    
+    product_id = Column(Integer, ForeignKey("products.product_id"), nullable=True)
+    product_name = Column(String(150), nullable=False)
+    product_category = Column(String(100), nullable=True)
+    
+    required_quantity = Column(Integer, nullable=True)
+    monthly_demand = Column(Integer, nullable=True)
+    customer_urgency = Column(String(50), nullable=True) # "Ready to purchase", "Exploring options", etc.
+    
+    competitor_supplier = Column(String(150), nullable=True)
+    current_market_price = Column(Float, nullable=True)
+    comments = Column(Text, nullable=True)
+    
+    image_id = Column(String(100), nullable=True)
+    status = Column(String(50), default="Pending Review") # Pending Review, Under Evaluation, Approved, Rejected, Production Planning, Available, Closed
+    management_notes = Column(Text, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    salesperson = relationship("Employee")
+    product = relationship("Product")
+
 engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
@@ -560,6 +603,39 @@ async def init_db_models():
         except Exception as ws_err:
             import logging
             logging.getLogger("database").warning(f"Workshop tables init note: {ws_err}")
+
+        # Seed Products catalog if empty
+        try:
+            prod_chk = await session.execute(select(Product))
+            if not prod_chk.scalars().first():
+                default_products = [
+                    Product(product_code="CND-20L", product_name="20mm PVC Conduit Pipe (Light Duty)", category="Conduit Pipes", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="CND-20H", product_name="20mm PVC Conduit Pipe (Heavy Duty)", category="Conduit Pipes", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="CND-25L", product_name="25mm PVC Conduit Pipe (Light Duty)", category="Conduit Pipes", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="CND-25H", product_name="25mm PVC Conduit Pipe (Heavy Duty)", category="Conduit Pipes", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="CND-32H", product_name="32mm PVC Conduit Pipe (Heavy Duty)", category="Conduit Pipes", size_spec="32mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-ELB-20", product_name="20mm PVC Conduit Elbow", category="Conduit Fittings", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-ELB-25", product_name="25mm PVC Conduit Elbow", category="Conduit Fittings", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-ELB-32", product_name="32mm PVC Conduit Elbow", category="Conduit Fittings", size_spec="32mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-BND-20", product_name="20mm PVC Conduit Bend", category="Conduit Fittings", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-BND-25", product_name="25mm PVC Conduit Bend", category="Conduit Fittings", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-BND-32", product_name="32mm PVC Conduit Bend", category="Conduit Fittings", size_spec="32mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-CPL-20", product_name="20mm PVC Conduit Coupling", category="Conduit Fittings", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-CPL-25", product_name="25mm PVC Conduit Coupling", category="Conduit Fittings", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-CPL-32", product_name="32mm PVC Conduit Coupling", category="Conduit Fittings", size_spec="32mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-TEE-20", product_name="20mm PVC Inspection Tee", category="Conduit Fittings", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-TEE-25", product_name="25mm PVC Inspection Tee", category="Conduit Fittings", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-JNC-20", product_name="20mm PVC Circular Junction Box", category="Conduit Fittings", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="FIT-JNC-25", product_name="25mm PVC Circular Junction Box", category="Conduit Fittings", size_spec="25mm", unit_of_measure="pcs"),
+                    Product(product_code="ACC-SDL-20", product_name="20mm PVC Conduit Saddle", category="Conduit Accessories", size_spec="20mm", unit_of_measure="pcs"),
+                    Product(product_code="ACC-SDL-25", product_name="25mm PVC Conduit Saddle", category="Conduit Accessories", size_spec="25mm", unit_of_measure="pcs"),
+                ]
+                session.add_all(default_products)
+                await session.commit()
+        except Exception as p_err:
+            import logging
+            logging.getLogger("database").warning(f"Products seed note: {p_err}")
+
 
 
 async def get_sales_rep_pending_balance(session: AsyncSession, phone: str) -> float:

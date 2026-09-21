@@ -134,23 +134,28 @@ async def handle_role_switch_command(session: AsyncSession, phone: str, message_
 
 async def send_sales_portal_menu(session: AsyncSession, phone: str, employee: Optional[Employee] = None):
     """
-    Presents the salesperson 3-button menu:
-    1. [ 💻 IT Support ]
+    Presents the salesperson portal menu:
+    1. [ 📦 Product Req ]
     2. [ 🚛 Fleet Approval ]
-    3. [ ⚖️ Pending Balance ]
+    3. [ 💻 IT Support ]
     """
     name = employee.full_name if employee else "Sales Colleague"
     header = "🏢 TAGONESWA SALES PORTAL"
     body = (
         f"👋 Hello *{name}*!\n\n"
-        f"Welcome to the Tagoneswa Support Portal.\n\n"
-        f"Please select the service you would like to access:"
+        f"Welcome to the Tagoneswa Sales Portal.\n\n"
+        f"Please select an option:\n"
+        f"1️⃣ *Product Requirement* (Out of stock / New product)\n"
+        f"2️⃣ *Fleet Trip Approval*\n"
+        f"3️⃣ *IT Support Ticket*\n"
+        f"4️⃣ *Pending Balance Recovery*\n\n"
+        f"💡 _Tap a button below or reply with number 1 - 4:_"
     )
     footer = "Tap a button below to proceed"
     buttons = [
-        {"id": "btn_domain_it", "title": "💻 IT Support"},
+        {"id": "btn_product_req", "title": "📦 Product Req"},
         {"id": "btn_domain_fleet", "title": "🚛 Fleet Approval"},
-        {"id": "btn_sales_pending_menu", "title": "⚖️ Pending Balance"}
+        {"id": "btn_domain_it", "title": "💻 IT Support"}
     ]
     await set_user_state(session, phone, "select_service", {}, flow_name="sales_portal")
     await meta_api.send_button_message(
@@ -268,8 +273,14 @@ async def handle_fleet_approval_flow(
         await send_sales_portal_menu(session, phone, employee)
         return True
 
-    # 1. User taps [ ⚖️ Pending Balance ] or types balance keywords
-    if text_lower in {"btn_sales_pending_menu", "pending balance", "pending", "balance", "ledger", "⚖️ pending balance"}:
+    # 0. User taps [ 📦 Product Req ] or types requirement keywords or "1"
+    if text_lower in {"btn_product_req", "btn_product_requirement", "product requirement", "requirement", "market demand", "new product", "product", "1", "1️⃣ product requirement"}:
+        from app.handlers.requirement_handler import start_product_requirement_flow
+        await start_product_requirement_flow(session, phone, employee, initial_text=message_text)
+        return True
+
+    # 1. User taps [ ⚖️ Pending Balance ] or types balance keywords or "4"
+    if text_lower in {"btn_sales_pending_menu", "pending balance", "pending", "balance", "ledger", "⚖️ pending balance", "4"}:
         await send_pending_balance_menu(session, phone, employee)
         return True
 
