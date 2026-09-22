@@ -129,7 +129,7 @@ async def handle_purchasing_action(session: AsyncSession, staff: WorkshopStaff, 
 
     return False
 
-async def send_purchasing_portal_menu(session: AsyncSession, phone: str, staff: WorkshopStaff):
+async def send_purchasing_portal_menu(session: AsyncSession, phone: str, staff: WorkshopStaff, is_start_shift: bool = False):
     """Sends interactive operational menu for Purchasing & Procurement."""
     from app.state_manager import clear_user_state
     await clear_user_state(session, phone)
@@ -138,14 +138,27 @@ async def send_purchasing_portal_menu(session: AsyncSession, phone: str, staff: 
     pending_reqs = (await session.execute(stmt)).scalars().all()
     pending_count = len(pending_reqs)
     
-    msg = (
-        f"👋 *Welcome {staff.full_name}* (Purchasing & Procurement)\n"
-        f"📦 *Workshop Spares & Procurement Portal*\n\n"
-        f"📦 Pending Parts Requisitions: *{pending_count}*\n\n"
-        f"Please select an option below:"
-    )
+    if is_start_shift:
+        header = "🟢 SHIFT ACTIVE (24H OPEN)"
+        msg = (
+            f"🌅 *Good Morning, {staff.full_name}!* 🟢\n"
+            f"Role: *Purchasing & Stores Officer*\n\n"
+            f"Your 24-hour WhatsApp messaging window is now open.\n"
+            f"You will receive all workshop spare parts requisitions in real-time.\n\n"
+            f"📦 Pending Parts Requisitions: *{pending_count}*\n\n"
+            f"Please select an option below:"
+        )
+    else:
+        header = "PURCHASING PORTAL"
+        msg = (
+            f"👋 *Welcome {staff.full_name}* (Purchasing & Procurement)\n"
+            f"📦 *Workshop Spares & Procurement Portal*\n\n"
+            f"📦 Pending Parts Requisitions: *{pending_count}*\n\n"
+            f"Please select an option below:"
+        )
     buttons = [
         {"id": "btn_ws_purch_view_spares", "title": "📦 Pending Spares"},
         {"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"}
     ]
-    await meta_api.send_button_message(phone, msg, buttons, header_text="PURCHASING PORTAL")
+    await meta_api.send_button_message(phone, msg, buttons, header_text=header)
+

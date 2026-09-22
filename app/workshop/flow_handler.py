@@ -32,46 +32,82 @@ async def generate_workshop_ticket_number(session: AsyncSession) -> str:
         ticket_num = f"TKT-FLT-{today_str}-{str(total_count + 1).zfill(5)}{random_suffix}"
     return ticket_num
 
-async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff):
+async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff, is_start_shift: bool = False):
     phone = staff.phone
     role = staff.role.upper()
     
     if role in {"DRIVER", "CLERK", "LOGISTICS_ASSISTANT", "LOGISTICS ASSISTANT", "ASSISTANT"}:
         await set_user_state(session, phone, "ws_truck_search", {})
         role_label = "Logistics Assistant" if "ASSISTANT" in role else ("Clerk" if "CLERK" in role else "Driver")
-        msg = (
-            f"👋 *Welcome {staff.full_name}* ({role_label})\n"
-            f"🚚 *Tagoneswa Logistics & Fleet Portal*\n\n"
-            f"Please enter the *Truck Number* (e.g. for plate `AGZ 7331`, type `7331`):"
-        )
+        if is_start_shift:
+            msg = (
+                f"🟢 *LOGISTICS SHIFT ACTIVE (24H OPEN)*\n\n"
+                f"🌅 *Good Morning, {staff.full_name}!* 🟢\n"
+                f"Role: *{role_label}*\n\n"
+                f"Your 24-hour WhatsApp messaging window is now active.\n\n"
+                f"🚚 *Tagoneswa Logistics & Fleet Portal*\n"
+                f"Please enter the *Truck Number* to log a defect (e.g. for plate `AGZ 7331`, type `7331`):"
+            )
+        else:
+            msg = (
+                f"👋 *Welcome {staff.full_name}* ({role_label})\n"
+                f"🚚 *Tagoneswa Logistics & Fleet Portal*\n\n"
+                f"Please enter the *Truck Number* (e.g. for plate `AGZ 7331`, type `7331`):"
+            )
         await meta_api.send_text_message(phone, msg)
     
     elif role in {"MECHANIC", "LEAD"}:
-        stmt = select(WorkshopTicket).where(
+        stmt = select(WorkshopTicket).options(selectinload(WorkshopTicket.truck)).where(
             WorkshopTicket.status.in_(["WITH_MECHANIC", "AWAITING_PARTS", "INFO_REQUESTED", "REPAIR_IN_PROGRESS", "REWORK_REQUIRED"])
         ).order_by(WorkshopTicket.created_at.desc()).limit(5)
         active_tickets = (await session.execute(stmt)).scalars().all()
         
-        if not active_tickets:
-            msg = (
-                f"👋 *Hello {staff.full_name}* (Workshop Team)\n\n"
-                f"✅ No pending workshop tickets currently assigned to you."
-            )
-            await meta_api.send_text_message(phone, msg)
+        if is_start_shift:
+            if not active_tickets:
+                msg = (
+                    f"🟢 *WORKSHOP SHIFT ACTIVE (24H OPEN)*\n\n"
+                    f"🌅 *Good Morning, {staff.full_name}!* 🟢\n"
+                    f"Role: *Workshop Mechanic*\n\n"
+                    f"Your 24-hour WhatsApp messaging window is now open.\n"
+                    f"You will receive all new vehicle repair job assignments in real-time.\n\n"
+                    f"✅ No pending workshop tickets currently assigned to you."
+                )
+                await meta_api.send_text_message(phone, msg)
+            else:
+                lines = [
+                    f"🟢 *WORKSHOP SHIFT ACTIVE (24H OPEN)*\n\n"
+                    f"🌅 *Good Morning, {staff.full_name}!* 🟢\n"
+                    f"Role: *Workshop Mechanic*\n\n"
+                    f"Your 24-hour WhatsApp window is open. You have *{len(active_tickets)}* active workshop job(s):\n"
+                ]
+                for t in active_tickets:
+                    truck_str = f" (Truck #{t.truck.truck_number})" if t.truck else ""
+                    lines.append(f"• 🎫 *{t.ticket_number}*{truck_str} | Status: `{t.status}`\n  📌 Fault: {t.category_name} - {t.subcategory_name}")
+                lines.append("\n💡 Reply with ticket commands or wait for new job assignments.")
+                await meta_api.send_text_message(phone, "\n".join(lines))
         else:
-            lines = [f"🔧 *Active Workshop Tickets ({staff.full_name}):*\n"]
-            for t in active_tickets:
-                lines.append(f"• 🎫 *{t.ticket_number}* | Status: `{t.status}`\n  📌 Fault: {t.category_name} - {t.subcategory_name}")
-            lines.append("\n💡 Reply with ticket commands or wait for new job assignments.")
-            await meta_api.send_text_message(phone, "\n".join(lines))
+            if not active_tickets:
+                msg = (
+                    f"👋 *Hello {staff.full_name}* (Workshop Team)\n\n"
+                    f"✅ No pending workshop tickets currently assigned to you."
+                )
+                await meta_api.send_text_message(phone, msg)
+            else:
+                lines = [f"🔧 *Active Workshop Tickets ({staff.full_name}):*\n"]
+                for t in active_tickets:
+                    truck_str = f" (Truck #{t.truck.truck_number})" if t.truck else ""
+                    lines.append(f"• 🎫 *{t.ticket_number}*{truck_str} | Status: `{t.status}`\n  📌 Fault: {t.category_name} - {t.subcategory_name}")
+                lines.append("\n💡 Reply with ticket commands or wait for new job assignments.")
+                await meta_api.send_text_message(phone, "\n".join(lines))
             
     elif role == "SUPERVISOR":
         from app.workshop.supervisor_handler import send_supervisor_portal_menu
-        await send_supervisor_portal_menu(session, phone, staff)
+        await send_supervisor_portal_menu(session, phone, staff, is_start_shift=is_start_shift)
         
     elif role in {"PURCHASING", "PROCUREMENT"}:
         from app.workshop.purchasing_handler import send_purchasing_portal_menu
-        await send_purchasing_portal_menu(session, phone, staff)
+        await send_purchasing_portal_menu(session, phone, staff, is_start_shift=is_start_shift)
+
 
 async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text: str, data: dict):
     phone = staff.phone

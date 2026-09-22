@@ -33,15 +33,16 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
     text = (message_text or "").strip()
     
     # 1. Global Reset / Menu / Start Shift
-    if (
-        text.lower() in GLOBAL_RESET_KEYWORDS or
-        text.lower() in {"cmd_start_shift", "cmd_start_day", "cmd_ws_start_shift", "start shift", "start my shift", "start workday", "start the day", "start day"} or
+    is_shift_start = (
+        text.lower() in {"cmd_start_shift", "cmd_start_day", "cmd_ws_start_shift", "start shift", "start my shift", "start workday", "start the day", "start day", "☀️ start my shift"} or
         text.startswith("cmd_start_shift")
-    ):
+    )
+    if text.lower() in GLOBAL_RESET_KEYWORDS or is_shift_start:
         from app.state_manager import clear_user_state
         await clear_user_state(session, phone)
-        await start_workshop_flow(session, staff)
+        await start_workshop_flow(session, staff, is_start_shift=is_shift_start)
         return True
+
 
     # 1.2 Open Ticket Details from Template Quick-Reply Button Tap
     if text.startswith("btn_ws_open_ticket_") or text.lower() in {"view ticket & actions", "open ticket details", "view ticket", "open ticket", "view"}:

@@ -372,7 +372,7 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
 
     return False
 
-async def send_supervisor_portal_menu(session: AsyncSession, phone: str, staff: WorkshopStaff):
+async def send_supervisor_portal_menu(session: AsyncSession, phone: str, staff: WorkshopStaff, is_start_shift: bool = False):
     """Sends interactive operational menu for Logistics Supervisor."""
     from app.state_manager import clear_user_state
     await clear_user_state(session, phone)
@@ -394,15 +394,28 @@ async def send_supervisor_portal_menu(session: AsyncSession, phone: str, staff: 
         
     summary_str = "\n".join(status_summary)
     
-    msg = (
-        f"👋 *Welcome {staff.full_name}* (Logistics Supervisor)\n"
-        f"🚚 *Workshop & Fleet Management Portal*\n\n"
-        f"{summary_str}\n\n"
-        f"Please select an option below:"
-    )
+    if is_start_shift:
+        header = "🟢 SHIFT ACTIVE (24H OPEN)"
+        msg = (
+            f"🌅 *Good Morning, {staff.full_name}!* 🟢\n"
+            f"Role: *Logistics Supervisor (Gatekeeper)*\n\n"
+            f"Your 24-hour WhatsApp messaging window is now open.\n"
+            f"You will receive all vehicle breakdown alerts and QC road-test notifications in real-time.\n\n"
+            f"{summary_str}\n\n"
+            f"Please select an option below:"
+        )
+    else:
+        header = "SUPERVISOR PORTAL"
+        msg = (
+            f"👋 *Welcome {staff.full_name}* (Logistics Supervisor)\n"
+            f"🚚 *Workshop & Fleet Management Portal*\n\n"
+            f"{summary_str}\n\n"
+            f"Please select an option below:"
+        )
     buttons = [
         {"id": "btn_ws_sup_active_jobs", "title": "🔍 Active Jobs & QC"},
         {"id": "btn_ws_sup_log_defect", "title": "🚛 Log Truck Defect"},
         {"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"}
     ]
-    await meta_api.send_button_message(phone, msg, buttons, header_text="SUPERVISOR PORTAL")
+    await meta_api.send_button_message(phone, msg, buttons, header_text=header)
+

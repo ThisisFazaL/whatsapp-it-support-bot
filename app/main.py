@@ -821,22 +821,39 @@ async def process_webhook_payload(body: dict):
                     await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: IT Support portal is restricted to registered company employees.")
                     return
 
-            # Step 0.7: Global Greeting / Reset / Main Menu Handler
+            # Step 0.7: Global Greeting / Reset / Main Menu Handler / Start My Shift
+            is_start_shift = (
+                clean_txt in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day", "☀️ start my shift"}
+                or clean_kw in {"start shift", "start my shift", "start workday", "start day"}
+                or clean_txt.startswith("cmd_start_shift")
+            )
             is_global_greeting = (
                 clean_kw in {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "restart", "home", "portal", "switch", "switch portal"}
                 or clean_txt in {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "/start", "/menu", "main menu", "switch portal", "btn_main_menu"}
                 or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
+                or is_start_shift
             )
 
             if is_global_greeting:
                 if is_dual_domain:
                     # Dual-Domain Staff (e.g. Panashe Logistics Assistant, Edward Supervisor, Lydon Purchasing)
                     user_name = workshop_user.full_name or (employee.full_name if employee else (admin.full_name if admin else "Staff Member"))
-                    body = (
-                        f"👋 *Welcome {user_name}*\n"
-                        f"🏢 *Tagoneswa Operations Portal*\n\n"
-                        f"Please select the service you wish to access:"
-                    )
+                    if is_start_shift:
+                        header = "🟢 SHIFT ACTIVE (24H OPEN)"
+                        body = (
+                            f"🌅 *Good Morning, {user_name}!* 🟢\n"
+                            f"🏢 *Tagoneswa Operations Portal*\n\n"
+                            f"Your 24-hour WhatsApp messaging window is now open.\n"
+                            f"You will receive all operations and ticket notifications in real-time.\n\n"
+                            f"Please select the service you wish to access:"
+                        )
+                    else:
+                        header = "TAGONESWA PORTAL"
+                        body = (
+                            f"👋 *Welcome {user_name}*\n"
+                            f"🏢 *Tagoneswa Operations Portal*\n\n"
+                            f"Please select the service you wish to access:"
+                        )
                     buttons = [
                         {"id": "btn_domain_workshop", "title": "🚚 Logistics & Fleet"},
                         {"id": "btn_domain_it", "title": "💻 IT Support"}
@@ -846,7 +863,7 @@ async def process_webhook_payload(body: dict):
                         to_phone=sender_phone,
                         body_text=body,
                         buttons=buttons,
-                        header_text="TAGONESWA PORTAL",
+                        header_text=header,
                         fallback_template="tagoneswa_launch_announcement"
                     )
                     return
@@ -854,13 +871,14 @@ async def process_webhook_payload(body: dict):
                     # Pure Workshop Staff (e.g. Driver, single-role Mechanic)
                     await clear_user_state(db, sender_phone)
                     from app.workshop.flow_handler import start_workshop_flow
-                    await start_workshop_flow(db, workshop_user)
+                    await start_workshop_flow(db, workshop_user, is_start_shift=is_start_shift)
                     return
                 elif await is_salesperson(db, sender_phone, employee):
                     await clear_user_state(db, sender_phone)
                     await send_sales_portal_menu(db, sender_phone, employee)
                     return
                 # Single-domain IT user falls through to standard IT handling below
+
 
             # Step 0.8: Check in-flight Workshop states & Workshop-specific buttons
             is_ws_btn = clean_txt.startswith("btn_ws_") or clean_txt.startswith("btn_parts_") or clean_txt in {
