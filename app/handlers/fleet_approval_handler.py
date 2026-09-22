@@ -140,26 +140,25 @@ async def handle_role_switch_command(session: AsyncSession, phone: str, message_
 async def send_sales_portal_menu(session: AsyncSession, phone: str, employee: Optional[Employee] = None):
     """
     Presents the salesperson portal menu:
-    1. [ 📦 Product Req ]
-    2. [ 🚛 Fleet Approval ]
+    1. [ 🚛 Fleet Approval ]
+    2. [ ⚖️ Pending Balance ]
     3. [ 💻 IT Support ]
     """
     name = employee.full_name if employee else "Sales Colleague"
-    header = "🏢 TAGONESWA SALES PORTAL"
+    header = "🏢 TAGONESWA SALES & FLEET"
     body = (
         f"👋 Hello *{name}*!\n\n"
-        f"Welcome to the Tagoneswa Sales Portal.\n\n"
+        f"Welcome to the Tagoneswa Fleet Portal.\n\n"
         f"Please select an option:\n"
-        f"1️⃣ *Product Requirement* (Out of stock / New product)\n"
-        f"2️⃣ *Fleet Trip Approval*\n"
-        f"3️⃣ *IT Support Ticket*\n"
-        f"4️⃣ *Pending Balance Recovery*\n\n"
-        f"💡 _Tap a button below or reply with number 1 - 4:_"
+        f"1️⃣ *Fleet Trip Approval* (Verify Trip & Transport Charges)\n"
+        f"2️⃣ *Pending Balance Recovery* (Track & Recover Balance)\n"
+        f"3️⃣ *IT Support Ticket*\n\n"
+        f"💡 _Tap a button below or reply with number 1 - 3:_"
     )
     footer = "Tap a button below to proceed"
     buttons = [
-        {"id": "btn_product_req", "title": "📦 Product Req"},
         {"id": "btn_domain_fleet", "title": "🚛 Fleet Approval"},
+        {"id": "btn_sales_pending_menu", "title": "⚖️ Pending Balance"},
         {"id": "btn_domain_it", "title": "💻 IT Support"}
     ]
     await set_user_state(session, phone, "select_service", {}, flow_name="sales_portal")
@@ -284,18 +283,32 @@ async def handle_fleet_approval_flow(
         await send_sales_portal_menu(session, phone, employee)
         return True
 
-    # 0. User taps [ 📦 Product Req ] or types requirement keywords or "1"
-    if text_lower in {"btn_product_req", "btn_product_requirement", "product requirement", "requirement", "market demand", "new product", "product", "1", "1️⃣ product requirement"}:
-        from app.handlers.requirement_handler import start_product_requirement_flow
-        await start_product_requirement_flow(session, phone, employee, initial_text=message_text)
+    # 1. User taps [ 🚛 Fleet Approval ] button or types 1
+    if text_lower in {"btn_domain_fleet", "fleet approval", "🚛 fleet approval", "fleet", "trip approval", "1", "1️⃣", "1️⃣ fleet trip approval"}:
+        await set_user_state(session, phone, "awaiting_trip_id", {}, flow_name="fleet_approval")
+        prompt = (
+            "🚛 *FLEET TRIP APPROVAL REQUEST*\n"
+            "────────────────────\n"
+            "Please enter the *Trip ID* or *Trip Name* from Favlogix:\n\n"
+            "_(e.g., `20042026-BINDURA` or `TRIP-20042026-BINDURA`)_\n\n"
+            "💡 _Reply 'cancel' or 'menu' to return to the main menu._"
+        )
+        await meta_api.send_text_message(phone, prompt)
         return True
 
-    # 1. User taps [ ⚖️ Pending Balance ] or types balance keywords or "4"
-    if text_lower in {"btn_sales_pending_menu", "pending balance", "pending", "balance", "ledger", "⚖️ pending balance", "4"}:
+    # 2. User taps [ ⚖️ Pending Balance ] or types 2
+    if text_lower in {"btn_sales_pending_menu", "pending balance", "pending", "balance", "ledger", "⚖️ pending balance", "2", "2️⃣", "2️⃣ pending balance", "4"}:
         await send_pending_balance_menu(session, phone, employee)
         return True
 
-    # 2. Check Pending Balance
+    # 3. User taps [ 💻 IT Support ] button or types 3
+    if text_lower in {"btn_domain_it", "it support", "it", "💻 it support", "3", "3️⃣", "3️⃣ it support ticket"}:
+        from app.handlers.flow_handler import send_categories_menu
+        await clear_user_state(session, phone)
+        await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
+        return True
+
+    # 4. Check Pending Balance Details
     if text_lower in {"btn_pending_check_balance", "my pending total", "check pending", "pending total", "my pending", "📊 my pending total"}:
         await handle_check_pending_balance(session, phone, employee)
         return True

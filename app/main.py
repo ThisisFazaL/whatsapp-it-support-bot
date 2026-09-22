@@ -811,30 +811,11 @@ async def process_webhook_payload(body: dict):
                     return
 
                 state = await get_user_state(db, sender_phone)
-                # 1. Handle active Product Requirement workflow actions
-                if state and state.flow_name == "product_requirement":
-                    from app.handlers.requirement_handler import handle_requirement_flow
-                    await handle_requirement_flow(
-                        session=db,
-                        employee=employee,
-                        message_text=message_text,
-                        state=state,
-                        image_id=image_id,
-                        sender_phone=sender_phone
-                    )
-                    return
-
-                # 2. Handle Fleet Approval workflow actions
+                # 1. Handle Fleet Approval and Pending Balance workflow actions
                 if await handle_fleet_approval_flow(db, sender_phone, employee, message_text, state):
                     return
 
-                # 3. Handle [ 📦 Product Req ] button or keywords
-                if clean_txt in {"btn_product_req", "btn_product_requirement", "product requirement", "requirement", "market demand", "new product", "product", "1", "1️⃣ product requirement"}:
-                    from app.handlers.requirement_handler import start_product_requirement_flow
-                    await start_product_requirement_flow(db, sender_phone, employee, initial_text=message_text)
-                    return
-
-                # 4. Handle [ 💻 IT Support ] button
+                # 2. Handle [ 💻 IT Support ] button
                 if clean_txt in {"btn_domain_it", "it support", "it", "💻 it support"}:
                     from app.handlers.flow_handler import send_categories_menu
                     await send_categories_menu(db, sender_phone, domain="IT", data={"domain": "IT"})
