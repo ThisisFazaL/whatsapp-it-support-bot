@@ -264,10 +264,11 @@ class FavlogixAPIService:
                     orders_data = d_json.get("orders", [])
                 elif res_detail.status_code == 404:
                     # 2. Try sales/trip search (e.g. user typed 'TEST2' or partial name)
-                    res_search = await client.get(sales_trip_url, params={"trip": clean_trip}, headers=headers)
+                    search_params = {"trip": clean_trip, "search": clean_trip, "limit": 100}
+                    res_search = await client.get(sales_trip_url, params=search_params, headers=headers)
                     if res_search.status_code == 401:
                         await self._login()
-                        res_search = await client.get(sales_trip_url, params={"trip": clean_trip}, headers=headers, cookies=self.cookies)
+                        res_search = await client.get(sales_trip_url, params=search_params, headers=headers, cookies=self.cookies)
 
                     if res_search.status_code == 200:
                         s_json = res_search.json()
@@ -288,8 +289,8 @@ class FavlogixAPIService:
                                 trip_data = matching[0]
 
                 if not trip_data:
-                    # 3. Final fallback: List all recent trips and match locally
-                    res_all = await client.get(sales_trip_url, headers=headers, cookies=self.cookies)
+                    # 3. Final fallback: List recent trips and match locally
+                    res_all = await client.get(sales_trip_url, params={"limit": 200}, headers=headers, cookies=self.cookies)
                     if res_all.status_code == 200:
                         s_json = res_all.json()
                         items = s_json.get("data", []) if isinstance(s_json, dict) else s_json
