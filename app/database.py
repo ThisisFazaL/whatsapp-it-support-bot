@@ -437,9 +437,10 @@ async def init_db_models():
                 session.add(Location(location_name=name))
         await session.flush()
 
-        # Guarantee 4 Support Admins are synced in PostgreSQL database on startup
+        # Guarantee Support Admins are synced in PostgreSQL database on startup
         admin_data = [
             {"name": "Fazal Saiyed (Master Admin)", "phone": "919265368695", "is_master": True},
+            {"name": "Sujit Patel (Admin)", "phone": "263718352518", "is_master": True},
             {"name": "Kevin Chikati", "phone": "263718627526", "is_master": False},
             {"name": "Ellias Murenga", "phone": "263788843579", "is_master": False},
             {"name": "Faisal Kassim", "phone": "263780100503", "is_master": False},

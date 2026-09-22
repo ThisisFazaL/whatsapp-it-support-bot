@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     master_group_link: str = "https://chat.whatsapp.com/HQ0msg8LFOp1i3bZoB2V3H"
     # Master Admin & Role Override Configuration
     master_admin_phone: str = "919265368695"
+    fleet_admin_phone: str = "263718352518"  # Sujit (+263 71 835 2518) receives all sales fleet activity alerts
     test_user_role: str = "SALES"  # Set to "SALES" to test Fleet Approval; "MASTER_ADMIN" to revert in one word
 
     # Favlogix Direct Background API Configuration (Option 1 - Headless)

@@ -35,6 +35,25 @@ def is_valid_phone(phone_str: Optional[str]) -> bool:
     return bool(cleaned.isdigit() and 7 <= len(cleaned) <= 15)
 
 
+async def notify_fleet_admin(message: str):
+    """
+    Sends WhatsApp notification to Fleet Admin Sujit (+263 71 835 2518) and master group.
+    """
+    admin_phone = getattr(settings, "fleet_admin_phone", "263718352518").replace("+", "").strip()
+    if is_valid_phone(admin_phone):
+        try:
+            await meta_api.send_text_message(admin_phone, message)
+            logger.info(f"Fleet action alert delivered to Sujit (+{admin_phone})")
+        except Exception as e:
+            logger.warning(f"Could not send fleet action alert to Sujit (+{admin_phone}): {e}")
+
+    if is_valid_phone(settings.master_group_phone):
+        try:
+            await meta_api.send_text_message(settings.master_group_phone, message)
+        except Exception as e:
+            logger.warning(f"Could not alert master group: {e}")
+
+
 
 def get_effective_tester_role(phone: str) -> str:
     """Returns the effective testing role for a given phone (e.g. 'SALES' or 'MASTER_ADMIN')."""
@@ -299,22 +318,32 @@ async def handle_existing_trip_response(
     formatted_date = existing.created_at.strftime("%d %b %Y, %H:%M") if existing.created_at else "Recently"
     sales_name = existing.salesperson_name or "Sales Colleague"
 
-    is_approved = (
-        existing.dispatch_option is not None
-        or existing.status in {
+    is_dispatched = (
+        existing.status in {
             "DISPATCHED",
-            "APPROVED",
-            "APPROVED_MEETS_MINIMUM",
             "DISPATCHED_FULL_CHARGE",
             "DISPATCHED_PARTIAL_CHARGE",
             "DISPATCHED_FULL_PENDING",
+            "DISPATCHED_WITH_TRANSPORT_CHARGE",
+        }
+        or existing.dispatch_option in {
+            "APPROVED_THRESHOLD",
+            "APPROVED_WITH_TRANSPORT_RECOVERY",
+            "FULL_CHARGE_PAID",
+            "PARTIAL_CHARGE",
+            "FULL_TO_PENDING"
         }
     )
 
-    if is_approved:
+    if is_dispatched:
         await clear_user_state(session, phone)
         if existing.dispatch_option == "APPROVED_THRESHOLD" or existing.status in {"APPROVED_MEETS_MINIMUM", "DISPATCHED"}:
             res_summary = "• Resolution: ✅ *Passed Minimum Sales Threshold* (No Transport Charge)"
+        elif existing.dispatch_option == "APPROVED_WITH_TRANSPORT_RECOVERY" or existing.status == "DISPATCHED_WITH_TRANSPORT_CHARGE":
+            res_summary = (
+                f"• Resolution: ✅ *Passed Minimum with Transport Charge Added*\n"
+                f"• Transport Paid/Deducted from Pending: ${existing.amount_charged_to_customer:,.2f}"
+            )
         elif existing.dispatch_option == "FULL_CHARGE_PAID" or existing.status == "DISPATCHED_FULL_CHARGE":
             res_summary = f"• Resolution: ✅ *Full Transport Charge Paid* (${existing.amount_charged_to_customer:,.2f})"
         elif existing.dispatch_option == "PARTIAL_CHARGE" or existing.status == "DISPATCHED_PARTIAL_CHARGE":
@@ -356,8 +385,54 @@ async def handle_existing_trip_response(
         )
         return True
 
-    # Not approved yet (Shortfall pending action)
+    # Not dispatched yet (either shortfall pending resolution, or threshold passed awaiting dispatch)
     clean_btn_id = re.sub(r"[^\w-]", "", existing.trip_id)[:40]
+    if not existing.has_shortfall:
+        # Trip passed threshold, awaiting user to click Dispatch or Add Transport
+        cur_pending = await get_sales_rep_pending_balance(session, phone)
+        pending_notice = ""
+        if cur_pending > 0:
+            pending_notice = (
+                f"\n\n⚖️ *Your Pending Balance:* *${cur_pending:,.2f}*\n"
+                f"💡 _Did customer pay transport? Tap *Add Transport* below to reduce your pending balance!_"
+            )
+        body = (
+            f"✅ *FLEET TRIP APPROVED FOR DISPATCH*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{existing.trip_id}`\n"
+            f"📍 *Destination:* {existing.destination_city}\n"
+            f"💰 *Trip Total Sales:* ${existing.trip_sales_value:,.2f}\n"
+            f"🎯 *Required Minimum:* ${existing.required_minimum:,.2f}\n"
+            f"📊 *Status:* ✅ *Passed Minimum Sales Threshold*\n"
+            f"────────────────────\n"
+            f"🎉 Trip meets all sales requirements! Cleared for driver dispatch and vehicle loading.{pending_notice}"
+        )
+        buttons = [
+            {"id": f"btn_dispatch_{clean_btn_id}", "title": "🚛 Dispatch Trip"},
+            {"id": f"btn_add_trans_{clean_btn_id}", "title": "💵 Add Transport"},
+            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+        ]
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_decision",
+            {
+                "trip_id": existing.trip_id,
+                "clean_btn_id": clean_btn_id,
+                "cur_pending": cur_pending,
+                "dest": existing.destination_city,
+                "sales_val": existing.trip_sales_value
+            },
+            flow_name="fleet_approval"
+        )
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text="✅ TRIP APPROVED"
+        )
+        return True
+
     if is_same_user:
         body = (
             f"⚠️ *TRIP ALREADY ENTERED (NOT APPROVED YET)*\n"
@@ -590,6 +665,20 @@ async def handle_fleet_approval_flow(
                 buttons=buttons,
                 header_text="💵 RECOVERY RECEIPT"
             )
+
+            # Notify Sujit
+            admin_msg = (
+                f"📢 *FLEET: PENDING BALANCE RECOVERY*\n"
+                f"────────────────────\n"
+                f"🚛 *Trip:* `{trip_id}`\n"
+                f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales Colleague'} (`+{phone}`)\n"
+                f"💵 *Surplus Recovered:* ${recovered_amt:,.2f}\n"
+                f"⚖️ *Previous Pending:* ${cur_bal:,.2f}\n"
+                f"🎯 *Updated Net Pending Balance:* ${new_bal:,.2f}\n"
+                f"────────────────────\n"
+                f"Deducted from sales rep pending ledger."
+            )
+            await notify_fleet_admin(admin_msg)
             return True
 
     # 5. User taps [ 🚛 Fleet Approval ] button or types command
@@ -616,7 +705,7 @@ async def handle_fleet_approval_flow(
             .order_by(FleetTripApproval.id.desc())
         )
         rec = (await session.execute(rec_stmt)).scalars().first()
-        if rec and (rec.status == "DISPATCHED" or rec.dispatch_option is not None):
+        if rec and (rec.status in {"DISPATCHED", "DISPATCHED_WITH_TRANSPORT_CHARGE"} or rec.dispatch_option is not None):
             await handle_existing_trip_response(session, phone, employee, rec)
             return True
         if rec:
@@ -633,17 +722,172 @@ async def handle_fleet_approval_flow(
             f"Notification has been logged for Logistics & Dispatch team! 🚛💨"
         )
         await meta_api.send_text_message(phone, ack)
-        if is_valid_phone(settings.master_group_phone):
-            try:
-                group_alert = (
-                    f"📢 *NEW FLEET DISPATCH APPROVED*\n"
-                    f"• Trip: `{trip_id}`\n"
-                    f"• Approver: {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-                    f"• Threshold: Passed Minimum Sales"
-                )
-                await meta_api.send_text_message(settings.master_group_phone, group_alert)
-            except Exception as e:
-                logger.warning(f"Could not alert master group of fleet approval: {e}")
+        dest = rec.destination_city if rec else ""
+        sales_val = rec.trip_sales_value if rec else 0.0
+        admin_alert = (
+            f"📢 *FLEET DISPATCH: PASSED MINIMUM SALES*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"📍 *Destination:* {dest}\n"
+            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
+            f"💰 *Trip Sales Value:* ${sales_val:,.2f}\n"
+            f"📊 *Status:* Cleared for Loading & Dispatch (Threshold Passed) 🚛💨"
+        )
+        await notify_fleet_admin(admin_alert)
+        return True
+
+    # 6.5. Add Transport Charge Button (When shortfall is not there, sales can add transport charge to reduce pending balance)
+    if text_lower.startswith("btn_add_trans_") or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"add transport", "transport charge", "reduce pending", "add charge", "2", "2️⃣"}
+    ):
+        trip_id = ""
+        clean_btn_id = ""
+        dest = ""
+        sales_val = 0.0
+        cur_pending = 0.0
+
+        if state and state.current_data:
+            trip_id = state.current_data.get("trip_id", "")
+            clean_btn_id = state.current_data.get("clean_btn_id", "")
+            dest = state.current_data.get("dest", "")
+            sales_val = float(state.current_data.get("sales_val", 0.0))
+            cur_pending = float(state.current_data.get("cur_pending", 0.0))
+
+        if not trip_id and text_lower.startswith("btn_add_trans_"):
+            clean_id = text_strip.replace("btn_add_trans_", "").strip()
+            rec_chk = (await session.execute(
+                select(FleetTripApproval).where(FleetTripApproval.trip_id.ilike(f"%{clean_id}%")).order_by(FleetTripApproval.id.desc())
+            )).scalars().first()
+            if rec_chk:
+                trip_id = rec_chk.trip_id
+                clean_btn_id = clean_id
+                dest = rec_chk.destination_city
+                sales_val = rec_chk.trip_sales_value
+
+        if cur_pending <= 0.0:
+            cur_pending = await get_sales_rep_pending_balance(session, phone)
+
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_surplus_transport_charge",
+            {
+                "trip_id": trip_id,
+                "clean_btn_id": clean_btn_id,
+                "cur_pending": cur_pending,
+                "dest": dest,
+                "sales_val": sales_val
+            },
+            flow_name="fleet_approval"
+        )
+        prompt = (
+            f"💵 *ADD TRANSPORT CHARGE / REDUCE PENDING*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"📍 *Destination:* {dest}\n"
+            f"💰 *Trip Sales Value:* ${sales_val:,.2f}\n"
+            f"⚖️ *Your Current Pending Balance:* *${cur_pending:,.2f}*\n"
+            f"────────────────────\n"
+            f"Please enter the *transport charge amount* collected to apply against your pending balance:\n"
+            f"_(e.g. `50` or `125.00`)_\n\n"
+            f"💡 _This amount will reduce your pending balance and record surplus recovery on trip `{trip_id}`._\n"
+            f"💡 _Reply 'cancel' to return to the main menu._"
+        )
+        await meta_api.send_text_message(phone, prompt)
+        return True
+
+    # 6.6. Handle received transport charge amount
+    if state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_surplus_transport_charge":
+        if text_lower in {"cancel", "reset", "menu", "back", "exit"}:
+            await clear_user_state(session, phone)
+            await send_sales_portal_menu(session, phone, employee)
+            return True
+
+        clean_val = re.sub(r"[^\d.]", "", text_strip)
+        try:
+            trans_amt = float(clean_val)
+            if trans_amt <= 0:
+                raise ValueError()
+        except ValueError:
+            await meta_api.send_text_message(
+                phone,
+                "⚠️ Please enter a valid positive number for the transport charge amount (e.g. `50` or `125.00`):"
+            )
+            return True
+
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        dest = data.get("dest", "")
+        sales_val = float(data.get("sales_val", 0.0))
+        cur_pending = float(data.get("cur_pending", 0.0))
+        trans_amt = round(trans_amt, 2)
+
+        # Check if already dispatched
+        rec = None
+        if trip_id:
+            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
+            rec = (await session.execute(rec_stmt)).scalars().first()
+            if rec and (rec.status in {"DISPATCHED", "DISPATCHED_WITH_TRANSPORT_CHARGE"} or rec.dispatch_option is not None):
+                await handle_existing_trip_response(session, phone, employee, rec)
+                return True
+
+        # Record surplus recovery in pending ledger (reduces balance)
+        await record_pending_ledger_entry(
+            session=session,
+            phone=phone,
+            name=employee.full_name if employee else "Sales Colleague",
+            trip_id=trip_id,
+            entry_type="RECOVERY_SURPLUS",
+            amount=-trans_amt,
+            notes=f"Transport charge added on trip {trip_id} to reduce pending"
+        )
+
+        # Update FleetTripApproval
+        if rec:
+            rec.status = "DISPATCHED_WITH_TRANSPORT_CHARGE"
+            rec.amount_charged_to_customer = trans_amt
+            rec.pending_balance_recorded = -trans_amt
+            rec.dispatch_option = "APPROVED_WITH_TRANSPORT_RECOVERY"
+            await session.commit()
+
+        new_pending = await get_sales_rep_pending_balance(session, phone)
+        await clear_user_state(session, phone)
+
+        ack = (
+            f"✅ *TRIP DISPATCH AUTHORIZED (TRANSPORT CHARGE ADDED)*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"💸 *Transport Charge Added:* ${trans_amt:,.2f}\n"
+            f"⚖️ *Previous Pending Balance:* ${cur_pending:,.2f}\n"
+            f"🎯 *Updated Net Pending Balance:* *${new_pending:,.2f}*\n"
+            f"👤 *Authorized By:* {employee.full_name if employee else 'Sales Agent'} (`+{phone}`)\n"
+            f"📊 *Status:* Cleared for Vehicle Loading & Dispatch 🚛💨\n\n"
+            f"Order is clear to go! ${trans_amt:,.2f} has been deducted from your pending recovery balance."
+        )
+        buttons = [
+            {"id": "btn_pending_check_balance", "title": "📊 My Pending Total"},
+            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=ack,
+            buttons=buttons,
+            header_text="✅ TRIP DISPATCH AUTHORIZED"
+        )
+
+        # Notify Sujit
+        admin_alert = (
+            f"📢 *FLEET DISPATCH: TRANSPORT CHARGE ADDED*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"📍 *Destination:* {dest}\n"
+            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
+            f"💰 *Trip Total Sales:* ${sales_val:,.2f}\n"
+            f"💸 *Transport Charge Added:* ${trans_amt:,.2f}\n"
+            f"🎯 *Rep Remaining Pending Balance:* ${new_pending:,.2f}\n"
+            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
+        )
+        await notify_fleet_admin(admin_alert)
         return True
 
     # 7. Shortfall Option 1: Full Charge Paid
@@ -700,18 +944,17 @@ async def handle_fleet_approval_flow(
             buttons=buttons,
             header_text="✅ TRIP DISPATCH AUTHORIZED"
         )
-        if is_valid_phone(settings.master_group_phone):
-            try:
-                group_alert = (
-                    f"📢 *FLEET DISPATCH (FULL CHARGE PAID)*\n"
-                    f"• Trip: `{trip_id}`\n"
-                    f"• Approver: {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-                    f"• Charged to Customer: ${required_charge:,.2f}\n"
-                    f"• Pending Recorded: $0.00"
-                )
-                await meta_api.send_text_message(settings.master_group_phone, group_alert)
-            except Exception as e:
-                logger.warning(f"Could not alert master group of full charge dispatch: {e}")
+        # Notify Sujit & master group
+        admin_alert = (
+            f"📢 *FLEET DISPATCH: FULL CHARGE PAID*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
+            f"💸 *Transport Charged to Customer:* ${required_charge:,.2f}\n"
+            f"⚖️ *Pending Balance Added:* $0.00\n"
+            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
+        )
+        await notify_fleet_admin(admin_alert)
         return True
 
     # 8. Shortfall Option 2: Partial Charge Initiated
@@ -833,18 +1076,18 @@ async def handle_fleet_approval_flow(
             buttons=buttons,
             header_text="✅ TRIP DISPATCH AUTHORIZED"
         )
-        if is_valid_phone(settings.master_group_phone):
-            try:
-                group_alert = (
-                    f"📢 *FLEET DISPATCH (PARTIAL CHARGE)*\n"
-                    f"• Trip: `{trip_id}`\n"
-                    f"• Approver: {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-                    f"• Charged: ${charged_amt:,.2f}\n"
-                    f"• Pending Recorded: ${remaining_pending:,.2f}"
-                )
-                await meta_api.send_text_message(settings.master_group_phone, group_alert)
-            except Exception as e:
-                logger.warning(f"Could not alert master group of partial charge dispatch: {e}")
+        # Notify Sujit & master group
+        admin_alert = (
+            f"📢 *FLEET DISPATCH: PARTIAL CHARGE*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
+            f"💸 *Customer Paid:* ${charged_amt:,.2f}\n"
+            f"⚖️ *Added to Rep Pending:* ${remaining_pending:,.2f}\n"
+            f"🎯 *Rep Net Pending Balance:* ${tot_pending:,.2f}\n"
+            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
+        )
+        await notify_fleet_admin(admin_alert)
         return True
 
     # 10. Shortfall Option 3: Full to Pending
@@ -915,18 +1158,18 @@ async def handle_fleet_approval_flow(
             buttons=buttons,
             header_text="✅ TRIP DISPATCH AUTHORIZED"
         )
-        if is_valid_phone(settings.master_group_phone):
-            try:
-                group_alert = (
-                    f"📢 *FLEET DISPATCH (FULL TO PENDING)*\n"
-                    f"• Trip: `{trip_id}`\n"
-                    f"• Approver: {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-                    f"• Charged: $0.00\n"
-                    f"• Pending Recorded: ${required_charge:,.2f}"
-                )
-                await meta_api.send_text_message(settings.master_group_phone, group_alert)
-            except Exception as e:
-                logger.warning(f"Could not alert master group of full to pending dispatch: {e}")
+        # Notify Sujit & master group
+        admin_alert = (
+            f"📢 *FLEET DISPATCH: FULL TO PENDING*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
+            f"💸 *Customer Paid:* $0.00\n"
+            f"⚖️ *Full Charge Added to Pending:* ${required_charge:,.2f}\n"
+            f"🎯 *Rep Net Pending Balance:* ${tot_pending:,.2f}\n"
+            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
+        )
+        await notify_fleet_admin(admin_alert)
         return True
 
     # 11. Cancel button
@@ -1020,12 +1263,20 @@ async def handle_fleet_approval_flow(
                 amount_charged_to_customer=0.0,
                 pending_balance_recorded=0.0,
                 has_shortfall=False,
-                dispatch_option="APPROVED_THRESHOLD",
-                status="APPROVED_MEETS_MINIMUM",
+                dispatch_option=None,
+                status="THRESHOLD_PASSED_AWAITING_DISPATCH",
                 raw_data=result
             )
             session.add(approval_record)
             await session.commit()
+
+            cur_pending = await get_sales_rep_pending_balance(session, phone)
+            pending_notice = ""
+            if cur_pending > 0:
+                pending_notice = (
+                    f"\n\n⚖️ *Your Pending Balance:* *${cur_pending:,.2f}*\n"
+                    f"💡 _Did customer pay transport? Tap *Add Transport* below to reduce your pending balance!_"
+                )
 
             card_body = (
                 f"✅ *FLEET TRIP APPROVED FOR DISPATCH*\n"
@@ -1036,13 +1287,26 @@ async def handle_fleet_approval_flow(
                 f"🎯 *Required Minimum:* ${req_min:,.2f}\n"
                 f"📊 *Status:* ✅ *Passed Minimum Sales Threshold*\n"
                 f"────────────────────\n"
-                f"🎉 Trip meets all sales requirements! Cleared for driver dispatch and vehicle loading."
+                f"🎉 Trip meets all sales requirements! Cleared for driver dispatch and vehicle loading.{pending_notice}"
             )
             buttons = [
                 {"id": f"btn_dispatch_{clean_btn_id}", "title": "🚛 Dispatch Trip"},
+                {"id": f"btn_add_trans_{clean_btn_id}", "title": "💵 Add Transport"},
                 {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
             ]
-            await set_user_state(session, phone, "awaiting_decision", {"trip_id": trip_id}, flow_name="fleet_approval")
+            await set_user_state(
+                session,
+                phone,
+                "awaiting_decision",
+                {
+                    "trip_id": trip_id,
+                    "clean_btn_id": clean_btn_id,
+                    "cur_pending": cur_pending,
+                    "dest": dest,
+                    "sales_val": sales_val
+                },
+                flow_name="fleet_approval"
+            )
             await meta_api.send_button_message(
                 to_phone=phone,
                 body_text=card_body,
