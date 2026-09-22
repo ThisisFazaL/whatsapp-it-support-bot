@@ -1,7 +1,7 @@
 import logging
 import re
 from typing import Optional, Dict, Any
-from sqlalchemy import select
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -257,6 +257,174 @@ async def handle_check_pending_balance(session: AsyncSession, phone: str, employ
     )
 
 
+async def get_existing_trip_approval(session: AsyncSession, trip_id: str) -> Optional[FleetTripApproval]:
+    """
+    Looks up existing Trip Approval record from database.
+    Matches exact, TRIP- prefixed, or normalized trip IDs.
+    """
+    clean_id = trip_id.upper().replace("TRIP-", "").strip()
+    if not clean_id:
+        return None
+    stmt = (
+        select(FleetTripApproval)
+        .where(
+            or_(
+                func.upper(FleetTripApproval.trip_id) == clean_id,
+                func.upper(FleetTripApproval.trip_id) == f"TRIP-{clean_id}",
+                func.replace(func.upper(FleetTripApproval.trip_id), "TRIP-", "") == clean_id
+            )
+        )
+        .order_by(FleetTripApproval.id.desc())
+    )
+    res = await session.execute(stmt)
+    return res.scalars().first()
+
+
+async def handle_existing_trip_response(
+    session: AsyncSession,
+    phone: str,
+    employee: Optional[Employee],
+    existing: FleetTripApproval
+) -> bool:
+    """
+    Handles WhatsApp response when a Trip ID was already entered in the database.
+    - If already approved/dispatched: Displays approved status, resolution, and blocks re-entry.
+    - If not approved (shortfall pending):
+        - If submitted by same user: Allows selecting a shortfall resolution option.
+        - If submitted by another user: Shows not approved status and blocks duplicate entry.
+    """
+    clean_phone = phone.replace("+", "").strip()
+    existing_phone = existing.salesperson_phone.replace("+", "").strip() if existing.salesperson_phone else ""
+    is_same_user = (clean_phone == existing_phone)
+    formatted_date = existing.created_at.strftime("%d %b %Y, %H:%M") if existing.created_at else "Recently"
+    sales_name = existing.salesperson_name or "Sales Colleague"
+
+    is_approved = (
+        existing.dispatch_option is not None
+        or existing.status in {
+            "DISPATCHED",
+            "APPROVED",
+            "APPROVED_MEETS_MINIMUM",
+            "DISPATCHED_FULL_CHARGE",
+            "DISPATCHED_PARTIAL_CHARGE",
+            "DISPATCHED_FULL_PENDING",
+        }
+    )
+
+    if is_approved:
+        await clear_user_state(session, phone)
+        if existing.dispatch_option == "APPROVED_THRESHOLD" or existing.status in {"APPROVED_MEETS_MINIMUM", "DISPATCHED"}:
+            res_summary = "• Resolution: ✅ *Passed Minimum Sales Threshold* (No Transport Charge)"
+        elif existing.dispatch_option == "FULL_CHARGE_PAID" or existing.status == "DISPATCHED_FULL_CHARGE":
+            res_summary = f"• Resolution: ✅ *Full Transport Charge Paid* (${existing.amount_charged_to_customer:,.2f})"
+        elif existing.dispatch_option == "PARTIAL_CHARGE" or existing.status == "DISPATCHED_PARTIAL_CHARGE":
+            res_summary = (
+                f"• Resolution: ✅ *Partial Transport Charge*\n"
+                f"• Customer Paid: ${existing.amount_charged_to_customer:,.2f}\n"
+                f"• Pending Recorded: ${existing.pending_balance_recorded:,.2f}"
+            )
+        elif existing.dispatch_option == "FULL_TO_PENDING" or existing.status == "DISPATCHED_FULL_PENDING":
+            res_summary = (
+                f"• Resolution: ✅ *Full to Pending Balance*\n"
+                f"• Pending Recorded: ${existing.pending_balance_recorded:,.2f}"
+            )
+        else:
+            res_summary = f"• Resolution: ✅ *{existing.status}*"
+
+        body = (
+            f"🔒 *TRIP ALREADY APPROVED & DISPATCHED*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip ID:* `{existing.trip_id}`\n"
+            f"📍 *Destination:* {existing.destination_city}\n"
+            f"💰 *Trip Sales Value:* ${existing.trip_sales_value:,.2f}\n"
+            f"📅 *Processed:* {formatted_date}\n"
+            f"👤 *Authorized By:* {sales_name} (`+{existing.salesperson_phone}`)\n"
+            f"────────────────────\n"
+            f"📊 *Current Status:* ✅ *ALREADY APPROVED*\n"
+            f"{res_summary}\n\n"
+            f"⚠️ *Notice:* Each Trip ID can only be entered once. This trip is already cleared for dispatch."
+        )
+        buttons = [
+            {"id": "btn_domain_fleet", "title": "🚛 Verify Another"},
+            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text="🔒 TRIP ALREADY PROCESSED"
+        )
+        return True
+
+    # Not approved yet (Shortfall pending action)
+    clean_btn_id = re.sub(r"[^\w-]", "", existing.trip_id)[:40]
+    if is_same_user:
+        body = (
+            f"⚠️ *TRIP ALREADY ENTERED (NOT APPROVED YET)*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip:* `{existing.trip_id}`\n"
+            f"📍 *Destination:* {existing.destination_city}\n"
+            f"💰 *Trip Total Sales:* ${existing.trip_sales_value:,.2f}\n"
+            f"🎯 *Required Minimum:* ${existing.required_minimum:,.2f}\n\n"
+            f"⚠️ *SHORTFALL DETECTED:* ${existing.shortfall:,.2f}\n"
+            f"💸 *Transport Charge:* *${existing.transport_charge:,.2f}*\n"
+            f"📅 *Submitted:* {formatted_date}\n"
+            f"👤 *Submitted By:* You (`+{existing.salesperson_phone}`)\n"
+            f"────────────────────\n"
+            f"📊 *Current Status:* ❌ *NOT APPROVED (Pending Resolution)*\n\n"
+            f"⚠️ *Action Required:* You previously submitted this trip. Each trip can only be entered once.\n"
+            f"Please select a transport charge resolution to authorize dispatch, or reply *cancel*:\n\n"
+            f"1️⃣ *Full Charge:* Customer paid ${existing.transport_charge:,.2f} in full. Order clear to go.\n"
+            f"2️⃣ *Partial Charge:* Customer paid part; remainder recorded to your pending balance.\n"
+            f"3️⃣ *Full to Pending:* Uncharged; full ${existing.transport_charge:,.2f} recorded to your pending balance."
+        )
+        buttons = [
+            {"id": f"btn_short_full_{clean_btn_id}", "title": "1️⃣ Full Charge"},
+            {"id": f"btn_short_part_{clean_btn_id}", "title": "2️⃣ Partial Charge"},
+            {"id": f"btn_short_none_{clean_btn_id}", "title": "3️⃣ Full to Pending"}
+        ]
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_shortfall_decision",
+            {"trip_id": existing.trip_id, "required_charge": existing.transport_charge, "clean_btn_id": clean_btn_id},
+            flow_name="fleet_approval"
+        )
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text="⚠️ TRIP NOT APPROVED"
+        )
+        return True
+    else:
+        await clear_user_state(session, phone)
+        body = (
+            f"🔒 *TRIP ALREADY ENTERED BY ANOTHER REP*\n"
+            f"────────────────────\n"
+            f"🚛 *Trip ID:* `{existing.trip_id}`\n"
+            f"📍 *Destination:* {existing.destination_city}\n"
+            f"💰 *Trip Total Sales:* ${existing.trip_sales_value:,.2f}\n"
+            f"📅 *Submitted:* {formatted_date}\n"
+            f"👤 *Submitted By:* {sales_name} (`+{existing.salesperson_phone}`)\n"
+            f"────────────────────\n"
+            f"📊 *Current Status:* ❌ *NOT APPROVED (Pending Resolution)*\n\n"
+            f"⚠️ *Notice:* This trip was already entered by {sales_name} and is currently awaiting their resolution.\n"
+            f"To prevent duplicate records, each trip can only be processed once."
+        )
+        buttons = [
+            {"id": "btn_domain_fleet", "title": "🚛 Verify Another"},
+            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text="🔒 TRIP ALREADY ENTERED"
+        )
+        return True
+
+
 async def handle_fleet_approval_flow(
     session: AsyncSession,
     phone: str,
@@ -448,6 +616,9 @@ async def handle_fleet_approval_flow(
             .order_by(FleetTripApproval.id.desc())
         )
         rec = (await session.execute(rec_stmt)).scalars().first()
+        if rec and (rec.status == "DISPATCHED" or rec.dispatch_option is not None):
+            await handle_existing_trip_response(session, phone, employee, rec)
+            return True
         if rec:
             rec.status = "DISPATCHED"
             rec.dispatch_option = "APPROVED_THRESHOLD"
@@ -499,6 +670,9 @@ async def handle_fleet_approval_flow(
         if trip_id:
             rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
             rec = (await session.execute(rec_stmt)).scalars().first()
+            if rec and rec.dispatch_option is not None:
+                await handle_existing_trip_response(session, phone, employee, rec)
+                return True
             if rec:
                 rec.status = "DISPATCHED_FULL_CHARGE"
                 rec.amount_charged_to_customer = required_charge
@@ -605,6 +779,13 @@ async def handle_fleet_approval_flow(
         trip_id = data.get("trip_id", "")
         required_charge = float(data.get("required_charge", 0.0))
         charged_amt = round(charged_amt, 2)
+        rec = None
+        if trip_id:
+            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
+            rec = (await session.execute(rec_stmt)).scalars().first()
+            if rec and rec.dispatch_option is not None:
+                await handle_existing_trip_response(session, phone, employee, rec)
+                return True
 
         if charged_amt >= required_charge:
             charged_amt = required_charge
@@ -621,15 +802,12 @@ async def handle_fleet_approval_flow(
                 notes=f"Partial charge ${charged_amt:,.2f} of ${required_charge:,.2f} on {trip_id}"
             )
 
-        if trip_id:
-            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
-            rec = (await session.execute(rec_stmt)).scalars().first()
-            if rec:
-                rec.status = "DISPATCHED_PARTIAL_CHARGE"
-                rec.amount_charged_to_customer = charged_amt
-                rec.pending_balance_recorded = remaining_pending
-                rec.dispatch_option = "PARTIAL_CHARGE"
-                await session.commit()
+        if rec:
+            rec.status = "DISPATCHED_PARTIAL_CHARGE"
+            rec.amount_charged_to_customer = charged_amt
+            rec.pending_balance_recorded = remaining_pending
+            rec.dispatch_option = "PARTIAL_CHARGE"
+            await session.commit()
 
         tot_pending = await get_sales_rep_pending_balance(session, phone)
         await clear_user_state(session, phone)
@@ -688,6 +866,14 @@ async def handle_fleet_approval_flow(
                 trip_id = rec_chk.trip_id
                 required_charge = rec_chk.transport_charge
 
+        rec = None
+        if trip_id:
+            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
+            rec = (await session.execute(rec_stmt)).scalars().first()
+            if rec and rec.dispatch_option is not None:
+                await handle_existing_trip_response(session, phone, employee, rec)
+                return True
+
         await record_pending_ledger_entry(
             session=session,
             phone=phone,
@@ -698,15 +884,12 @@ async def handle_fleet_approval_flow(
             notes=f"Uncharged transport charge on trip {trip_id}"
         )
 
-        if trip_id:
-            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
-            rec = (await session.execute(rec_stmt)).scalars().first()
-            if rec:
-                rec.status = "DISPATCHED_FULL_PENDING"
-                rec.amount_charged_to_customer = 0.0
-                rec.pending_balance_recorded = required_charge
-                rec.dispatch_option = "FULL_TO_PENDING"
-                await session.commit()
+        if rec:
+            rec.status = "DISPATCHED_FULL_PENDING"
+            rec.amount_charged_to_customer = 0.0
+            rec.pending_balance_recorded = required_charge
+            rec.dispatch_option = "FULL_TO_PENDING"
+            await session.commit()
 
         tot_pending = await get_sales_rep_pending_balance(session, phone)
         await clear_user_state(session, phone)
@@ -777,6 +960,12 @@ async def handle_fleet_approval_flow(
             )
             return True
 
+        # Check 1: Check if trip was already entered in database
+        existing = await get_existing_trip_approval(session, trip_query)
+        if existing:
+            await handle_existing_trip_response(session, phone, employee, existing)
+            return True
+
         # Send in-progress notification
         await meta_api.send_text_message(
             phone,
@@ -799,6 +988,13 @@ async def handle_fleet_approval_flow(
 
         # Successful verification -> Build Report Card & Persist in Database
         trip_id = result.get("trip_id", trip_query)
+
+        # Check 2: Re-check if canonical trip ID resolved by Favlogix was already entered in database
+        existing_canonical = await get_existing_trip_approval(session, trip_id)
+        if existing_canonical:
+            await handle_existing_trip_response(session, phone, employee, existing_canonical)
+            return True
+
         dest = result.get("destination_city", "Unknown")
         route = result.get("route", "")
         route_str = f" ({route})" if route else ""
