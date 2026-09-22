@@ -66,24 +66,12 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff):
             await meta_api.send_text_message(phone, "\n".join(lines))
             
     elif role == "SUPERVISOR":
-        msg = (
-            f"👋 *Welcome {staff.full_name}* (Logistics Supervisor)\n\n"
-            f"You will automatically receive alerts when:\n"
-            f"• 1. New faults are reported for Gatekeeper Review\n"
-            f"• 2. Repaired vehicles are ready for Road-Test QC\n\n"
-            f"💡 Type `status` to view active workshop jobs."
-        )
-        await meta_api.send_text_message(phone, msg)
+        from app.workshop.supervisor_handler import send_supervisor_portal_menu
+        await send_supervisor_portal_menu(session, phone, staff)
         
-    elif role == "PURCHASING":
-        stmt = select(WorkshopPartsRequest).where(WorkshopPartsRequest.status.in_(["PENDING", "INFO_REQUESTED"]))
-        pending = (await session.execute(stmt)).scalars().all()
-        msg = (
-            f"👋 *Welcome Purchasing & Procurement Team*\n\n"
-            f"📦 Pending Parts Requisitions: *{len(pending)}*\n"
-            f"You will receive instant alerts with photos when workshop mechanics request spares."
-        )
-        await meta_api.send_text_message(phone, msg)
+    elif role in {"PURCHASING", "PROCUREMENT"}:
+        from app.workshop.purchasing_handler import send_purchasing_portal_menu
+        await send_purchasing_portal_menu(session, phone, staff)
 
 async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text: str, data: dict):
     phone = staff.phone

@@ -95,4 +95,57 @@ async def handle_purchasing_action(session: AsyncSession, staff: WorkshopStaff, 
                     await meta_api.send_button_message(mechanic.phone, mech_alert, buttons, header_text="JOB READY")
         return True
 
+    # 3. Purchasing Portal Actions
+    if text == "btn_ws_purch_view_spares" or text.lower() in {"pending spares", "spares queue", "parts requests", "view spares", "spares", "parts"}:
+        stmt = select(WorkshopPartsRequest).options(
+            selectinload(WorkshopPartsRequest.ticket).selectinload(WorkshopTicket.truck)
+        ).where(WorkshopPartsRequest.status.in_(["PENDING", "INFO_REQUESTED"])).order_by(WorkshopPartsRequest.request_id.desc())
+        pending_reqs = (await session.execute(stmt)).scalars().all()
+        
+        if not pending_reqs:
+            msg = (
+                f"✅ *All Parts Requisitions Fulfilled*\n\n"
+                f"There are currently no outstanding spare parts requests from the workshop floor."
+            )
+            buttons = [
+                {"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"}
+            ]
+            await meta_api.send_button_message(phone, msg, buttons, header_text="SPARES QUEUE")
+            return True
+            
+        lines = [f"📦 *Pending Workshop Parts Requests ({len(pending_reqs)}):*\n"]
+        first_req = pending_reqs[0]
+        for req in pending_reqs[:5]:
+            ticket = req.ticket
+            truck_num = ticket.truck.truck_number if ticket and ticket.truck else "N/A"
+            lines.append(f"• 🎫 *{ticket.ticket_number if ticket else 'Job'}* (Truck #{truck_num})\n  📦 Part: *{req.part_name}*\n  📊 Status: `{req.status}`")
+            
+        buttons = [
+            {"id": f"btn_parts_received_{first_req.request_id}", "title": "📦 Part Received"},
+            {"id": f"btn_parts_need_info_{first_req.request_id}", "title": "❓ Need Info/Sample"}
+        ]
+        await meta_api.send_button_message(phone, "\n".join(lines), buttons, header_text="PENDING SPARES")
+        return True
+
     return False
+
+async def send_purchasing_portal_menu(session: AsyncSession, phone: str, staff: WorkshopStaff):
+    """Sends interactive operational menu for Purchasing & Procurement."""
+    from app.state_manager import clear_user_state
+    await clear_user_state(session, phone)
+    
+    stmt = select(WorkshopPartsRequest).where(WorkshopPartsRequest.status.in_(["PENDING", "INFO_REQUESTED"]))
+    pending_reqs = (await session.execute(stmt)).scalars().all()
+    pending_count = len(pending_reqs)
+    
+    msg = (
+        f"👋 *Welcome {staff.full_name}* (Purchasing & Procurement)\n"
+        f"📦 *Workshop Spares & Procurement Portal*\n\n"
+        f"📦 Pending Parts Requisitions: *{pending_count}*\n\n"
+        f"Please select an option below:"
+    )
+    buttons = [
+        {"id": "btn_ws_purch_view_spares", "title": "📦 Pending Spares"},
+        {"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"}
+    ]
+    await meta_api.send_button_message(phone, msg, buttons, header_text="PURCHASING PORTAL")

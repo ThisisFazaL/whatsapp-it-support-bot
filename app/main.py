@@ -758,32 +758,36 @@ async def process_webhook_payload(body: dict):
                 await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
                 return
 
-            # Step 0: Workshop Subsystem Routing (Isolated Subsystem)
+            # Step 0: Identify user roles across Workshop, IT Support, Admins, and Observers
             from app.workshop.router import get_workshop_staff, handle_workshop_message
+            from app.state_manager import is_employee_registered, is_admin, get_user_state, clear_user_state
+            
             workshop_user = await get_workshop_staff(db, sender_phone)
-            if workshop_user:
-                logger.info(f"Routing to Workshop Subsystem for staff '{workshop_user.full_name}' ({workshop_user.role}).")
-                await handle_workshop_message(db, workshop_user, message_text, image_id)
-                return
-
-            # Check if user is an active SupportAdmin or ExecutiveObserver
             admin = await is_admin(db, sender_phone)
             from app.config import settings
             is_observer = sender_phone in settings.executive_observer_phones
-
-            # Step 1: Employee Registration Check (Support Admins & Observers bypass restriction)
             employee = await is_employee_registered(db, sender_phone)
-            if not employee and not admin and not is_observer:
+            
+            is_it_user = bool(employee or admin or is_observer)
+            is_workshop_user = bool(workshop_user)
+            is_dual_domain = is_workshop_user and is_it_user
+
+            # Unauthorized check: If not registered in workshop AND not registered in IT/Admin/Observer
+            if not is_workshop_user and not is_it_user:
                 logger.warning(f"Unregistered phone number attempted access: {sender_phone}")
                 warning_msg = (
                     f"🚫 *Access Restricted*\n\n"
-                    f"Your phone number (`+{sender_phone}`) is not registered as an active employee in our IT Support database.\n\n"
+                    f"Your phone number (`+{sender_phone}`) is not registered as an active employee in our database.\n\n"
                     f"Please contact your IT System Administrator to register your account."
                 )
                 await meta_api.send_text_message(sender_phone, warning_msg)
                 return
 
-            # Step 1.5: Master Admin Role Switch & Salesperson Fleet Flow Check
+            clean_txt = (message_text or "").strip().lower()
+            clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
+            state = await get_user_state(db, sender_phone)
+
+            # Step 0.5: Master Admin Role Switch & Salesperson Handler
             from app.handlers.fleet_approval_handler import (
                 handle_role_switch_command,
                 is_salesperson,
@@ -793,24 +797,87 @@ async def process_webhook_payload(body: dict):
             if await handle_role_switch_command(db, sender_phone, message_text):
                 return
 
-            if await is_salesperson(db, sender_phone, employee):
-                clean_txt = message_text.strip().lower()
-                clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
-                from app.handlers.flow_handler import GLOBAL_RESET_KEYWORDS
+            # Step 0.6: Global Domain Selection Buttons [ 🚚 Logistics & Fleet ] vs [ 💻 IT Support ]
+            if clean_txt in {"btn_domain_workshop", "logistics & fleet", "logistics", "fleet", "workshop", "🚚 logistics & fleet"}:
+                if is_workshop_user:
+                    await clear_user_state(db, sender_phone)
+                    from app.workshop.flow_handler import start_workshop_flow
+                    await start_workshop_flow(db, workshop_user)
+                    return
+                else:
+                    await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: Logistics & Fleet portal is restricted to authorized workshop and logistics staff.")
+                    return
 
-                # 0. Global Greeting / Reset / Main Menu -> Always reset state & show Sales Portal
-                if (
-                    clean_kw in GLOBAL_RESET_KEYWORDS
-                    or clean_txt in GLOBAL_RESET_KEYWORDS
-                    or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
-                    or clean_txt in {"btn_sales_menu", "/menu", "/start", "sales menu", "main menu"}
-                ):
-                    from app.state_manager import clear_user_state
+            if clean_txt in {"btn_domain_it", "it support", "it", "💻 it support"}:
+                if is_it_user:
+                    await clear_user_state(db, sender_phone)
+                    if admin:
+                        from app.handlers.admin_handler import handle_admin_command
+                        await handle_admin_command(db, sender_phone, "hi")
+                    else:
+                        from app.handlers.flow_handler import start_ticket_creation_flow
+                        await start_ticket_creation_flow(db, sender_phone, employee)
+                    return
+                else:
+                    await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: IT Support portal is restricted to registered company employees.")
+                    return
+
+            # Step 0.7: Global Greeting / Reset / Main Menu Handler
+            is_global_greeting = (
+                clean_kw in {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "restart", "home", "portal", "switch", "switch portal"}
+                or clean_txt in {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "/start", "/menu", "main menu", "switch portal", "btn_main_menu"}
+                or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
+            )
+
+            if is_global_greeting:
+                if is_dual_domain:
+                    # Dual-Domain Staff (e.g. Panashe Logistics Assistant, Edward Supervisor, Lydon Purchasing)
+                    user_name = workshop_user.full_name or (employee.full_name if employee else (admin.full_name if admin else "Staff Member"))
+                    body = (
+                        f"👋 *Welcome {user_name}*\n"
+                        f"🏢 *Tagoneswa Operations Portal*\n\n"
+                        f"Please select the service you wish to access:"
+                    )
+                    buttons = [
+                        {"id": "btn_domain_workshop", "title": "🚚 Logistics & Fleet"},
+                        {"id": "btn_domain_it", "title": "💻 IT Support"}
+                    ]
+                    await clear_user_state(db, sender_phone)
+                    await meta_api.send_button_message(
+                        to_phone=sender_phone,
+                        body_text=body,
+                        buttons=buttons,
+                        header_text="TAGONESWA PORTAL",
+                        fallback_template="tagoneswa_launch_announcement"
+                    )
+                    return
+                elif is_workshop_user:
+                    # Pure Workshop Staff (e.g. Driver, single-role Mechanic)
+                    await clear_user_state(db, sender_phone)
+                    from app.workshop.flow_handler import start_workshop_flow
+                    await start_workshop_flow(db, workshop_user)
+                    return
+                elif await is_salesperson(db, sender_phone, employee):
                     await clear_user_state(db, sender_phone)
                     await send_sales_portal_menu(db, sender_phone, employee)
                     return
+                # Single-domain IT user falls through to standard IT handling below
 
-                state = await get_user_state(db, sender_phone)
+            # Step 0.8: Check in-flight Workshop states & Workshop-specific buttons
+            is_ws_btn = clean_txt.startswith("btn_ws_") or clean_txt.startswith("btn_parts_") or clean_txt in {
+                "active jobs", "jobs", "status", "qc jobs", "log defect", "log truck defect", "report defect",
+                "fleet overview", "fleet summary", "pending spares", "spares queue", "parts requests", "view spares",
+                "resolved internally", "no valid fault", "send to workshop", "handle internally", "passed test", "return to fleet"
+            }
+            is_ws_state = state and state.current_step and (state.current_step.startswith("ws_") or state.current_step.startswith("btn_parts_"))
+
+            if is_workshop_user and (is_ws_btn or is_ws_state or not is_it_user):
+                logger.info(f"Routing to Workshop Subsystem for staff '{workshop_user.full_name}' ({workshop_user.role}).")
+                await handle_workshop_message(db, workshop_user, message_text, image_id)
+                return
+
+            # Step 1: Salesperson Fleet Approval Flow Check
+            if await is_salesperson(db, sender_phone, employee):
                 # 1. Handle Fleet Approval and Pending Balance workflow actions
                 if await handle_fleet_approval_flow(db, sender_phone, employee, message_text, state):
                     return
@@ -822,7 +889,6 @@ async def process_webhook_payload(body: dict):
                     return
 
             # Security check: Non-sales employees cannot access fleet commands
-            clean_txt = message_text.strip().lower()
             if "domain_fleet" in clean_txt or clean_txt in {"fleet approval", "fleet", "🚛 fleet approval"}:
                 if not await is_salesperson(db, sender_phone, employee):
                     await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: Fleet trip approval requests are restricted to authorized Sales personnel.")

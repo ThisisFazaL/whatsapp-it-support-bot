@@ -291,4 +291,118 @@ async def handle_supervisor_action(session: AsyncSession, staff: WorkshopStaff, 
                     )
         return True
 
+    # 3. Supervisor Portal Actions (Active Jobs, Log Defect, Fleet Overview)
+    if text == "btn_ws_sup_active_jobs" or text.lower() in {"active jobs", "jobs", "status", "qc jobs"}:
+        stmt = select(WorkshopTicket).options(
+            selectinload(WorkshopTicket.truck),
+            selectinload(WorkshopTicket.assigned_mechanic)
+        ).where(WorkshopTicket.status != "CLOSED").order_by(WorkshopTicket.ticket_id.desc())
+        active_tickets = (await session.execute(stmt)).scalars().all()
+        
+        if not active_tickets:
+            msg = (
+                f"✅ *All Fleet Vehicles Operational*\n\n"
+                f"There are currently no open workshop jobs or pending gatekeeper reviews."
+            )
+            buttons = [
+                {"id": "btn_ws_sup_log_defect", "title": "🚛 Log Truck Defect"},
+                {"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"}
+            ]
+            await meta_api.send_button_message(phone, msg, buttons, header_text="WORKSHOP JOBS")
+            return True
+            
+        lines = [f"📋 *Active Workshop Jobs ({len(active_tickets)}):*\n"]
+        first_actionable_id = None
+        first_actionable_type = None
+        for t in active_tickets[:5]:
+            truck_num = t.truck.truck_number if t.truck else "N/A"
+            mech_name = t.assigned_mechanic.full_name if t.assigned_mechanic else "Unassigned"
+            status_tag = t.status.replace("_", " ")
+            lines.append(f"• 🎫 *{t.ticket_number}* (Truck #{truck_num})\n  📌 Fault: {t.category_name} ➔ {t.subcategory_name}\n  📊 Status: `{status_tag}` | Mechanic: {mech_name}")
+            if not first_actionable_id and t.status in ("UNDER_REVIEW", "AWAITING_TEST"):
+                first_actionable_id = t.ticket_id
+                first_actionable_type = t.status
+
+        buttons = []
+        if first_actionable_id:
+            title = "🔍 Review Defect" if first_actionable_type == "UNDER_REVIEW" else "🚗 Perform QC Test"
+            buttons.append({"id": f"btn_ws_open_ticket_{first_actionable_id}", "title": title})
+        buttons.append({"id": "btn_ws_sup_log_defect", "title": "🚛 Log Defect"})
+        buttons.append({"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"})
+        
+        await meta_api.send_button_message(phone, "\n".join(lines), buttons[:3], header_text="ACTIVE WORKSHOP JOBS")
+        return True
+
+    if text == "btn_ws_sup_log_defect" or text.lower() in {"log defect", "log truck defect", "report defect"}:
+        await set_user_state(session, phone, "ws_truck_search", {})
+        msg = (
+            f"🚚 *Log Truck Defect / Breakdown*\n\n"
+            f"Please enter the *Truck Number* (e.g. for plate `AGZ 7331`, type `7331`):"
+        )
+        await meta_api.send_text_message(phone, msg)
+        return True
+
+    if text == "btn_ws_sup_fleet_summary" or text.lower() in {"fleet overview", "fleet summary", "fleet"}:
+        trucks = (await session.execute(select(WorkshopTruck))).scalars().all()
+        active_tickets = (await session.execute(select(WorkshopTicket).where(WorkshopTicket.status != "CLOSED"))).scalars().all()
+        in_workshop = sum(1 for t in active_tickets if t.status in ("WITH_MECHANIC", "REPAIR_IN_PROGRESS", "REWORK_REQUIRED"))
+        awaiting_parts = sum(1 for t in active_tickets if t.status == "AWAITING_PARTS")
+        awaiting_qc = sum(1 for t in active_tickets if t.status == "AWAITING_TEST")
+        under_review = sum(1 for t in active_tickets if t.status == "UNDER_REVIEW")
+        operational = len(trucks) - len(active_tickets)
+        
+        msg = (
+            f"📊 *Tagoneswa Fleet Overview*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🚚 *Total Registered Fleet:* {len(trucks)} Trucks\n"
+            f"🟢 *Operational on Road:* {max(0, operational)}\n"
+            f"🟡 *Under Gatekeeper Review:* {under_review}\n"
+            f"🔧 *Active in Workshop:* {in_workshop}\n"
+            f"📦 *Awaiting Spare Parts:* {awaiting_parts}\n"
+            f"🚗 *Awaiting QC Road-Test:* {awaiting_qc}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Select action:"
+        )
+        buttons = [
+            {"id": "btn_ws_sup_active_jobs", "title": "🔍 Active Jobs"},
+            {"id": "btn_ws_sup_log_defect", "title": "🚛 Log Truck Defect"}
+        ]
+        await meta_api.send_button_message(phone, msg, buttons, header_text="FLEET OVERVIEW")
+        return True
+
     return False
+
+async def send_supervisor_portal_menu(session: AsyncSession, phone: str, staff: WorkshopStaff):
+    """Sends interactive operational menu for Logistics Supervisor."""
+    from app.state_manager import clear_user_state
+    await clear_user_state(session, phone)
+    
+    stmt = select(WorkshopTicket).where(WorkshopTicket.status != "CLOSED")
+    active_tickets = (await session.execute(stmt)).scalars().all()
+    active_count = len(active_tickets)
+    
+    review_count = sum(1 for t in active_tickets if t.status == "UNDER_REVIEW")
+    qc_count = sum(1 for t in active_tickets if t.status == "AWAITING_TEST")
+    
+    status_summary = []
+    if review_count > 0:
+        status_summary.append(f"⚠️ *{review_count}* Pending Gatekeeper Review")
+    if qc_count > 0:
+        status_summary.append(f"🚗 *{qc_count}* Awaiting Road-Test QC")
+    if not status_summary:
+        status_summary.append(f"📊 *{active_count}* Active in Workshop Floor")
+        
+    summary_str = "\n".join(status_summary)
+    
+    msg = (
+        f"👋 *Welcome {staff.full_name}* (Logistics Supervisor)\n"
+        f"🚚 *Workshop & Fleet Management Portal*\n\n"
+        f"{summary_str}\n\n"
+        f"Please select an option below:"
+    )
+    buttons = [
+        {"id": "btn_ws_sup_active_jobs", "title": "🔍 Active Jobs & QC"},
+        {"id": "btn_ws_sup_log_defect", "title": "🚛 Log Truck Defect"},
+        {"id": "btn_ws_sup_fleet_summary", "title": "📊 Fleet Overview"}
+    ]
+    await meta_api.send_button_message(phone, msg, buttons, header_text="SUPERVISOR PORTAL")

@@ -199,13 +199,23 @@ async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, m
     data = state.current_data if state else {}
 
     # 2. Check Supervisor Handlers (Edward)
-    if text.startswith("btn_ws_route_") or text.startswith("btn_ws_resolve_") or text.startswith("btn_ws_reject_") or text.startswith("btn_ws_qc_") or text.startswith("btn_ws_return_") or current_step in {"ws_reject_reason", "ws_internal_fix_notes", "ws_qc_fail_reason"}:
+    if (
+        text.startswith("btn_ws_route_") or text.startswith("btn_ws_resolve_") or
+        text.startswith("btn_ws_reject_") or text.startswith("btn_ws_qc_") or
+        text.startswith("btn_ws_return_") or text.startswith("btn_ws_sup_") or
+        text.lower() in {"active jobs", "jobs", "status", "qc jobs", "log defect", "log truck defect", "report defect", "fleet overview", "fleet summary", "fleet"} or
+        current_step in {"ws_reject_reason", "ws_internal_fix_notes", "ws_qc_fail_reason"}
+    ):
         handled = await handle_supervisor_action(session, staff, text, data, current_step)
         if handled:
             return True
 
     # 3. Check Purchasing Handlers
-    if text.startswith("btn_parts_") or current_step == "ws_purchasing_inquiry":
+    if (
+        text.startswith("btn_parts_") or text.startswith("btn_ws_purch_") or
+        text.lower() in {"pending spares", "spares queue", "parts requests", "view spares", "spares", "parts"} or
+        current_step == "ws_purchasing_inquiry"
+    ):
         handled = await handle_purchasing_action(session, staff, text, data, current_step)
         if handled:
             return True
