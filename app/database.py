@@ -260,6 +260,13 @@ class ProductRequirement(Base):
     salesperson = relationship("Employee")
     product = relationship("Product")
 
+class AdminNotificationLog(Base):
+    __tablename__ = "admin_notification_logs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    admin_phone = Column(String(30), index=True, nullable=False)
+    ticket_number = Column(String(50), index=True, nullable=False)
+    delivered_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
@@ -336,8 +343,59 @@ async def init_db_models():
                 """))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fpl_sales_phone ON fleet_pending_ledger(salesperson_phone)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fpl_trip_id ON fleet_pending_ledger(trip_id)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS admin_notification_logs (
+                        id SERIAL PRIMARY KEY,
+                        admin_phone VARCHAR(30) NOT NULL,
+                        ticket_number VARCHAR(50) NOT NULL,
+                        delivered_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_anl_phone ON admin_notification_logs(admin_phone)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_anl_ticket ON admin_notification_logs(ticket_number)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS products (
+                        product_id SERIAL PRIMARY KEY,
+                        product_code VARCHAR(50) UNIQUE,
+                        product_name VARCHAR(150) NOT NULL,
+                        category VARCHAR(100) NOT NULL,
+                        size_spec VARCHAR(50),
+                        unit_of_measure VARCHAR(20) DEFAULT 'pcs',
+                        standard_price DOUBLE PRECISION,
+                        active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_prod_name ON products(product_name)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS product_requirements (
+                        requirement_id SERIAL PRIMARY KEY,
+                        requirement_number VARCHAR(30) UNIQUE NOT NULL,
+                        salesperson_id INTEGER REFERENCES employees(employee_id),
+                        customer_name VARCHAR(150) NOT NULL,
+                        customer_phone VARCHAR(50),
+                        requirement_type VARCHAR(30) NOT NULL,
+                        product_id INTEGER REFERENCES products(product_id),
+                        product_name VARCHAR(150) NOT NULL,
+                        product_category VARCHAR(100),
+                        required_quantity INTEGER,
+                        monthly_demand INTEGER,
+                        customer_urgency VARCHAR(50),
+                        competitor_supplier VARCHAR(150),
+                        current_market_price DOUBLE PRECISION,
+                        comments TEXT,
+                        image_id VARCHAR(100),
+                        status VARCHAR(50) DEFAULT 'Pending Review',
+                        management_notes TEXT,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
         except Exception as e:
-            print(f"Fleet approvals & ledger table init note: {e}")
+            print(f"Database table init note: {e}")
             
     async with async_session_factory() as session:
         # Check Priorities

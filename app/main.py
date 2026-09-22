@@ -812,7 +812,6 @@ async def process_webhook_payload(body: dict):
                 if is_it_user:
                     await clear_user_state(db, sender_phone)
                     if admin:
-                        from app.handlers.admin_handler import handle_admin_command
                         await handle_admin_command(db, sender_phone, "hi")
                     else:
                         from app.handlers.flow_handler import start_ticket_creation_flow

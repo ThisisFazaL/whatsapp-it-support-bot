@@ -199,12 +199,63 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
 
     return True
 
+async def get_delivered_ticket_numbers_for_admin(session: AsyncSession, admin_phone: str) -> set:
+    """Returns set of all ticket numbers already delivered/notified to this admin's phone."""
+    if not admin_phone:
+        return set()
+    clean_phone = admin_phone.replace("+", "").replace(" ", "").strip()
+    last_9 = clean_phone[-9:] if len(clean_phone) >= 9 else clean_phone
+    from app.database import AdminNotificationLog
+    stmt = select(AdminNotificationLog.ticket_number).where(
+        (AdminNotificationLog.admin_phone.endswith(last_9)) | (AdminNotificationLog.admin_phone == clean_phone)
+    )
+    res = await session.execute(stmt)
+    return set(res.scalars().all())
+
+async def is_ticket_delivered_to_admin(session: AsyncSession, admin_phone: str, ticket_number: str) -> bool:
+    """Checks if a ticket has already been delivered/notified to this admin's phone."""
+    delivered_set = await get_delivered_ticket_numbers_for_admin(session, admin_phone)
+    return ticket_number in delivered_set
+
+async def record_ticket_delivered_to_admin(session: AsyncSession, admin_phone: str, ticket_number: str):
+    """Records that a ticket notification has been delivered to this admin's phone (prevents repeats)."""
+    if not admin_phone or not ticket_number:
+        return
+    clean_phone = admin_phone.replace("+", "").replace(" ", "").strip()
+    delivered_set = await get_delivered_ticket_numbers_for_admin(session, clean_phone)
+    if ticket_number not in delivered_set:
+        from app.database import AdminNotificationLog
+        log_entry = AdminNotificationLog(
+            admin_phone=clean_phone,
+            ticket_number=ticket_number,
+            delivered_at=datetime.datetime.utcnow()
+        )
+        session.add(log_entry)
+        await session.commit()
+
+async def record_tickets_delivered_to_admin(session: AsyncSession, admin_phone: str, ticket_numbers: list):
+    """Batch records that ticket notifications have been delivered to this admin's phone."""
+    if not admin_phone or not ticket_numbers:
+        return
+    clean_phone = admin_phone.replace("+", "").replace(" ", "").strip()
+    delivered_set = await get_delivered_ticket_numbers_for_admin(session, clean_phone)
+    new_tns = [tn for tn in ticket_numbers if tn not in delivered_set]
+    if new_tns:
+        from app.database import AdminNotificationLog
+        entries = [
+            AdminNotificationLog(admin_phone=clean_phone, ticket_number=tn, delivered_at=datetime.datetime.utcnow())
+            for tn in new_tns
+        ]
+        session.add_all(entries)
+        await session.commit()
+
 async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admin: SupportAdmin, sender_phone: str):
     """
-    Delivers all open, unclaimed pending tickets (from the period when 24h window was closed)
-    to the admin whenever they send 'hi' or open the bot dashboard.
+    Delivers open, unclaimed pending tickets that were raised while the 24h window was closed.
+    Strictly checks AdminNotificationLog so each ticket is delivered ONCE and NEVER repeated!
     """
     try:
+        delivered_set = await get_delivered_ticket_numbers_for_admin(session, sender_phone)
         unclaimed_maint = []
         unclaimed_it = []
 
@@ -225,10 +276,13 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
                     MaintenanceTicket.status_id == 1,
                     MaintenanceTicket.ticket_id.not_in(m_assigned_subq)
                 )
-                .order_by(MaintenanceTicket.created_at.asc())
+                .order_by(MaintenanceTicket.created_at.desc())
+                .limit(10)
             )
             m_res = await session.execute(m_stmt)
-            unclaimed_maint = m_res.scalars().all()
+            for t in m_res.scalars().all():
+                if t.ticket_number not in delivered_set:
+                    unclaimed_maint.append(t)
 
         # 2. IT Domain Unclaimed Tickets
         if not admin.is_maintenance_admin or admin.is_master_admin:
@@ -246,24 +300,57 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
                     Ticket.status_id == 1,
                     Ticket.ticket_id.not_in(it_assigned_subq)
                 )
-                .order_by(Ticket.created_at.asc())
+                .order_by(Ticket.created_at.desc())
+                .limit(10)
             )
             it_res = await session.execute(it_stmt)
-            unclaimed_it = it_res.scalars().all()
+            for t in it_res.scalars().all():
+                if t.ticket_number in delivered_set:
+                    continue
+
+                # Check category routing for Faisal vs Kevin/Ellias
+                cat_name_str = (t.category.category_name if t.category else "").lower()
+                sub_name_str = (t.subcategory.subcategory_name if t.subcategory else "").lower()
+                is_faisal_cat = (
+                    any(k in cat_name_str for k in ["security", "access control", "electrical", "power", "custom support", "other / custom", "facilities"]) or
+                    any(k in sub_name_str for k in [
+                        "cctv", "camera", "surveillance", "access control", "gate", "turnstile", "biometric",
+                        "electrical", "wiring", "fitting", "light", "electronics", "power supply", "generator", "ups",
+                        "general maintenance", "facilities", "desk", "chair", "drawer", "furniture"
+                    ])
+                ) and not any(it_k in cat_name_str for it_k in ["computing", "hardware", "software", "network", "connectivity", "account"])
+
+                is_faisal_admin = "780100503" in admin.phone or "faisal" in admin.full_name.lower()
+                
+                # If Faisal, only deliver Faisal categories. If Kevin/Ellias, only deliver Core IT categories.
+                if not admin.is_master_admin:
+                    if is_faisal_admin and not is_faisal_cat:
+                        continue
+                    if not is_faisal_admin and is_faisal_cat:
+                        continue
+
+                unclaimed_it.append(t)
 
         total_pending = len(unclaimed_maint) + len(unclaimed_it)
         if total_pending == 0:
-            return
+            return  # No unnotified tickets! Do not send anything extra.
+
+        # Limit delivered cards to most recent 3 to prevent notification flooding
+        to_deliver_m = unclaimed_maint[:3]
+        to_deliver_it = unclaimed_it[:3]
+        delivered_count = len(to_deliver_m) + len(to_deliver_it)
 
         header_notice = (
-            f"📢 *UNCLAIMED PENDING TICKETS ({total_pending})*\n\n"
-            f"Hello *{admin.full_name}*, the following open ticket(s) were raised while your 24-hour WhatsApp messaging window was closed.\n\n"
-            f"Tap **[ 🔵 Claim Ticket ]** on any ticket below to claim it:"
+            f"📢 *NEW UNCLAIMED TICKETS ({delivered_count})*\n\n"
+            f"Hello *{admin.full_name}*, the following open ticket(s) arrived while you were offline:\n"
         )
         await meta_api.send_text_message(sender_phone, header_notice)
+        await asyncio.sleep(0.3)
+
+        delivered_nums = []
 
         # Deliver Projects Unclaimed Tickets
-        for t in unclaimed_maint:
+        for t in to_deliver_m:
             emp_name = t.employee.full_name if t.employee else "Staff Reporter"
             emp_phone = t.employee.phone if t.employee else ""
             cat_name = t.category.category_name if t.category else "Doors, Windows & Locks"
@@ -297,16 +384,28 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
                 footer_text=footer,
                 image_id=t.image_id
             )
-            await asyncio.sleep(0.5)
+            delivered_nums.append(t.ticket_number)
+            await asyncio.sleep(0.3)
 
         # Deliver IT Support Unclaimed Tickets
-        for t in unclaimed_it:
+        for t in to_deliver_it:
             emp_name = t.employee.full_name if t.employee else "Staff Reporter"
             emp_phone = t.employee.phone if t.employee else ""
             cat_name = t.category.category_name if t.category else "IT Equipment"
             sub_name = t.subcategory.subcategory_name if t.subcategory else "Computer & Laptop"
             issue_name = t.issue_type.issue_name if t.issue_type else "IT Issue"
             priority_name = t.priority.priority_name if t.priority else "Medium"
+
+            is_faisal_admin = "780100503" in admin.phone or "faisal" in admin.full_name.lower()
+            if is_faisal_admin:
+                btn_list = [{"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"}]
+                footer_text = "Tap button below to resolve"
+            else:
+                btn_list = [
+                    {"id": f"claim_{t.ticket_number}", "title": "✋ Claim Ticket"},
+                    {"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"}
+                ]
+                footer_text = "Tap 'Claim Ticket' to assign to yourself"
 
             header = f"🚨 NEW 💻 IT SUPPORT TICKET"
             body = (
@@ -317,19 +416,20 @@ async def deliver_pending_unclaimed_tickets_to_admin(session: AsyncSession, admi
                 f"🚨 *Priority:* {priority_name}\n"
                 f"📝 *Description:* {t.description}"
             )
-            footer = "Tap button below to claim ticket"
-            buttons = [
-                {"id": f"claim_{t.ticket_number}", "title": "🔵 Claim Ticket"}
-            ]
             await meta_api.send_button_message(
                 to_phone=sender_phone,
                 body_text=body,
-                buttons=buttons,
+                buttons=btn_list,
                 header_text=header,
-                footer_text=footer,
+                footer_text=footer_text,
                 image_id=t.image_id
             )
-            await asyncio.sleep(0.5)
+            delivered_nums.append(t.ticket_number)
+            await asyncio.sleep(0.3)
+
+        # Mark all pending as recorded so admin is never re-spammed
+        all_pending_nums = [t.ticket_number for t in (unclaimed_maint + unclaimed_it)]
+        await record_tickets_delivered_to_admin(session, sender_phone, all_pending_nums)
 
     except Exception as e:
         logger.error(f"Error delivering pending unclaimed tickets to admin {sender_phone}: {e}", exc_info=True)
@@ -492,6 +592,9 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     # 1. HANDLE GREETING / MENU / START SHIFT
     if is_greeting:
         await clear_user_state(session, sender_phone)
+
+        # Check and deliver any missed tickets from offline periods (strictly ONCE per ticket, never repeated)
+        await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
 
         if is_start_shift:
             header = "🟢 SHIFT ACTIVE (24H OPEN)"

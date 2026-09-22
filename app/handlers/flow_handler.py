@@ -725,8 +725,9 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
     )
 
     # Broadcast to all target admins (both Kevin & Ellias receive it!)
+    from app.handlers.admin_handler import record_ticket_delivered_to_admin
     for t_adm in target_admins:
-        await meta_api.send_button_message(
+        res = await meta_api.send_button_message(
             to_phone=t_adm.phone,
             body_text=body,
             buttons=buttons,
@@ -734,6 +735,9 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
             footer_text=footer,
             image_id=ticket_image_id
         )
+        err_code = res.get("error", {}).get("code") if isinstance(res.get("error"), dict) else None
+        if not err_code:
+            await record_ticket_delivered_to_admin(session, t_adm.phone, ticket_number)
 
     # Send Alert to Master Admin Fazal
     if settings.master_admin_phone:
@@ -741,7 +745,7 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
         master_buttons = [
             {"id": f"resolve_{ticket_number}", "title": "🟢 Resolve Ticket"}
         ]
-        await meta_api.send_button_message(
+        res_m = await meta_api.send_button_message(
             to_phone=settings.master_admin_phone,
             body_text=master_body,
             buttons=master_buttons,
@@ -749,3 +753,6 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
             footer_text="Master Admin: Tap button to resolve anytime",
             image_id=ticket_image_id
         )
+        err_code_m = res_m.get("error", {}).get("code") if isinstance(res_m.get("error"), dict) else None
+        if not err_code_m:
+            await record_ticket_delivered_to_admin(session, settings.master_admin_phone, ticket_number)
