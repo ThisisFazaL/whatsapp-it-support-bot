@@ -15,7 +15,7 @@ from app.services.ai_extractor import extract_requirement_entities, get_missing_
 logger = logging.getLogger("requirement_handler")
 
 SKIP_KEYWORDS = {"skip", "no", "none", "pass", "next", "btn_req_skip_photo", "na", "n/a", "-"}
-GLOBAL_RESET_KEYWORDS = {"hi", "hello", "menu", "reset", "cancel", "start"}
+GLOBAL_RESET_KEYWORDS = {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "exit", "back", "restart", "home", "sales", "portal"}
 
 def extract_numeric_choice(text: str) -> str:
     """Extracts first sequence of digits from text string."""

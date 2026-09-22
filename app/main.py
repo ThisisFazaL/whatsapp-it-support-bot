@@ -794,8 +794,24 @@ async def process_webhook_payload(body: dict):
                 return
 
             if await is_salesperson(db, sender_phone, employee):
+                clean_txt = message_text.strip().lower()
+                clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
+                from app.handlers.flow_handler import GLOBAL_RESET_KEYWORDS
+
+                # 0. Global Greeting / Reset / Main Menu -> Always reset state & show Sales Portal
+                if (
+                    clean_kw in GLOBAL_RESET_KEYWORDS
+                    or clean_txt in GLOBAL_RESET_KEYWORDS
+                    or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
+                    or clean_txt in {"btn_sales_menu", "/menu", "/start", "sales menu", "main menu"}
+                ):
+                    from app.state_manager import clear_user_state
+                    await clear_user_state(db, sender_phone)
+                    await send_sales_portal_menu(db, sender_phone, employee)
+                    return
+
                 state = await get_user_state(db, sender_phone)
-                # 0. Handle active Product Requirement workflow actions
+                # 1. Handle active Product Requirement workflow actions
                 if state and state.flow_name == "product_requirement":
                     from app.handlers.requirement_handler import handle_requirement_flow
                     await handle_requirement_flow(
@@ -808,30 +824,20 @@ async def process_webhook_payload(body: dict):
                     )
                     return
 
-                # 1. Handle Fleet Approval workflow actions
+                # 2. Handle Fleet Approval workflow actions
                 if await handle_fleet_approval_flow(db, sender_phone, employee, message_text, state):
                     return
 
-                clean_txt = message_text.strip().lower()
-                # Handle [ 📦 Product Req ] button or keywords
+                # 3. Handle [ 📦 Product Req ] button or keywords
                 if clean_txt in {"btn_product_req", "btn_product_requirement", "product requirement", "requirement", "market demand", "new product", "product", "1", "1️⃣ product requirement"}:
                     from app.handlers.requirement_handler import start_product_requirement_flow
                     await start_product_requirement_flow(db, sender_phone, employee, initial_text=message_text)
                     return
 
-                # 2. Handle [ 💻 IT Support ] button
+                # 4. Handle [ 💻 IT Support ] button
                 if clean_txt in {"btn_domain_it", "it support", "it", "💻 it support"}:
                     from app.handlers.flow_handler import send_categories_menu
                     await send_categories_menu(db, sender_phone, domain="IT", data={"domain": "IT"})
-                    return
-
-                # 3. Handle Greeting / Reset -> Show Sales Portal
-                from app.handlers.flow_handler import GLOBAL_RESET_KEYWORDS
-                clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
-                if clean_kw in GLOBAL_RESET_KEYWORDS or clean_txt in GLOBAL_RESET_KEYWORDS or clean_txt in {"btn_sales_menu", "/menu"}:
-                    from app.state_manager import clear_user_state
-                    await clear_user_state(db, sender_phone)
-                    await send_sales_portal_menu(db, sender_phone, employee)
                     return
 
             # Security check: Non-sales employees cannot access fleet commands

@@ -14,7 +14,7 @@ from app.database import (
 from app.state_manager import set_user_state, clear_user_state
 from app.meta_api import meta_api
 
-GLOBAL_RESET_KEYWORDS = {"hi", "hello", "menu", "reset", "cancel", "start"}
+GLOBAL_RESET_KEYWORDS = {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "exit", "back", "restart", "home", "sales", "portal"}
 SKIP_KEYWORDS = {"skip", "no", "none", "pass", "next", "btn_skip_photo"}
 
 def extract_numeric_choice(text: str) -> str:

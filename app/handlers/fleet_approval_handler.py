@@ -17,6 +17,11 @@ from app.services.trip_verification_service import trip_verification_service
 
 logger = logging.getLogger("fleet_approval_handler")
 
+GLOBAL_RESET_KEYWORDS = {
+    "hi", "hello", "hey", "menu", "reset", "cancel", "start",
+    "exit", "back", "restart", "home", "sales", "portal"
+}
+
 # In-memory role override cache for instant WhatsApp one-word role toggling
 # Allows +919265368695 to switch live between "SALES" and "MASTER_ADMIN" via chat
 SESSION_ROLE_OVERRIDES: Dict[str, str] = {}
@@ -266,9 +271,15 @@ async def handle_fleet_approval_flow(
     """
     text_strip = message_text.strip()
     text_lower = text_strip.lower()
+    clean_kw = re.sub(r"[^\w\s]", "", text_lower).strip()
 
-    # Global Return to Sales Menu
-    if text_lower in {"btn_sales_menu", "sales menu"}:
+    # Global Return to Sales Menu / Greetings / Resets
+    if (
+        clean_kw in GLOBAL_RESET_KEYWORDS
+        or text_lower in GLOBAL_RESET_KEYWORDS
+        or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
+        or text_lower in {"btn_sales_menu", "sales menu", "/menu", "/start", "main menu"}
+    ):
         await clear_user_state(session, phone)
         await send_sales_portal_menu(session, phone, employee)
         return True
@@ -304,13 +315,29 @@ async def handle_fleet_approval_flow(
 
     # 4. Handle Pending Recovery Active States
     if state and state.flow_name == "fleet_pending":
-        if text_lower in {"cancel", "reset", "menu", "back", "exit"}:
+        if (
+            clean_kw in GLOBAL_RESET_KEYWORDS
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or text_lower in {"cancel", "reset", "menu", "back", "exit"}
+        ):
             await clear_user_state(session, phone)
             await send_sales_portal_menu(session, phone, employee)
             return True
 
         if state.current_step == "awaiting_recovery_trip_id":
             trip_id = text_strip.upper().replace("TRIP-", "").strip()
+            # Guard against greetings, non-trip words, or short text
+            if (
+                len(trip_id) < 3
+                or text_lower in GLOBAL_RESET_KEYWORDS
+                or text_lower in {"ok", "okay", "yes", "no", "thanks", "thank you", "sure"}
+            ):
+                await meta_api.send_text_message(
+                    phone,
+                    "⚠️ Please enter a valid Trip ID (e.g. *08042026-BYO* or *20042026-BINDURA*), or reply *cancel* to return to the main menu."
+                )
+                return True
+
             cur_bal = await get_sales_rep_pending_balance(session, phone)
             await set_user_state(
                 session,
@@ -715,14 +742,26 @@ async def handle_fleet_approval_flow(
 
     # 12. Handle active state 'awaiting_trip_id'
     if state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_trip_id":
-        if text_lower in {"cancel", "reset", "menu", "back", "exit"}:
+        if (
+            clean_kw in GLOBAL_RESET_KEYWORDS
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
+            or text_lower in {"cancel", "reset", "menu", "back", "exit"}
+        ):
             await clear_user_state(session, phone)
             await send_sales_portal_menu(session, phone, employee)
             return True
 
         trip_query = text_strip.upper().replace("TRIP-", "").strip()
-        if len(trip_query) < 3:
-            await meta_api.send_text_message(phone, "⚠️ Please enter a valid Trip ID (e.g. *20042026-BINDURA*):")
+        if (
+            len(trip_query) < 3
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or text_lower in {"ok", "okay", "yes", "no", "thanks", "thank you", "sure"}
+        ):
+            await meta_api.send_text_message(
+                phone,
+                "⚠️ Please enter a valid Trip ID (e.g. *20042026-BINDURA*), or reply *cancel* to return to the main menu."
+            )
             return True
 
         # Send in-progress notification
