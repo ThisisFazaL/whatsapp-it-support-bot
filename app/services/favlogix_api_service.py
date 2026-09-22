@@ -240,74 +240,113 @@ class FavlogixAPIService:
         # Mode A: New Platform (fio.favlogix.com)
         # ----------------------------------------------------
         if self.is_fio:
-            trip_totals_url = f"{self.base_url}/tenant/inventory/packaging-list/trip-totals"
+            clean_trip = trip_id.strip().upper().replace("TRIP-", "").strip()
+            sales_trip_url = f"{self.base_url}/tenant/sales/trip"
+            detail_url = f"{self.base_url}/tenant/sales/trip/detail"
             headers = {"Accept": "application/json"}
             if self.auth_token and not self.auth_token.startswith("cookie-"):
                 headers["Authorization"] = f"Bearer {self.auth_token}"
 
             async with httpx.AsyncClient(timeout=15.0, cookies=self.cookies) as client:
-                res = await client.get(trip_totals_url, params={"tripId": clean_trip}, headers=headers)
-                if res.status_code == 401:
+                trip_data = None
+                orders_data = []
+
+                # 1. Try direct detail lookup (if full trip ID like 22092026-TEST2 was provided)
+                res_detail = await client.get(detail_url, params={"tripId": clean_trip}, headers=headers)
+                if res_detail.status_code == 401:
                     logger.warning("fio.favlogix.com session expired. Re-authenticating...")
                     await self._login()
-                    res = await client.get(trip_totals_url, params={"tripId": clean_trip}, headers=headers, cookies=self.cookies)
+                    res_detail = await client.get(detail_url, params={"tripId": clean_trip}, headers=headers, cookies=self.cookies)
 
-                if res.status_code != 200:
-                    raise FavlogixAPIError(f"fio.favlogix.com trip-totals failed with HTTP {res.status_code}: {res.text}")
+                if res_detail.status_code == 200:
+                    d_json = res_detail.json()
+                    trip_data = d_json.get("trip")
+                    orders_data = d_json.get("orders", [])
+                elif res_detail.status_code == 404:
+                    # 2. Try sales/trip search (e.g. user typed 'TEST2' or partial name)
+                    res_search = await client.get(sales_trip_url, params={"trip": clean_trip}, headers=headers)
+                    if res_search.status_code == 401:
+                        await self._login()
+                        res_search = await client.get(sales_trip_url, params={"trip": clean_trip}, headers=headers, cookies=self.cookies)
 
-                items = res.json()
-                if not isinstance(items, list):
-                    items = items.get("data", []) if isinstance(items, dict) else []
+                    if res_search.status_code == 200:
+                        s_json = res_search.json()
+                        items = s_json.get("data", []) if isinstance(s_json, dict) else s_json
+                        matching = [
+                            it for it in items
+                            if clean_trip.lower() in it.get("tripId", "").lower()
+                            or it.get("tripId", "").lower().endswith(clean_trip.lower())
+                        ]
+                        if matching:
+                            real_trip_id = matching[0].get("tripId")
+                            res_real = await client.get(detail_url, params={"tripId": real_trip_id}, headers=headers, cookies=self.cookies)
+                            if res_real.status_code == 200:
+                                d_json = res_real.json()
+                                trip_data = d_json.get("trip")
+                                orders_data = d_json.get("orders", [])
+                            else:
+                                trip_data = matching[0]
 
-                # Find matching trip record
-                matching_items = [
-                    it for it in items
-                    if it.get("tripId", "").strip().lower() == clean_trip.lower()
-                    or clean_trip.lower() in it.get("tripId", "").strip().lower()
-                ]
-
-                if not matching_items:
-                    # If specific param yielded empty, try general list
-                    res_all = await client.get(trip_totals_url, headers=headers, cookies=self.cookies)
+                if not trip_data:
+                    # 3. Final fallback: List all recent trips and match locally
+                    res_all = await client.get(sales_trip_url, headers=headers, cookies=self.cookies)
                     if res_all.status_code == 200:
-                        all_items = res_all.json()
-                        if isinstance(all_items, list):
-                            matching_items = [
-                                it for it in all_items
-                                if clean_trip.lower() in it.get("tripId", "").strip().lower()
-                            ]
+                        s_json = res_all.json()
+                        items = s_json.get("data", []) if isinstance(s_json, dict) else s_json
+                        matching = [
+                            it for it in items
+                            if clean_trip.lower() in it.get("tripId", "").lower()
+                            or it.get("tripId", "").lower().endswith(clean_trip.lower())
+                        ]
+                        if matching:
+                            real_trip_id = matching[0].get("tripId")
+                            res_real = await client.get(detail_url, params={"tripId": real_trip_id}, headers=headers, cookies=self.cookies)
+                            if res_real.status_code == 200:
+                                d_json = res_real.json()
+                                trip_data = d_json.get("trip")
+                                orders_data = d_json.get("orders", [])
+                            else:
+                                trip_data = matching[0]
 
-                if not matching_items:
+                if not trip_data:
                     raise FavlogixCalculationPendingError(
-                        f"Trip '{clean_trip}' currently has 0 active delivery orders in Favlogix."
+                        f"Trip '{clean_trip}' was not found in Favlogix Sales Trips."
                     )
 
-                # Sum totals across matching packaging lists
-                total_amount = 0.0
-                total_orders = 0
-                pkg_ids = []
-                for it in matching_items:
-                    amt = it.get("totalAmount")
-                    if amt is not None:
-                        total_amount += float(amt)
-                    total_orders += int(it.get("orderCount", 1))
-                    pkg_id = it.get("packagingListId")
-                    if pkg_id:
-                        pkg_ids.append(pkg_id)
+                actual_trip_id = trip_data.get("tripId") or clean_trip
+                total_amount = float(trip_data.get("totalAmount") or 0.0)
+                total_orders = int(trip_data.get("orderCount") or len(orders_data) or 1)
+                order_ids = [o.get("orderId") or o.get("orderKey") for o in orders_data if o.get("orderId") or o.get("orderKey")]
+
+                # Resolve destination city
+                resolved_city = dest_city
+                if not resolved_city:
+                    for o in orders_data:
+                        c_name = o.get("customerName", "").lower()
+                        if "mufakose" in c_name or "harare" in c_name:
+                            resolved_city = "Local"
+                            break
+                        for known in ["bindura", "bulawayo", "mutare", "gweru", "kwekwe", "chinhoyi", "masvingo", "marondera", "rusape"]:
+                            if known in c_name:
+                                resolved_city = known.title()
+                                break
+
+                if not resolved_city:
+                    resolved_city = "Local"
 
                 logger.info(
-                    f"fio.favlogix.com: Trip '{clean_trip}' found with {total_orders} orders, "
-                    f"total amount: ${total_amount:,.2f} (Packaging Lists: {pkg_ids})"
+                    f"fio.favlogix.com: Trip '{actual_trip_id}' found with {total_orders} orders, "
+                    f"total amount: ${total_amount:,.2f}, destination: {resolved_city} (Orders: {order_ids})"
                 )
 
                 return {
-                    "trip_id": clean_trip,
+                    "trip_id": actual_trip_id,
                     "total_amount": round(total_amount, 2),
-                    "destination_city": dest_city or "Bulawayo",
+                    "destination_city": resolved_city,
                     "route": "",
                     "status": "CALCULATED",
                     "order_count": total_orders,
-                    "orders": pkg_ids
+                    "orders": order_ids
                 }
 
         # ----------------------------------------------------
@@ -374,26 +413,28 @@ class FavlogixAPIService:
         await self._ensure_valid_token()
 
         if self.is_fio:
-            trip_totals_url = f"{self.base_url}/tenant/inventory/packaging-list/trip-totals"
+            sales_trip_url = f"{self.base_url}/tenant/sales/trip"
             headers = {"Accept": "application/json"}
             if self.auth_token and not self.auth_token.startswith("cookie-"):
                 headers["Authorization"] = f"Bearer {self.auth_token}"
 
             async with httpx.AsyncClient(timeout=15.0, cookies=self.cookies) as client:
-                res = await client.get(trip_totals_url, headers=headers)
+                res = await client.get(sales_trip_url, headers=headers)
+                if res.status_code == 401:
+                    await self._login()
+                    res = await client.get(sales_trip_url, headers=headers, cookies=self.cookies)
                 if res.status_code != 200:
                     return []
-                items = res.json()
-                if not isinstance(items, list):
-                    items = items.get("data", []) if isinstance(items, dict) else []
+                s_json = res.json()
+                items = s_json.get("data", []) if isinstance(s_json, dict) else s_json
 
                 return [
                     {
                         "trip_id": it.get("tripId"),
-                        "order_count": it.get("orderCount", 1),
+                        "order_count": int(it.get("orderCount") or 1),
                         "total_amount": float(it.get("totalAmount") or 0.0),
-                        "packaging_list_id": it.get("packagingListId"),
-                        "status": it.get("status")
+                        "currency": it.get("currencyCode", "USD"),
+                        "status": "Open" if it.get("isOpen") else "Closed"
                     }
                     for it in items[:limit]
                 ]
