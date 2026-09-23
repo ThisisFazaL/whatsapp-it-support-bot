@@ -217,6 +217,15 @@ class FleetPendingLedger(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class IncomingWebhookLog(Base):
+    __tablename__ = "incoming_webhook_logs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sender_phone = Column(String(50), nullable=True, index=True)
+    message_type = Column(String(50), nullable=True)
+    message_text = Column(Text, nullable=True)
+    raw_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 class Product(Base):
     __tablename__ = "products"
     product_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -354,6 +363,18 @@ async def init_db_models():
                 """))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_anl_phone ON admin_notification_logs(admin_phone)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_anl_ticket ON admin_notification_logs(ticket_number)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS incoming_webhook_logs (
+                        id SERIAL PRIMARY KEY,
+                        sender_phone VARCHAR(50),
+                        message_type VARCHAR(50),
+                        message_text TEXT,
+                        raw_payload JSONB,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_iwl_phone ON incoming_webhook_logs(sender_phone)"))
 
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS products (

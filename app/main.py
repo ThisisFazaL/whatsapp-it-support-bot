@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.database import get_db, init_db_models, Ticket, async_session_factory
+from app.database import get_db, init_db_models, Ticket, async_session_factory, IncomingWebhookLog
 from app.state_manager import is_employee_registered, is_admin, get_user_state
 from app.handlers.admin_handler import handle_admin_command
 from app.handlers.resolution_handler import handle_resolution_confirmation
@@ -967,16 +967,76 @@ async def process_webhook_payload(body: dict):
         except Exception as e:
             logger.error(f"Error processing webhook payload: {e}", exc_info=True)
 
+async def _log_incoming_webhook(body: dict):
+    try:
+        entry = body.get("entry", [])
+        if not entry:
+            return
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return
+        value = changes[0].get("value", {})
+        messages = value.get("messages", [])
+        statuses = value.get("statuses", [])
+        sender = None
+        m_type = "status_update" if statuses else "unknown"
+        m_text = None
+        if messages:
+            m = messages[0]
+            sender = m.get("from")
+            m_type = m.get("type", "unknown")
+            if m_type == "text":
+                m_text = m.get("text", {}).get("body", "")
+            elif m_type == "interactive":
+                btn = m.get("interactive", {}).get("button_reply", {})
+                m_text = f"btn: {btn.get('id')} ({btn.get('title')})"
+            else:
+                m_text = f"[{m_type}]"
+        elif statuses:
+            s = statuses[0]
+            sender = s.get("recipient_id")
+            m_text = f"Status: {s.get('status')} (id: {s.get('id')})"
+
+        async with async_session_factory() as session:
+            log_entry = IncomingWebhookLog(
+                sender_phone=sender,
+                message_type=m_type,
+                message_text=m_text,
+                raw_payload=body
+            )
+            session.add(log_entry)
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"Note on webhook logging: {e}")
+
 @app.post("/webhook/meta-whatsapp")
 async def handle_incoming_webhook(request: Request):
     """Meta WhatsApp Cloud API Webhook Handler - Responds HTTP 200 immediately & processes in background."""
     try:
         body = await request.json()
+        asyncio.create_task(_log_incoming_webhook(body))
         asyncio.create_task(process_webhook_payload(body))
         return {"status": "accepted"}
     except Exception as e:
         logger.error(f"Error receiving webhook payload: {e}")
         return {"status": "error"}
+
+@app.get("/api/debug/webhooks")
+async def get_recent_webhooks(limit: int = 20, db: AsyncSession = Depends(get_db)):
+    """API Endpoint to inspect recent incoming webhooks for real-time diagnostics."""
+    stmt = select(IncomingWebhookLog).order_by(IncomingWebhookLog.id.desc()).limit(limit)
+    res = await db.execute(stmt)
+    logs = res.scalars().all()
+    return [
+        {
+            "id": l.id,
+            "sender_phone": l.sender_phone,
+            "message_type": l.message_type,
+            "message_text": l.message_text,
+            "created_at": l.created_at.isoformat() if l.created_at else None
+        }
+        for l in logs
+    ]
 
 @app.get("/tickets")
 async def list_recent_tickets(db: AsyncSession = Depends(get_db)):
