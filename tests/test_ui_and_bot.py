@@ -1,5 +1,7 @@
 import asyncio
 import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import pytest
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -67,50 +69,60 @@ async def test_dashboard_and_auth():
         assert "master_kpis" in data
         print("✅ API partitioned data returned successfully")
 
-        # 4. Test Webhook Reaction filter (Silent return)
-        reaction_payload = {
-            "entry": [{
-                "changes": [{
-                    "value": {
-                        "messages": [{
-                            "from": "919265368695",
-                            "type": "reaction",
-                            "reaction": {"emoji": "👍"}
-                        }]
-                    }
-                }]
-            }]
-        }
-        webhook_res = await client.post("/webhook/meta-whatsapp", json=reaction_payload)
-        assert webhook_res.status_code == 200
-        assert webhook_res.json().get("status") == "accepted"
-        
-        # Test background processor on reaction
-        from app.main import process_webhook_payload
-        await process_webhook_payload(reaction_payload)
-        print("✅ Webhook reaction silently ignored without spamming user")
+        # 4. Test Webhook Reaction filter (Silent return & Mocked Meta API)
+        from unittest.mock import patch, AsyncMock
+        with patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock) as mock_send_text, \
+             patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock) as mock_send_btn, \
+             patch("app.meta_api.meta_api.send_image_message", new_callable=AsyncMock) as mock_send_img:
 
-        # 5. Test Webhook Passive chatter filter
-        passive_payload = {
-            "entry": [{
-                "changes": [{
-                    "value": {
-                        "messages": [{
-                            "from": "919265368695",
-                            "type": "text",
-                            "text": {"body": "ok"}
-                        }]
-                    }
+            reaction_payload = {
+                "entry": [{
+                    "changes": [{
+                        "value": {
+                            "messages": [{
+                                "from": "910000000000",
+                                "type": "reaction",
+                                "reaction": {"emoji": "👍"}
+                            }]
+                        }
+                    }]
                 }]
-            }]
-        }
-        passive_res = await client.post("/webhook/meta-whatsapp", json=passive_payload)
-        assert passive_res.status_code == 200
-        assert passive_res.json().get("status") == "accepted"
-        
-        # Test background processor on passive chatter
-        await process_webhook_payload(passive_payload)
-        print("✅ Webhook passive chatter (ok) silently acknowledged without spamming user")
+            }
+            from app.main import process_webhook_payload
+            await process_webhook_payload(reaction_payload)
+            assert mock_send_text.call_count == 0
+            assert mock_send_btn.call_count == 0
+            print("✅ Webhook reaction silently ignored without spamming user")
+
+            # 5. Test Webhook Passive chatter filter
+            passive_payload = {
+                "entry": [{
+                    "changes": [{
+                        "value": {
+                            "messages": [{
+                                "from": "910000000000",
+                                "type": "text",
+                                "text": {"body": "ok"}
+                            }]
+                        }
+                    }]
+                }]
+            }
+            await process_webhook_payload(passive_payload)
+            assert mock_send_text.call_count == 0
+            assert mock_send_btn.call_count == 0
+            print("✅ Webhook passive chatter (ok) silently acknowledged without spamming user")
+
+            # 6. Test Admin Command Fallback Safety
+            from app.database import async_session_factory
+            from app.handlers.admin_handler import handle_admin_command
+            async with async_session_factory() as session:
+                is_handled = await handle_admin_command(session, "919265368695", "ok")
+                assert is_handled is False, f"Expected handle_admin_command to return False for 'ok', got {is_handled}"
+                assert mock_send_text.call_count == 0
+                assert mock_send_btn.call_count == 0
+                print("✅ Admin handler safely ignored non-command 'ok' without triggering greeting or ticket dump")
 
 if __name__ == "__main__":
     asyncio.run(test_dashboard_and_auth())
+

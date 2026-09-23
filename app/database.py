@@ -279,12 +279,12 @@ class AdminNotificationLog(Base):
 engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
-    "pool_recycle": 180,
+    "pool_recycle": 1800,
 }
 if "postgresql" in settings.database_url:
-    engine_kwargs["pool_size"] = 3
-    engine_kwargs["max_overflow"] = 2
-    engine_kwargs["pool_timeout"] = 20
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 10
+    engine_kwargs["pool_timeout"] = 30
     engine_kwargs["connect_args"] = {
         "ssl": "require",
         "statement_cache_size": 0,

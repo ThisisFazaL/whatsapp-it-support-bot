@@ -266,6 +266,14 @@ async def keep_alive_ping_loop():
             UPTIME_STATS["failed_self_pings"] += 1
             logger.debug(f"Keep-alive self-ping error: {e}")
         
+        # Warm-up DB connection pool so users never experience a cold DB handshake delay
+        try:
+            from sqlalchemy import text
+            async with async_session_factory() as db_session:
+                await db_session.execute(text("SELECT 1"))
+        except Exception as dbe:
+            logger.debug(f"DB keepalive ping note: {dbe}")
+
         # Periodic garbage collection to maintain minimal memory footprint (<60MB)
         import gc
         gc.collect()
@@ -764,9 +772,28 @@ async def process_webhook_payload(body: dict):
                     await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
                 return
 
+            clean_txt = (message_text or "").strip().lower()
+            clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
+            from app.state_manager import is_employee_registered, is_admin, get_user_state, clear_user_state
+            state = await get_user_state(db, sender_phone)
+
+            # Passive chatter / acknowledgment check:
+            # Prevents constant spam replies when users say "ok", "thanks", "👍", etc. without initiating a flow
+            PASSIVE_CHATTER = {
+                "ok", "okay", "k", "kk", "thanks", "thank you", "thx", "noted", "cool",
+                "alright", "good", "great", "nice", "bye", "good night", "goodnight",
+                "see you", "👍", "🙏", "👌", "done", "got it", "understood", "sure", "fine",
+                "no problem", "welcome", "youre welcome", "you're welcome", "np"
+            }
+            if clean_kw in PASSIVE_CHATTER or clean_txt in PASSIVE_CHATTER:
+                # If user is in an active data-entry step that expects freeform notes or trip ID, fall through
+                freeform_steps = {"awaiting_description", "awaiting_note", "awaiting_resolution_note", "awaiting_admin_resolution_note", "awaiting_trip_id", "awaiting_recovery_trip_id"}
+                if not state or not state.current_step or state.current_step not in freeform_steps:
+                    logger.info(f"Silently acknowledged passive chatter '{message_text}' from {sender_phone} without unsolicited reply.")
+                    return
+
             # Step 0: Identify user roles across Workshop, IT Support, Admins, and Observers
             from app.workshop.router import get_workshop_staff, handle_workshop_message
-            from app.state_manager import is_employee_registered, is_admin, get_user_state, clear_user_state
             
             workshop_user = await get_workshop_staff(db, sender_phone)
             admin = await is_admin(db, sender_phone)
@@ -788,25 +815,6 @@ async def process_webhook_payload(body: dict):
                 )
                 await meta_api.send_text_message(sender_phone, warning_msg)
                 return
-
-            clean_txt = (message_text or "").strip().lower()
-            clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
-            state = await get_user_state(db, sender_phone)
-
-            # Passive chatter / acknowledgment check:
-            # Prevents constant spam replies when users say "ok", "thanks", "👍", etc. without initiating a flow
-            PASSIVE_CHATTER = {
-                "ok", "okay", "k", "kk", "thanks", "thank you", "thx", "noted", "cool",
-                "alright", "good", "great", "nice", "bye", "good night", "goodnight",
-                "see you", "👍", "🙏", "👌", "done", "got it", "understood", "sure", "fine",
-                "no problem", "welcome", "youre welcome", "you're welcome", "np"
-            }
-            if clean_kw in PASSIVE_CHATTER or clean_txt in PASSIVE_CHATTER:
-                # If user is in an active data-entry step that expects freeform notes or trip ID, fall through
-                freeform_steps = {"awaiting_description", "awaiting_note", "awaiting_resolution_note", "awaiting_admin_resolution_note", "awaiting_trip_id", "awaiting_recovery_trip_id"}
-                if not state or not state.current_step or state.current_step not in freeform_steps:
-                    logger.info(f"Silently acknowledged passive chatter '{message_text}' from {sender_phone} without unsolicited reply.")
-                    return
 
             # Step 0.5: Master Admin Role Switch & Salesperson Handler
             from app.handlers.fleet_approval_handler import (

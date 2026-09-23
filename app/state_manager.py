@@ -6,6 +6,12 @@ from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import ConversationState, Employee, SupportAdmin
 
+import time
+
+_EMPLOYEE_CACHE: Dict[str, tuple[float, Optional[Employee]]] = {}
+_ADMIN_CACHE: Dict[str, tuple[float, Optional[SupportAdmin]]] = {}
+CACHE_TTL_SECONDS = 300.0  # 5 minutes
+
 def clean_phone_number(phone: str) -> str:
     """Removes all non-digit characters (+, spaces, hyphens) from phone string."""
     if not phone:
@@ -15,35 +21,61 @@ def clean_phone_number(phone: str) -> str:
 
 async def is_employee_registered(session: AsyncSession, phone: str) -> Optional[Employee]:
     """Returns Employee if clean phone digits match and active == True with relationships eagerly loaded."""
-    from sqlalchemy.orm import selectinload
+    if not phone:
+        return None
     clean_phone = clean_phone_number(phone)
-    # Match exact or last 10 digits fallback
+    now = time.time()
+
+    # Check fast in-memory cache
+    if clean_phone in _EMPLOYEE_CACHE:
+        cached_time, cached_emp = _EMPLOYEE_CACHE[clean_phone]
+        if now - cached_time < CACHE_TTL_SECONDS:
+            return cached_emp
+
+    from sqlalchemy.orm import selectinload
+    last_9 = clean_phone[-9:] if len(clean_phone) >= 9 else clean_phone
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.location))
-        .where(Employee.active == True)
+        .where(
+            (Employee.phone == phone) |
+            (Employee.phone == clean_phone) |
+            (Employee.phone.endswith(last_9)),
+            Employee.active == True
+        )
+        .limit(1)
     )
     res = await session.execute(stmt)
-    employees = res.scalars().all()
-    
-    for emp in employees:
-        emp_clean = clean_phone_number(emp.phone)
-        if emp_clean == clean_phone or (len(clean_phone) >= 10 and clean_phone[-10:] == emp_clean[-10:]):
-            return emp
-    return None
+    emp = res.scalars().first()
+
+    _EMPLOYEE_CACHE[clean_phone] = (now, emp)
+    return emp
 
 async def is_admin(session: AsyncSession, phone: str) -> Optional[SupportAdmin]:
     """Returns SupportAdmin if clean phone digits match and active == True."""
+    if not phone:
+        return None
     clean_phone = clean_phone_number(phone)
-    stmt = select(SupportAdmin).where(SupportAdmin.active == True)
-    res = await session.execute(stmt)
-    admins = res.scalars().all()
+    now = time.time()
 
-    for admin in admins:
-        admin_clean = clean_phone_number(admin.phone)
-        if admin_clean == clean_phone or (len(clean_phone) >= 10 and clean_phone[-10:] == admin_clean[-10:]):
-            return admin
-    return None
+    # Check fast in-memory cache
+    if clean_phone in _ADMIN_CACHE:
+        cached_time, cached_adm = _ADMIN_CACHE[clean_phone]
+        if now - cached_time < CACHE_TTL_SECONDS:
+            return cached_adm
+
+    last_9 = clean_phone[-9:] if len(clean_phone) >= 9 else clean_phone
+    stmt = select(SupportAdmin).where(
+        (SupportAdmin.phone == phone) |
+        (SupportAdmin.phone == clean_phone) |
+        (SupportAdmin.phone.endswith(last_9)),
+        SupportAdmin.active == True
+    ).limit(1)
+    res = await session.execute(stmt)
+    admin = res.scalars().first()
+
+    _ADMIN_CACHE[clean_phone] = (now, admin)
+    return admin
 
 async def get_user_state(session: AsyncSession, phone: str) -> Optional[ConversationState]:
     """Retrieves current conversation state for a phone number."""

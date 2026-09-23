@@ -16,34 +16,47 @@ class MetaWhatsAppAPI:
         self.version = settings.meta_graph_version
         self.base_url = f"https://graph.facebook.com/{self.version}/{self.phone_number_id}/messages"
         self.media_url = f"https://graph.facebook.com/{self.version}/{self.phone_number_id}/media"
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def get_client(self) -> httpx.AsyncClient:
+        """Returns reusable persistent httpx client with connection pooling and keep-alive."""
+        if self._client is None or self._client.is_closed:
+            limits = httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=60.0)
+            self._client = httpx.AsyncClient(timeout=15.0, limits=limits)
+        return self._client
+
+    async def close(self):
+        """Closes the underlying HTTP client connection pool cleanly."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
     async def _post_with_retry(self, payload: dict, max_retries: int = 3) -> dict:
-        """Helper method to execute HTTP POST to Meta Graph API with automatic retries."""
+        """Helper method to execute HTTP POST to Meta Graph API with automatic retries and connection reuse."""
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
+        client = self.get_client()
         
         for attempt in range(1, max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    response = await client.post(self.base_url, headers=headers, json=payload)
-                    response_json = response.json()
-                    if response.status_code == 200:
-                        logger.info(f"Meta Graph API Success (Attempt {attempt}): {response_json}")
+                response = await client.post(self.base_url, headers=headers, json=payload)
+                response_json = response.json()
+                if response.status_code == 200:
+                    logger.info(f"Meta Graph API Success (Attempt {attempt}): {response_json}")
+                    return response_json
+                else:
+                    logger.warning(f"Meta Graph API Warning ({response.status_code}) Attempt {attempt}/{max_retries}: {response_json}")
+                    # Check if error is 24-hour window restriction (code 131047 / 131042 / 131026)
+                    err_code = response_json.get("error", {}).get("code")
+                    if err_code in {131047, 131042, 131026}:
+                        logger.info(f"[24H WINDOW EXPIRED] Meta Error {err_code}. Returning response for template fallback.")
                         return response_json
+                        
+                    if attempt < max_retries:
+                        await asyncio.sleep(0.5 * attempt)
                     else:
-                        logger.warning(f"Meta Graph API Warning ({response.status_code}) Attempt {attempt}/{max_retries}: {response_json}")
-                        # Check if error is 24-hour window restriction (code 131047 / 131042 / 131026)
-                        err_code = response_json.get("error", {}).get("code")
-                        if err_code in {131047, 131042, 131026}:
-                            logger.info(f"[24H WINDOW EXPIRED] Meta Error {err_code}. Returning response for template fallback.")
-                            return response_json
-                            
-                        if attempt < max_retries:
-                            await asyncio.sleep(0.5 * attempt)
-                        else:
-                            return response_json
+                        return response_json
             except Exception as e:
                 logger.error(f"Meta API Request Exception (Attempt {attempt}/{max_retries}): {e}")
                 if attempt < max_retries:

@@ -12,20 +12,33 @@ from app.workshop.supervisor_handler import handle_supervisor_action
 from app.workshop.purchasing_handler import handle_purchasing_action
 from app.workshop.mechanic_handler import handle_mechanic_action
 
+import time
+
+_WORKSHOP_CACHE: dict = {}
+CACHE_TTL_SECONDS = 300.0
+
 async def get_workshop_staff(session: AsyncSession, phone: str) -> WorkshopStaff:
-    """Checks if the phone number belongs to registered workshop staff with flexible 9-digit suffix matching."""
+    """Checks if the phone number belongs to registered workshop staff with flexible 9-digit suffix matching and TTL caching."""
     if not phone:
         return None
     clean_phone = "".join(filter(str.isdigit, str(phone)))
+    now = time.time()
+
+    if clean_phone in _WORKSHOP_CACHE:
+        cached_time, cached_staff = _WORKSHOP_CACHE[clean_phone]
+        if now - cached_time < CACHE_TTL_SECONDS:
+            return cached_staff
+
     last_9 = clean_phone[-9:] if len(clean_phone) >= 9 else clean_phone
-    
     stmt = select(WorkshopStaff).where(
         (WorkshopStaff.phone == phone) |
         (WorkshopStaff.phone == clean_phone) |
         (WorkshopStaff.phone.endswith(last_9)),
         WorkshopStaff.active == True
-    )
-    return (await session.execute(stmt)).scalars().first()
+    ).limit(1)
+    res = (await session.execute(stmt)).scalars().first()
+    _WORKSHOP_CACHE[clean_phone] = (now, res)
+    return res
 
 async def handle_workshop_message(session: AsyncSession, staff: WorkshopStaff, message_text: str, image_id: str = None):
     """Main routing entrypoint for all workshop roles."""

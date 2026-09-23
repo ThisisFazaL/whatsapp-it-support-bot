@@ -543,11 +543,12 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     is_raise_cmd = text_lower in {"cmd_raise_ticket", "raise ticket", "raise it ticket", "create ticket", "new ticket"} or text_strip.startswith("cmd_raise_ticket")
     is_start_shift = text_lower in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day"} or text_strip.startswith("cmd_start_shift")
     raw_clean = re.sub(r"[^\w\s]", "", text_lower).strip()
+    first_word = raw_clean.split()[0] if raw_clean else ""
     is_greeting = not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd and not claim_match and not resolve_match and not unassign_match and (
         is_start_shift or
         raw_clean in {"hi", "hello", "menu", "admin", "start", "help", "hey"} or
         text_lower in {"hi", "hello", "menu", "admin", "start", "help", "hey", "/start", "/menu", "/admin", "/help"} or
-        any(raw_clean.startswith(w) for w in ("hi", "hello", "hey", "menu", "admin", "start"))
+        first_word in {"hi", "hello", "hey", "menu", "admin", "start"}
     )
 
     state = await get_user_state(session, sender_phone)
@@ -577,8 +578,8 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd:
         if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
             return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
-        # If admin is NOT in active draft or resolution flow, treating any general message as Admin Dashboard Greeting!
-        is_greeting = True
+        # If not an admin command or greeting, return False so main handler handles normally
+        return False
 
     # Executive Observer check
     if sender_phone in settings.executive_observer_phones and sender_phone != settings.master_admin_phone:
@@ -593,8 +594,9 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
     if is_greeting:
         await clear_user_state(session, sender_phone)
 
-        # Check and deliver any missed tickets from offline periods (strictly ONCE per ticket, never repeated)
-        await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
+        # Check and deliver any missed tickets from offline periods ONLY on explicit start shift
+        if is_start_shift:
+            await deliver_pending_unclaimed_tickets_to_admin(session, admin, sender_phone)
 
         if is_start_shift:
             header = "🟢 SHIFT ACTIVE (24H OPEN)"
