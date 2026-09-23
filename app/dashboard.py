@@ -59,44 +59,64 @@ async def login_page(request: Request):
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Tagoneswa Operations Portal — Secure Login</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                    }
+                }
+            }
+        };
+        if (localStorage.getItem('tagoneswa_theme') === 'dark' || (!('tagoneswa_theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Plus Jakarta Sans', sans-serif; }
     </style>
 </head>
-<body class="bg-slate-100 text-slate-800 min-h-screen flex items-center justify-center p-3 sm:p-6">
-    <div class="bg-white border border-slate-200 rounded-3xl shadow-xl w-full max-w-md p-6 sm:p-10">
+<body class="bg-slate-50 dark:bg-[#070b14] text-slate-800 dark:text-slate-100 min-h-screen flex items-center justify-center p-3 sm:p-6 transition-colors duration-200">
+    <div class="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-xl w-full max-w-md p-6 sm:p-10 transition-colors duration-200">
         <div class="text-center mb-6 sm:mb-8">
-            <div class="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 px-3.5 py-1.5 rounded-full text-xs font-bold mb-3 sm:mb-4">
+            <div class="w-12 h-12 bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-500 rounded-2xl flex items-center justify-center text-white text-2xl font-bold shadow-md shadow-blue-500/20 mx-auto mb-3.5 border border-blue-400/30">
+                🚚
+            </div>
+            <div class="inline-flex items-center gap-2 bg-blue-50 dark:bg-blue-950/80 border border-blue-200 dark:border-blue-800/60 text-blue-700 dark:text-blue-300 px-3.5 py-1 rounded-full text-xs font-bold mb-3 sm:mb-4">
                 🔒 Enterprise Security
             </div>
-            <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">Tagoneswa Portal</h1>
-            <p class="text-slate-500 text-xs sm:text-sm mt-1">IT Support • Building Projects • Fleet Workshop</p>
+            <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">Tagoneswa Portal</h1>
+            <p class="text-slate-500 dark:text-slate-400 text-xs sm:text-sm mt-1">Fleet Approval • IT Support • Projects • Workshop</p>
         </div>
 
-        <div id="errorBox" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-xs sm:text-sm mb-5 font-medium"></div>
+        <div id="errorBox" class="hidden bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded-xl text-xs sm:text-sm mb-5 font-medium"></div>
 
         <form id="loginForm" class="space-y-4 sm:space-y-5">
             <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 sm:mb-2" for="username">Username</label>
-                <input class="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition" type="text" id="username" name="username" placeholder="e.g. admin, logistics, itsupport, projects" required autofocus autocomplete="username">
+                <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 sm:mb-2" for="username">Username</label>
+                <input class="w-full bg-slate-50 dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white dark:focus:bg-[#15203b] transition" type="text" id="username" name="username" placeholder="e.g. admin, logistics, itsupport, projects" required autofocus autocomplete="username">
             </div>
 
             <div>
-                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 sm:mb-2" for="password">Password</label>
+                <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 sm:mb-2" for="password">Password</label>
                 <div class="relative">
-                    <input class="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-slate-900 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition" type="password" id="password" name="password" placeholder="••••••••••••" required autocomplete="current-password">
-                    <button type="button" class="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 hover:text-slate-600 px-2 py-1" onclick="togglePassword()">Show</button>
+                    <input class="w-full bg-slate-50 dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-3 text-slate-900 dark:text-white text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white dark:focus:bg-[#15203b] transition" type="password" id="password" name="password" placeholder="••••••••••••" required autocomplete="current-password">
+                    <button type="button" class="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 px-2 py-1" onclick="togglePassword()">Show</button>
                 </div>
             </div>
 
-            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold py-3.5 rounded-xl shadow-md transition duration-150 text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer" id="loginBtn">
+            <button type="submit" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.99] text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-500/25 transition duration-150 text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer" id="loginBtn">
                 Sign In to Dashboard →
             </button>
         </form>
 
-        <div class="mt-6 sm:mt-8 text-center text-[11px] sm:text-xs text-slate-400 border-t border-slate-100 pt-5 sm:pt-6">
+        <div class="mt-6 sm:mt-8 text-center text-[11px] sm:text-xs text-slate-400 dark:text-slate-500 border-t border-slate-100 dark:border-slate-800/80 pt-5 sm:pt-6">
             Tagoneswa Holdings • Internal Management System
         </div>
     </div>
@@ -738,13 +758,13 @@ async def dashboard_view(request: Request):
     # Generate navigation tab buttons based on allowed domains
     tabs_html = []
     if "fleet" in allowed:
-        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Fleet Approval</button>')
+        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Fleet Approval</button>')
     if "it" in allowed:
-        tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>💻</span> IT Support</button>')
+        tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>💻</span> IT Support</button>')
     if "projects" in allowed:
-        tabs_html.append('<button id="btn-tab-projects" onclick="switchDomain(\'projects\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🏗️</span> Building Projects</button>')
+        tabs_html.append('<button id="btn-tab-projects" onclick="switchDomain(\'projects\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🏗️</span> Building Projects</button>')
     if "logistics" in allowed:
-        tabs_html.append('<button id="btn-tab-logistics" onclick="switchDomain(\'logistics\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🔧</span> Workshop Fleet</button>')
+        tabs_html.append('<button id="btn-tab-logistics" onclick="switchDomain(\'logistics\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🔧</span> Workshop Fleet</button>')
 
     nav_tabs_markup = "\n".join(tabs_html)
     allowed_domains_json = str(allowed).replace("'", '"')
@@ -756,15 +776,38 @@ async def dashboard_view(request: Request):
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Tagoneswa Operations Console</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {{
+            darkMode: 'class',
+            theme: {{
+                extend: {{
+                    fontFamily: {{
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }}
+                }}
+            }}
+        }};
+        if (localStorage.getItem('tagoneswa_theme') === 'dark' || (!('tagoneswa_theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
+            document.documentElement.classList.add('dark');
+        }} else {{
+            document.documentElement.classList.remove('dark');
+        }}
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <style>
         body {{ font-family: 'Plus Jakarta Sans', sans-serif; }}
         .font-mono {{ font-family: 'JetBrains Mono', monospace; }}
         .tab-btn.active {{
-            background-color: #2563eb;
-            color: #ffffff;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff !important;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+        }}
+        html.dark .tab-btn.active {{
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: #ffffff !important;
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
         }}
         .domain-view {{ display: none; }}
         .domain-view.active {{ display: block; }}
@@ -779,58 +822,73 @@ async def dashboard_view(request: Request):
         }}
     </style>
 </head>
-<body class="bg-slate-50 text-slate-800 min-h-screen pb-12">
+<body class="bg-slate-50 dark:bg-[#070b14] text-slate-800 dark:text-slate-100 min-h-screen pb-16 transition-colors duration-200">
     <!-- Toast Notification -->
-    <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 text-xs font-semibold flex items-center gap-2">
+    <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 dark:bg-slate-800 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 text-xs font-semibold flex items-center gap-2">
         <span id="toastIcon">✅</span>
         <span id="toastMsg">Live data updated</span>
     </div>
 
     <!-- Top Sticky Header -->
-    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+    <header class="bg-white/95 dark:bg-[#0b1120]/95 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 sticky top-0 z-30 transition-colors duration-200 shadow-xs">
         <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 sm:py-3.5">
             <div class="flex flex-col md:flex-row items-center justify-between gap-3">
                 <!-- Top Row: Brand & Mobile Actions -->
                 <div class="flex items-center justify-between w-full md:w-auto gap-3">
                     <div class="flex items-center gap-2.5">
-                        <div class="w-9 h-9 sm:w-10 sm:h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white text-lg sm:text-xl font-bold shadow-md shadow-blue-500/20 shrink-0">
+                        <div class="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-500 rounded-xl flex items-center justify-center text-white text-lg sm:text-xl font-bold shadow-md shadow-blue-500/20 shrink-0 border border-blue-400/30">
                             🚚
                         </div>
                         <div>
-                            <h1 class="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-none">Tagoneswa</h1>
-                            <p class="text-[10px] sm:text-xs text-slate-500 font-medium mt-0.5">Operations Portal</p>
+                            <div class="flex items-center gap-1.5">
+                                <h1 class="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white tracking-tight leading-none">Tagoneswa</h1>
+                                <span class="bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 text-[9px] font-extrabold px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800/60 uppercase tracking-wider">Enterprise</span>
+                            </div>
+                            <p class="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">Operations & Fleet Portal</p>
                         </div>
                     </div>
 
-                    <!-- Right Controls for Mobile -->
-                    <div class="flex items-center gap-2 md:hidden">
-                        <button onclick="manualRefresh()" id="mobileRefreshBtn" class="bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 p-2 rounded-xl text-xs font-bold transition flex items-center gap-1 border border-slate-200" title="Refresh Live Data">
+                    <!-- Right Controls for Mobile Screen -->
+                    <div class="flex items-center gap-1.5 md:hidden">
+                        <!-- Theme Toggle (Mobile) -->
+                        <button onclick="toggleTheme()" class="theme-toggle-btn bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 p-2 rounded-xl text-xs font-bold transition flex items-center border border-slate-200 dark:border-slate-700 cursor-pointer shadow-xs" title="Toggle Theme">
+                            <span class="theme-toggle-icon">🌙</span>
+                        </button>
+                        <button onclick="manualRefresh()" id="mobileRefreshBtn" class="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 p-2 rounded-xl text-xs font-bold transition flex items-center border border-slate-200 dark:border-slate-700 cursor-pointer shadow-xs" title="Refresh Live Data">
                             <span id="mobileRefreshIcon" class="inline-block">🔄</span>
                         </button>
-                        <button onclick="handleLogout()" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer">
+                        <button onclick="handleLogout()" class="bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60 text-xs font-bold px-2.5 py-1.5 rounded-xl transition cursor-pointer">
                             Log Out
                         </button>
                     </div>
                 </div>
 
                 <!-- Domain Switcher (Filtered by User Permissions) -->
-                <nav class="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 w-full md:w-auto overflow-x-auto justify-start sm:justify-center no-scrollbar">
+                <nav class="flex bg-slate-100 dark:bg-[#11192e] p-1 rounded-xl border border-slate-200 dark:border-slate-800 gap-1 w-full md:w-auto overflow-x-auto justify-start sm:justify-center no-scrollbar scroll-smooth">
                     {nav_tabs_markup}
                 </nav>
 
-                <!-- User Pill, Desktop Refresh & Logout -->
-                <div class="hidden md:flex items-center gap-3">
-                    <button onclick="manualRefresh()" id="desktopRefreshBtn" class="bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-700 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-200 cursor-pointer shadow-xs" title="Refresh Live Data">
+                <!-- User Pill, Theme Toggle, Desktop Refresh & Logout -->
+                <div class="hidden md:flex items-center gap-2.5">
+                    <!-- Theme Toggle Switch (Desktop) -->
+                    <button onclick="toggleTheme()" class="theme-toggle-btn bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 cursor-pointer shadow-xs" title="Toggle Dark / Light Theme">
+                        <span class="theme-toggle-icon">🌙</span>
+                        <span class="theme-toggle-label font-semibold">Dark</span>
+                    </button>
+
+                    <button onclick="manualRefresh()" id="desktopRefreshBtn" class="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-200 dark:border-slate-700 cursor-pointer shadow-xs" title="Refresh Live Data">
                         <span id="desktopRefreshIcon" class="inline-block">🔄</span>
                         <span>Refresh</span>
                     </button>
-                    <div class="text-right">
-                        <div class="text-xs font-bold text-slate-900" id="userDisplayName">{user["name"]}</div>
-                        <div class="text-[10px] font-semibold text-emerald-600 flex items-center justify-end gap-1" id="userRoleBadge">
+
+                    <div class="text-right pl-2 border-l border-slate-200 dark:border-slate-800">
+                        <div class="text-xs font-bold text-slate-900 dark:text-white leading-tight" id="userDisplayName">{user["name"]}</div>
+                        <div class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center justify-end gap-1 mt-0.5" id="userRoleBadge">
                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> {user["role"].replace("_", " ")}
                         </div>
                     </div>
-                    <button onclick="handleLogout()" class="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer">
+
+                    <button onclick="handleLogout()" class="bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60 text-xs font-bold px-3.5 py-2 rounded-xl transition cursor-pointer">
                         Log Out
                     </button>
                 </div>
@@ -841,88 +899,48 @@ async def dashboard_view(request: Request):
     <!-- Main Content Container -->
     <main class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8 space-y-6 sm:space-y-8">
 
-        <!-- Executive Master Cross-Task KPI Banner -->
-        <div id="master-kpi-banner" class="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white rounded-3xl p-5 sm:p-7 shadow-lg border border-slate-800">
-            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-5">
-                <div>
-                    <div class="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 border border-blue-400/30 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase mb-1.5">
-                        ⚡ Tagoneswa Master Operations Console
-                    </div>
-                    <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Task & Fleet Command Center</h2>
-                </div>
-                <div class="flex items-center gap-3 text-xs text-slate-300">
-                    <span class="flex items-center gap-1.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-xl font-bold">
-                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live System Sync
-                    </span>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
-                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Active Tasks</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-400 mt-1" id="master-active-ops">0</div>
-                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Across all departments</div>
-                </div>
-                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
-                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Clearance Rate</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1" id="master-res-rate">100%</div>
-                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Completed vs logged</div>
-                </div>
-                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
-                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transport Billed</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1" id="master-transport-revenue">$0.00</div>
-                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Shortfall recovery charges</div>
-                </div>
-                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
-                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Salesperson Debt Backlog</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1" id="master-financial-backlog">$0.00</div>
-                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Pending shortfall recovery</div>
-                </div>
-            </div>
-        </div>
-
         <!-- ========================================================= -->
         <!-- TAB 1: IT SUPPORT (Rendered only if permitted) -->
         <!-- ========================================================= -->
         <div id="view-it" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'it' in allowed and default_tab == 'it' else 'none'}">
             <!-- IT Stats -->
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Total IT Tickets</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1.5" id="it-stat-total">0</div>
-                    <div class="text-[11px] sm:text-xs text-blue-600 font-semibold mt-1">All IT Logs</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Total IT Tickets</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white mt-1.5" id="it-stat-total">0</div>
+                    <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1">All IT Logs</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Open & Active</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 mt-1.5" id="it-stat-active">0</div>
-                    <div class="text-[11px] sm:text-xs text-amber-600 font-semibold mt-1">Action Required</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Open & Active</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1.5" id="it-stat-active">0</div>
+                    <div class="text-[11px] sm:text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1">Action Required</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Resolved / Closed</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 mt-1.5" id="it-stat-resolved">0</div>
-                    <div class="text-[11px] sm:text-xs text-emerald-600 font-semibold mt-1">Completed Solved</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Resolved / Closed</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 mt-1.5" id="it-stat-resolved">0</div>
+                    <div class="text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">Completed Solved</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Avg Resolution</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-purple-600 mt-1.5" id="it-stat-avg-time">--</div>
-                    <div class="text-[11px] sm:text-xs text-purple-600 font-semibold mt-1">SLA Speed Benchmark</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Avg Resolution</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-purple-600 dark:text-purple-400 mt-1.5" id="it-stat-avg-time">--</div>
+                    <div class="text-[11px] sm:text-xs text-purple-600 dark:text-purple-400 font-semibold mt-1">SLA Speed Benchmark</div>
                 </div>
             </div>
 
             <!-- IT Table Section (Main tickets info first) -->
-            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <!-- Controls & Filters -->
-                <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/50">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800/80 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#131d33]/60">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="it-search" placeholder="🔍 Search employee, ticket #, issue..." oninput="filterITTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        <input type="text" id="it-search" placeholder="🔍 Search employee, ticket #, issue..." oninput="filterITTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- Admin Filter -->
-                        <select id="it-admin-filter" onchange="filterITTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="it-admin-filter" onchange="filterITTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Support Admins</option>
                         </select>
 
                         <!-- Status Filter -->
-                        <select id="it-status-filter" onchange="filterITTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="it-status-filter" onchange="filterITTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Statuses</option>
                             <option value="Open">Open</option>
                             <option value="In Progress">In Progress</option>
@@ -933,22 +951,22 @@ async def dashboard_view(request: Request):
 
                     <!-- Dynamic Count Badge -->
                     <div class="flex items-center justify-between sm:justify-end gap-2">
-                        <span id="it-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                        <span id="it-count-badge" class="bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-bold px-3 py-1.5 rounded-full">
                             Showing 0 tickets
                         </span>
                     </div>
                 </div>
 
                 <!-- Swipe hint on mobile -->
-                <div class="block md:hidden text-[11px] text-slate-400 px-4 py-1.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                <div class="block md:hidden text-[11px] text-slate-400 dark:text-slate-500 px-4 py-1.5 bg-slate-50 dark:bg-[#11192e] border-b border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
                     <span>👉 Swipe horizontally for full table</span>
-                    <span class="font-mono text-slate-400">⇄</span>
+                    <span class="font-mono text-slate-400 dark:text-slate-500">⇄</span>
                 </div>
 
                 <!-- Table -->
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs min-w-[760px]">
-                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                        <thead class="bg-slate-100/75 dark:bg-[#11192e] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3.5">Ticket #</th>
                                 <th class="px-4 sm:px-5 py-3.5">Employee</th>
@@ -960,29 +978,29 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5">Solving Time</th>
                             </tr>
                         </thead>
-                        <tbody id="it-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                        <tbody id="it-table-body" class="divide-y divide-slate-200 dark:divide-slate-800 text-slate-700 dark:text-slate-200"></tbody>
                     </table>
                 </div>
             </div>
 
             <!-- IT Admin SLA Cards (Kevin Chikati, Ellias Chigwida, Faisal) -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-1">
-                    <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                    <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
                         <span>👨‍💻</span> IT Support Technicians Performance & SLA
                     </h2>
-                    <span class="text-[11px] font-semibold text-slate-400">Real-Time Resolution Metrics</span>
+                    <span class="text-[11px] font-semibold text-slate-400 dark:text-slate-500">Real-Time Resolution Metrics</span>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4" id="it-admin-cards"></div>
             </div>
 
             <!-- Category & Issue Breakdown Tree -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-1">
-                    <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                    <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
                         <span>🌳</span> Category, Subcategory & Specific Issue Breakdown
                     </h2>
-                    <span class="text-[11px] font-semibold text-slate-400">Hierarchical Fault Occurrences</span>
+                    <span class="text-[11px] font-semibold text-slate-400 dark:text-slate-500">Hierarchical Fault Occurrences</span>
                 </div>
                 <div id="it-category-tree" class="space-y-3"></div>
             </div>
@@ -994,46 +1012,46 @@ async def dashboard_view(request: Request):
         <div id="view-projects" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'projects' in allowed and default_tab == 'projects' else 'none'}">
             <!-- Projects Stats -->
             <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Total Project Tickets</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1.5" id="proj-stat-total">0</div>
-                    <div class="text-[11px] sm:text-xs text-blue-600 font-semibold mt-1">Building & Facilities</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Total Project Tickets</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white mt-1.5" id="proj-stat-total">0</div>
+                    <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1">Building & Facilities</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Active Work Orders</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 mt-1.5" id="proj-stat-active">0</div>
-                    <div class="text-[11px] sm:text-xs text-amber-600 font-semibold mt-1">On-Site in Progress</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Active Work Orders</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1.5" id="proj-stat-active">0</div>
+                    <div class="text-[11px] sm:text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1">On-Site in Progress</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Completed Facilities</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 mt-1.5" id="proj-stat-completed">0</div>
-                    <div class="text-[11px] sm:text-xs text-emerald-600 font-semibold mt-1">Inspected & Closed</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Completed Facilities</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 mt-1.5" id="proj-stat-completed">0</div>
+                    <div class="text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">Inspected & Closed</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Active Branches / Yards</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-purple-600 mt-1.5" id="proj-stat-locations">0</div>
-                    <div class="text-[11px] sm:text-xs text-purple-600 font-semibold mt-1">Locations Serviced</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Active Branches / Yards</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-purple-600 dark:text-purple-400 mt-1.5" id="proj-stat-locations">0</div>
+                    <div class="text-[11px] sm:text-xs text-purple-600 dark:text-purple-400 font-semibold mt-1">Locations Serviced</div>
                 </div>
             </div>
 
             <!-- Projects Table Section -->
-            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-                <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/50">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800/80 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#131d33]/60">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="proj-search" placeholder="🔍 Search site, ticket #, repair..." oninput="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        <input type="text" id="proj-search" placeholder="🔍 Search site, ticket #, repair..." oninput="filterProjectsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- Location Filter -->
-                        <select id="proj-loc-filter" onchange="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="proj-loc-filter" onchange="filterProjectsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Branches & Yards</option>
                         </select>
 
                         <!-- Admin Filter -->
-                        <select id="proj-admin-filter" onchange="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="proj-admin-filter" onchange="filterProjectsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Project Leads</option>
                         </select>
 
                         <!-- Status Filter -->
-                        <select id="proj-status-filter" onchange="filterProjectsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="proj-status-filter" onchange="filterProjectsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Statuses</option>
                             <option value="Open">Open</option>
                             <option value="In Progress">In Progress</option>
@@ -1042,21 +1060,21 @@ async def dashboard_view(request: Request):
                     </div>
 
                     <div class="flex items-center justify-between sm:justify-end gap-2">
-                        <span id="proj-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                        <span id="proj-count-badge" class="bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-bold px-3 py-1.5 rounded-full">
                             Showing 0 tickets
                         </span>
                     </div>
                 </div>
 
                 <!-- Swipe hint on mobile -->
-                <div class="block md:hidden text-[11px] text-slate-400 px-4 py-1.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                <div class="block md:hidden text-[11px] text-slate-400 dark:text-slate-500 px-4 py-1.5 bg-slate-50 dark:bg-[#11192e] border-b border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
                     <span>👉 Swipe horizontally for full table</span>
-                    <span class="font-mono text-slate-400">⇄</span>
+                    <span class="font-mono text-slate-400 dark:text-slate-500">⇄</span>
                 </div>
 
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs min-w-[760px]">
-                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                        <thead class="bg-slate-100/75 dark:bg-[#11192e] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3.5">Ticket #</th>
                                 <th class="px-4 sm:px-5 py-3.5">Reporter</th>
@@ -1067,7 +1085,7 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5">Date Created</th>
                             </tr>
                         </thead>
-                        <tbody id="proj-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                        <tbody id="proj-table-body" class="divide-y divide-slate-200 dark:divide-slate-800 text-slate-700 dark:text-slate-200"></tbody>
                     </table>
                 </div>
             </div>
@@ -1079,46 +1097,46 @@ async def dashboard_view(request: Request):
         <div id="view-logistics" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'logistics' in allowed and default_tab == 'logistics' else 'none'}">
             <!-- Fleet Stats -->
             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Active Fleet</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 mt-1.5" id="ws-stat-fleet">39</div>
-                    <div class="text-[11px] sm:text-xs text-blue-600 font-semibold mt-1">Trucks Registered</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Active Fleet</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1.5" id="ws-stat-fleet">39</div>
+                    <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1">Trucks Registered</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Supervisor Review</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 mt-1.5" id="ws-stat-review">0</div>
-                    <div class="text-[11px] sm:text-xs text-amber-600 font-semibold mt-1">Gatekeeper Triage</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Supervisor Review</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1.5" id="ws-stat-review">0</div>
+                    <div class="text-[11px] sm:text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1">Gatekeeper Triage</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">In Workshop</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 mt-1.5" id="ws-stat-floor">0</div>
-                    <div class="text-[11px] sm:text-xs text-indigo-600 font-semibold mt-1">Floor Wrenching</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">In Workshop</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5" id="ws-stat-floor">0</div>
+                    <div class="text-[11px] sm:text-xs text-indigo-600 dark:text-indigo-400 font-semibold mt-1">Floor Wrenching</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Awaiting Spares</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 mt-1.5" id="ws-stat-parts">0</div>
-                    <div class="text-[11px] sm:text-xs text-rose-600 font-semibold mt-1">Purchasing Queue</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Awaiting Spares</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1.5" id="ws-stat-parts">0</div>
+                    <div class="text-[11px] sm:text-xs text-rose-600 dark:text-rose-400 font-semibold mt-1">Purchasing Queue</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs col-span-2 sm:col-span-1">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">QC Road-Test</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 mt-1.5" id="ws-stat-qc">0</div>
-                    <div class="text-[11px] sm:text-xs text-emerald-600 font-semibold mt-1">Awaiting Sign-off</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200 col-span-2 sm:col-span-1">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">QC Road-Test</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 mt-1.5" id="ws-stat-qc">0</div>
+                    <div class="text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">Awaiting Sign-off</div>
                 </div>
             </div>
 
             <!-- Fleet Table Section -->
-            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-                <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/50">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800/80 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#131d33]/60">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="ws-search" placeholder="🔍 Search truck #, plate, fault notes..." oninput="filterFleetTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        <input type="text" id="ws-search" placeholder="🔍 Search truck #, plate, fault notes..." oninput="filterFleetTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- Mechanic Filter -->
-                        <select id="ws-mech-filter" onchange="filterFleetTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="ws-mech-filter" onchange="filterFleetTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Mechanics</option>
                         </select>
 
                         <!-- Status Filter -->
-                        <select id="ws-status-filter" onchange="filterFleetTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="ws-status-filter" onchange="filterFleetTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Workshop Stages</option>
                             <option value="UNDER_REVIEW">Under Review</option>
                             <option value="WITH_MECHANIC">With Mechanic</option>
@@ -1130,21 +1148,21 @@ async def dashboard_view(request: Request):
                     </div>
 
                     <div class="flex items-center justify-between sm:justify-end gap-2">
-                        <span id="ws-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                        <span id="ws-count-badge" class="bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-bold px-3 py-1.5 rounded-full">
                             Showing 0 vehicles
                         </span>
                     </div>
                 </div>
 
                 <!-- Swipe hint on mobile -->
-                <div class="block md:hidden text-[11px] text-slate-400 px-4 py-1.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                <div class="block md:hidden text-[11px] text-slate-400 dark:text-slate-500 px-4 py-1.5 bg-slate-50 dark:bg-[#11192e] border-b border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
                     <span>👉 Swipe horizontally for full table</span>
-                    <span class="font-mono text-slate-400">⇄</span>
+                    <span class="font-mono text-slate-400 dark:text-slate-500">⇄</span>
                 </div>
 
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs min-w-[760px]">
-                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                        <thead class="bg-slate-100/75 dark:bg-[#11192e] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3.5">Ticket #</th>
                                 <th class="px-4 sm:px-5 py-3.5">Truck & Plate</th>
@@ -1157,7 +1175,7 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5">Status & QC</th>
                             </tr>
                         </thead>
-                        <tbody id="ws-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                        <tbody id="ws-table-body" class="divide-y divide-slate-200 dark:divide-slate-800 text-slate-700 dark:text-slate-200"></tbody>
                     </table>
                 </div>
             </div>
@@ -1167,47 +1185,87 @@ async def dashboard_view(request: Request):
         <!-- TAB 4: FLEET APPROVAL & ANTI-FRAUD SALES AUDIT -->
         <!-- ========================================================= -->
         <div id="view-fleet" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'fleet' in allowed and default_tab == 'fleet' else 'none'}">
+            <!-- Executive Fleet Command Center Banner (Exclusively in Fleet Approval) -->
+            <div id="master-kpi-banner" class="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 dark:from-[#0b1329] dark:via-[#0f172a] dark:to-[#070d1e] text-white rounded-3xl p-5 sm:p-7 shadow-xl border border-slate-800 dark:border-blue-900/40">
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 dark:border-slate-800/60 pb-4 mb-5">
+                    <div>
+                        <div class="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 border border-blue-400/30 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase mb-1.5">
+                            ⚡ Fleet Approval & Audit Operations
+                        </div>
+                        <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Fleet & Sales Command Center</h2>
+                    </div>
+                    <div class="flex items-center gap-3 text-xs text-slate-300">
+                        <span class="flex items-center gap-1.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-xl font-bold shadow-xs">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live System Sync
+                        </span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                    <div class="bg-slate-800/60 dark:bg-slate-900/70 backdrop-blur border border-slate-700/60 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Active Tasks</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-amber-400 mt-1" id="master-active-ops">0</div>
+                        <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Pending approvals</div>
+                    </div>
+                    <div class="bg-slate-800/60 dark:bg-slate-900/70 backdrop-blur border border-slate-700/60 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Clearance Rate</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1" id="master-res-rate">100%</div>
+                        <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Approved vs dispatched</div>
+                    </div>
+                    <div class="bg-slate-800/60 dark:bg-slate-900/70 backdrop-blur border border-slate-700/60 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transport Billed</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1" id="master-transport-revenue">$0.00</div>
+                        <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Shortfall recovery charges</div>
+                    </div>
+                    <div class="bg-slate-800/60 dark:bg-slate-900/70 backdrop-blur border border-slate-700/60 dark:border-slate-800 rounded-2xl p-4 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Salesperson Debt Backlog</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1" id="master-financial-backlog">$0.00</div>
+                        <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Pending shortfall recovery</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Fleet Approval Top Stats Cards -->
             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Total Trips Verified</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 mt-1.5" id="fleet-stat-trips">0</div>
-                    <div class="text-[11px] sm:text-xs text-blue-600 font-semibold mt-1" id="fleet-stat-sales-val">$0.00 ERP Sales</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Total Trips Verified</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1.5" id="fleet-stat-trips">0</div>
+                    <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1" id="fleet-stat-sales-val">$0.00 ERP Sales</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Approved for Dispatch</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 mt-1.5" id="fleet-stat-approved">0</div>
-                    <div class="text-[11px] sm:text-xs text-emerald-600 font-semibold mt-1">Cleared Trips</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Approved for Dispatch</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 mt-1.5" id="fleet-stat-approved">0</div>
+                    <div class="text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">Cleared Trips</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Shortfalls Detected</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 mt-1.5" id="fleet-stat-shortfalls">0</div>
-                    <div class="text-[11px] sm:text-xs text-amber-600 font-semibold mt-1">Below City Threshold</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Shortfalls Detected</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1.5" id="fleet-stat-shortfalls">0</div>
+                    <div class="text-[11px] sm:text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1">Below City Threshold</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Transport Charges</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 mt-1.5" id="fleet-stat-transport">$0.00</div>
-                    <div class="text-[11px] sm:text-xs text-indigo-600 font-semibold mt-1">Total Fee Assessed</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Transport Charges</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5" id="fleet-stat-transport">$0.00</div>
+                    <div class="text-[11px] sm:text-xs text-indigo-600 dark:text-indigo-400 font-semibold mt-1">Total Fee Assessed</div>
                 </div>
-                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs col-span-2 sm:col-span-1">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Salesperson Debt</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 mt-1.5" id="fleet-stat-backlog">$0.00</div>
-                    <div class="text-[11px] sm:text-xs text-rose-600 font-semibold mt-1">Pending Shortfall Ledger</div>
+                <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200 col-span-2 sm:col-span-1">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">Salesperson Debt</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1.5" id="fleet-stat-backlog">$0.00</div>
+                    <div class="text-[11px] sm:text-xs text-rose-600 dark:text-rose-400 font-semibold mt-1">Pending Shortfall Ledger</div>
                 </div>
             </div>
 
             <!-- Salesperson Pending Balance & Performance Grid -->
-            <div class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
                     <div>
-                        <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                        <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
                             <span>👥</span> Salesperson Outstanding Balance & Recovery Audit
                         </h2>
-                        <p class="text-[11px] text-slate-500 mt-0.5">Real-time balances tracked per sales representative</p>
+                        <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Real-time balances tracked per sales representative</p>
                     </div>
                     <div class="text-right">
-                        <span class="text-xs font-bold text-slate-500">Total Pending Backlog: </span>
-                        <span class="text-sm font-extrabold text-rose-600 font-mono" id="fleet-total-pending-pill">$0.00</span>
+                        <span class="text-xs font-bold text-slate-500 dark:text-slate-400">Total Pending Backlog: </span>
+                        <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4" id="fleet-salesperson-cards">
@@ -1216,49 +1274,49 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Daily Anti-Fraud Reconciliation & Ledger Audit Panel -->
-            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-                <div class="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/75">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800/80 bg-slate-50/75 dark:bg-[#131d33]/60">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
-                            <div class="inline-flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider mb-1">
+                            <div class="inline-flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider mb-1">
                                 🛡️ Anti-Cheating & Parity Guard
                             </div>
-                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900">
+                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-white">
                                 Daily Recovery & Shortfall Audit Ledger
                             </h3>
-                            <p class="text-[11px] text-slate-500">Cross-verifies customer charges and ledger declarations against Favlogix ERP</p>
+                            <p class="text-[11px] text-slate-500 dark:text-slate-400">Cross-verifies customer charges and ledger declarations against Favlogix ERP</p>
                         </div>
 
                         <!-- Date Filters -->
-                        <div class="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-300 self-start md:self-auto">
+                        <div class="flex items-center gap-1 bg-white dark:bg-[#11192e] p-1 rounded-xl border border-slate-300 dark:border-slate-700 self-start md:self-auto">
                             <button onclick="setAuditTimeframe('ALL')" id="timeframe-btn-ALL" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 text-white transition">All Dates</button>
-                            <button onclick="setAuditTimeframe('TODAY')" id="timeframe-btn-TODAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">Today</button>
-                            <button onclick="setAuditTimeframe('YESTERDAY')" id="timeframe-btn-YESTERDAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">Yesterday</button>
-                            <button onclick="setAuditTimeframe('WEEK')" id="timeframe-btn-WEEK" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">Last 7 Days</button>
+                            <button onclick="setAuditTimeframe('TODAY')" id="timeframe-btn-TODAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">Today</button>
+                            <button onclick="setAuditTimeframe('YESTERDAY')" id="timeframe-btn-YESTERDAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">Yesterday</button>
+                            <button onclick="setAuditTimeframe('WEEK')" id="timeframe-btn-WEEK" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition">Last 7 Days</button>
                         </div>
                     </div>
 
                     <!-- Daily Audit Metrics Bar -->
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-200/80">
-                        <div class="bg-white border border-slate-200 rounded-xl p-3">
-                            <div class="text-[10px] font-bold text-slate-400 uppercase">Customer Paid</div>
-                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 font-mono mt-0.5" id="audit-stat-customer-paid">$0.00</div>
-                            <div class="text-[10px] text-slate-500">Collected at dispatch</div>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-200/80 dark:border-slate-800/80">
+                        <div class="bg-white dark:bg-[#11192e] border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Customer Paid</div>
+                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5" id="audit-stat-customer-paid">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-slate-400">Collected at dispatch</div>
                         </div>
-                        <div class="bg-white border border-slate-200 rounded-xl p-3">
-                            <div class="text-[10px] font-bold text-slate-400 uppercase">Deferred to Ledger</div>
-                            <div class="text-base sm:text-lg font-extrabold text-amber-600 font-mono mt-0.5" id="audit-stat-deferred">$0.00</div>
-                            <div class="text-[10px] text-slate-500">Added to sales debt</div>
+                        <div class="bg-white dark:bg-[#11192e] border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Deferred to Ledger</div>
+                            <div class="text-base sm:text-lg font-extrabold text-amber-600 dark:text-amber-400 font-mono mt-0.5" id="audit-stat-deferred">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-slate-400">Added to sales debt</div>
                         </div>
-                        <div class="bg-white border border-slate-200 rounded-xl p-3">
-                            <div class="text-[10px] font-bold text-slate-400 uppercase">Surplus Recovered</div>
-                            <div class="text-base sm:text-lg font-extrabold text-purple-600 font-mono mt-0.5" id="audit-stat-recovered">$0.00</div>
-                            <div class="text-[10px] text-slate-500">Cleared from debt</div>
+                        <div class="bg-white dark:bg-[#11192e] border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Surplus Recovered</div>
+                            <div class="text-base sm:text-lg font-extrabold text-purple-600 dark:text-purple-400 font-mono mt-0.5" id="audit-stat-recovered">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-slate-400">Cleared from debt</div>
                         </div>
-                        <div class="bg-white border border-slate-200 rounded-xl p-3">
-                            <div class="text-[10px] font-bold text-slate-400 uppercase">Audit Alert Flags</div>
-                            <div class="text-base sm:text-lg font-extrabold text-slate-800 font-mono mt-0.5" id="audit-stat-flags">0</div>
-                            <div class="text-[10px] text-slate-500" id="audit-stat-flags-note">100% Math Match</div>
+                        <div class="bg-white dark:bg-[#11192e] border border-slate-200 dark:border-slate-800 rounded-xl p-3 shadow-xs">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Audit Alert Flags</div>
+                            <div class="text-base sm:text-lg font-extrabold text-slate-800 dark:text-white font-mono mt-0.5" id="audit-stat-flags">0</div>
+                            <div class="text-[10px] text-slate-500 dark:text-slate-400" id="audit-stat-flags-note">100% Math Match</div>
                         </div>
                     </div>
                 </div>
@@ -1266,7 +1324,7 @@ async def dashboard_view(request: Request):
                 <!-- Ledger Audit Table -->
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs min-w-[760px]">
-                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                        <thead class="bg-slate-100/75 dark:bg-[#11192e] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3">Date</th>
                                 <th class="px-4 sm:px-5 py-3">Salesperson</th>
@@ -1276,24 +1334,24 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3">Audit Details & Notes</th>
                             </tr>
                         </thead>
-                        <tbody id="fleet-ledger-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                        <tbody id="fleet-ledger-table-body" class="divide-y divide-slate-200 dark:divide-slate-800 text-slate-700 dark:text-slate-200"></tbody>
                     </table>
                 </div>
             </div>
 
             <!-- Fleet Trip Approvals Master Table Section -->
-            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-                <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/50">
+            <div class="bg-white dark:bg-[#0f172a] border border-slate-200/80 dark:border-slate-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800/80 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#131d33]/60">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- City Filter -->
-                        <select id="fleet-city-filter" onchange="filterFleetApprovalsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="fleet-city-filter" onchange="filterFleetApprovalsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Destination Cities</option>
                         </select>
 
                         <!-- Status Filter -->
-                        <select id="fleet-status-filter" onchange="filterFleetApprovalsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                        <select id="fleet-status-filter" onchange="filterFleetApprovalsTable()" class="bg-white dark:bg-[#11192e] border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Statuses</option>
                             <option value="APPROVED">Approved for Dispatch</option>
                             <option value="SHORTFALL_RECORDED">Shortfall Pending Resolution</option>
@@ -1302,7 +1360,7 @@ async def dashboard_view(request: Request):
                     </div>
 
                     <div class="flex items-center justify-between sm:justify-end gap-2">
-                        <span id="fleet-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                        <span id="fleet-count-badge" class="bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-xs font-bold px-3 py-1.5 rounded-full">
                             Showing 0 trips
                         </span>
                     </div>
@@ -1311,7 +1369,7 @@ async def dashboard_view(request: Request):
                 <!-- Table -->
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs min-w-[850px]">
-                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                        <thead class="bg-slate-100/75 dark:bg-[#11192e] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3.5">Trip ID</th>
                                 <th class="px-4 sm:px-5 py-3.5">Salesperson</th>
@@ -1324,7 +1382,7 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5">Date</th>
                             </tr>
                         </thead>
-                        <tbody id="fleet-approvals-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                        <tbody id="fleet-approvals-table-body" class="divide-y divide-slate-200 dark:divide-slate-800 text-slate-700 dark:text-slate-200"></tbody>
                     </table>
                 </div>
             </div>
@@ -1336,6 +1394,24 @@ async def dashboard_view(request: Request):
         let isRefreshing = false;
         const initialAllowedDomains = {allowed_domains_json};
         const initialDefaultTab = '{default_tab}';
+
+        function toggleTheme() {{
+            const isDark = document.documentElement.classList.toggle('dark');
+            localStorage.setItem('tagoneswa_theme', isDark ? 'dark' : 'light');
+            updateThemeUI(isDark);
+        }}
+
+        function updateThemeUI(isDark) {{
+            document.querySelectorAll('.theme-toggle-icon').forEach(el => {{
+                el.textContent = isDark ? '☀️' : '🌙';
+            }});
+            document.querySelectorAll('.theme-toggle-label').forEach(el => {{
+                el.textContent = isDark ? 'Light' : 'Dark';
+            }});
+        }}
+
+        // Sync initial theme UI state
+        updateThemeUI(document.documentElement.classList.contains('dark'));
 
         function showToast(msg, icon = '✅') {{
             const toast = document.getElementById('toast');
@@ -1446,18 +1522,18 @@ async def dashboard_view(request: Request):
             const adminContainer = document.getElementById('it-admin-cards');
             if (adminContainer && it.admins) {{
                 adminContainer.innerHTML = it.admins.map(a => `
-                    <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 sm:p-4 flex items-center justify-between">
+                    <div class="bg-slate-50 dark:bg-[#11192e] border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 sm:p-4 flex items-center justify-between shadow-xs">
                         <div>
-                            <div class="font-extrabold text-slate-900 text-xs sm:text-sm">${{a.name}}</div>
-                            <div class="text-[10px] sm:text-[11px] text-slate-500 font-mono">+${{a.phone}}</div>
+                            <div class="font-extrabold text-slate-900 dark:text-white text-xs sm:text-sm">${{a.name}}</div>
+                            <div class="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-mono">+${{a.phone}}</div>
                             <div class="mt-2 flex items-center gap-1.5">
-                                <span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">${{a.pending}} Pending</span>
-                                <span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">${{a.resolved}} Solved</span>
+                                <span class="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 text-[10px] font-bold px-2 py-0.5 rounded">${{a.pending}} Pending</span>
+                                <span class="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 text-[10px] font-bold px-2 py-0.5 rounded">${{a.resolved}} Solved</span>
                             </div>
                         </div>
                         <div class="text-right">
-                            <div class="text-sm sm:text-base font-extrabold text-blue-600">${{a.sla_pct}}% SLA</div>
-                            <div class="text-[10px] sm:text-[11px] text-slate-500 font-medium">Avg: ${{a.avg_time}}</div>
+                            <div class="text-sm sm:text-base font-extrabold text-blue-600 dark:text-blue-400 font-mono">${{a.sla_pct}}% SLA</div>
+                            <div class="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-medium">Avg: ${{a.avg_time}}</div>
                         </div>
                     </div>
                 `).join('');
@@ -1478,23 +1554,23 @@ async def dashboard_view(request: Request):
             if (treeContainer) {{
                 if (it.category_tree && it.category_tree.length > 0) {{
                     treeContainer.innerHTML = it.category_tree.map(cat => `
-                        <div class="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
-                            <div class="p-3 sm:p-3.5 bg-slate-100/80 font-extrabold text-xs text-slate-900 flex items-center justify-between">
+                        <div class="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-[#11192e]/40">
+                            <div class="p-3 sm:p-3.5 bg-slate-100/80 dark:bg-[#15203b] font-extrabold text-xs text-slate-900 dark:text-white flex items-center justify-between">
                                 <span>📁 ${{cat.category_name}}</span>
-                                <span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full text-[10px] font-bold">${{cat.count}} tickets</span>
+                                <span class="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 px-2 py-0.5 rounded-full text-[10px] font-bold">${{cat.count}} tickets</span>
                             </div>
                             <div class="p-3 space-y-2 text-xs">
                                 ${{cat.subcategories.map(sub => `
-                                    <div class="pl-2.5 sm:pl-3 border-l-2 border-slate-300">
-                                        <div class="font-bold text-slate-700 flex items-center justify-between text-xs">
+                                    <div class="pl-2.5 sm:pl-3 border-l-2 border-slate-300 dark:border-slate-700">
+                                        <div class="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between text-xs">
                                             <span>↳ ${{sub.subcategory_name}}</span>
-                                            <span class="text-slate-400 font-medium text-[11px]">${{sub.count}} logs</span>
+                                            <span class="text-slate-400 dark:text-slate-500 font-medium text-[11px]">${{sub.count}} logs</span>
                                         </div>
-                                        <div class="pl-2.5 sm:pl-3 mt-1 space-y-0.5 text-[11px] text-slate-500">
+                                        <div class="pl-2.5 sm:pl-3 mt-1 space-y-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                                             ${{sub.issues.map(iss => `
                                                 <div class="flex items-center justify-between py-0.5">
                                                     <span>• ${{iss.issue_name}}</span>
-                                                    <span class="font-mono text-slate-600 font-bold">${{iss.count}}</span>
+                                                    <span class="font-mono text-slate-600 dark:text-slate-300 font-bold">${{iss.count}}</span>
                                                 </div>
                                             `).join('')}}
                                         </div>
@@ -1504,7 +1580,7 @@ async def dashboard_view(request: Request):
                         </div>
                     `).join('');
                 }} else {{
-                    treeContainer.innerHTML = '<div class="text-xs text-slate-400 p-3">No category issues logged yet.</div>';
+                    treeContainer.innerHTML = '<div class="text-xs text-slate-400 dark:text-slate-500 p-3">No category issues logged yet.</div>';
                 }}
             }}
 
@@ -1537,24 +1613,24 @@ async def dashboard_view(request: Request):
             const tbody = document.getElementById('it-table-body');
             if (tbody) {{
                 tbody.innerHTML = records.map(r => {{
-                    let statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
-                    if (r.status === 'Resolved' || r.status === 'Closed') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                    else if (r.status === 'In Progress') statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+                    let statusBadge = 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+                    if (r.status === 'Resolved' || r.status === 'Closed') statusBadge = 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
+                    else if (r.status === 'In Progress') statusBadge = 'bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-800';
 
-                    let pBadge = 'bg-slate-100 text-slate-700';
-                    if (r.priority === 'Urgent') pBadge = 'bg-red-100 text-red-700 font-bold';
-                    else if (r.priority === 'High') pBadge = 'bg-amber-100 text-amber-800 font-bold';
+                    let pBadge = 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300';
+                    if (r.priority === 'Urgent') pBadge = 'bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 font-bold';
+                    else if (r.priority === 'High') pBadge = 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 font-bold';
 
                     return `
-                        <tr class="hover:bg-slate-50/80 transition">
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600">${{r.ticket_number}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.employee_name}}</strong><br><small class="text-slate-400 font-mono">+${{r.employee_phone}}</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5">${{r.department}}<br><small class="text-slate-500 font-medium">📍 ${{r.location}}</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.category}}</strong> ➔ ${{r.subcategory}}<br><small class="text-slate-500">${{r.issue}}</small></td>
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition">
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400">${{r.ticket_number}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.employee_name}}</strong><br><small class="text-slate-400 dark:text-slate-500 font-mono">+${{r.employee_phone}}</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-700 dark:text-slate-300">${{r.department}}<br><small class="text-slate-500 dark:text-slate-400 font-medium">📍 ${{r.location}}</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.category}}</strong> <span class="text-slate-400">➔</span> ${{r.subcategory}}<br><small class="text-slate-500 dark:text-slate-400">${{r.issue}}</small></td>
                             <td class="px-4 sm:px-5 py-3 sm:py-3.5"><span class="px-2 py-0.5 rounded text-[10px] ${{pBadge}}">${{r.priority}}</span></td>
                             <td class="px-4 sm:px-5 py-3 sm:py-3.5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold border ${{statusBadge}}">${{r.status}}</span></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium">${{r.assigned_admin}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold">${{r.resolution_time}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-slate-200">${{r.assigned_admin}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-slate-900 dark:text-white">${{r.resolution_time}}</td>
                         </tr>
                     `;
                 }}).join('');
@@ -1616,19 +1692,19 @@ async def dashboard_view(request: Request):
             const tbody = document.getElementById('proj-table-body');
             if (tbody) {{
                 tbody.innerHTML = records.map(r => {{
-                    let statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
-                    if (r.status === 'Resolved' || r.status === 'Closed') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                    else if (r.status === 'In Progress') statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+                    let statusBadge = 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+                    if (r.status === 'Resolved' || r.status === 'Closed') statusBadge = 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
+                    else if (r.status === 'In Progress') statusBadge = 'bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-800';
 
                     return `
-                        <tr class="hover:bg-slate-50/80 transition">
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600">${{r.ticket_number}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.employee_name}}</strong><br><small class="text-slate-400 font-mono">+${{r.employee_phone}}</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold text-slate-800">📍 ${{r.location}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.category}}</strong><br><small class="text-slate-500">${{r.description}}</small></td>
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition">
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400">${{r.ticket_number}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.employee_name}}</strong><br><small class="text-slate-400 dark:text-slate-500 font-mono">+${{r.employee_phone}}</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold text-slate-800 dark:text-slate-200">📍 ${{r.location}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.category}}</strong><br><small class="text-slate-500 dark:text-slate-400">${{r.description}}</small></td>
                             <td class="px-4 sm:px-5 py-3 sm:py-3.5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold border ${{statusBadge}}">${{r.status}}</span></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium">${{r.assigned_admin}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500">${{r.created_at}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-slate-200">${{r.assigned_admin}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500 dark:text-slate-400 font-mono text-[11px]">${{r.created_at}}</td>
                         </tr>
                     `;
                 }}).join('');
@@ -1681,25 +1757,25 @@ async def dashboard_view(request: Request):
             const tbody = document.getElementById('ws-table-body');
             if (tbody) {{
                 tbody.innerHTML = records.map(r => {{
-                    let statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
-                    if (r.status === 'UNDER_REVIEW') statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
-                    else if (r.status === 'CLOSED') statusBadge = 'bg-slate-100 text-slate-700 border-slate-300';
-                    else if (r.status === 'REWORK_REQUIRED') statusBadge = 'bg-red-100 text-red-700 border-red-200';
-                    else if (r.status === 'AWAITING_TEST') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                    let statusBadge = 'bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-800';
+                    if (r.status === 'UNDER_REVIEW') statusBadge = 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+                    else if (r.status === 'CLOSED') statusBadge = 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700';
+                    else if (r.status === 'REWORK_REQUIRED') statusBadge = 'bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800';
+                    else if (r.status === 'AWAITING_TEST') statusBadge = 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
 
                     return `
-                        <tr class="hover:bg-slate-50/80 transition">
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600">${{r.ticket_number}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>Truck #${{r.truck_number}}</strong><br><small class="text-slate-400 font-mono">${{r.plate_number}}</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800">${{r.truck_model}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.category}}</strong><br><small class="text-slate-500">${{r.description.substring(0, 45)}}...</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5">${{r.logged_by}}</td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.assigned_mechanic}}</strong><br><small class="text-blue-600 font-semibold">⏱️ ETA: ${{r.eta}}</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><small class="bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded font-medium">📦 ${{r.parts_status}}</small></td>
-                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold font-mono text-slate-900">${{r.costing}}</td>
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition">
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400">${{r.ticket_number}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">Truck #${{r.truck_number}}</strong><br><small class="text-slate-400 dark:text-slate-500 font-mono">${{r.plate_number}}</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-slate-200">${{r.truck_model}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.category}}</strong><br><small class="text-slate-500 dark:text-slate-400">${{r.description.substring(0, 45)}}...</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-700 dark:text-slate-300">${{r.logged_by}}</td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.assigned_mechanic}}</strong><br><small class="text-blue-600 dark:text-blue-400 font-semibold">⏱️ ETA: ${{r.eta}}</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5"><small class="bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 px-2 py-0.5 rounded font-medium">📦 ${{r.parts_status}}</small></td>
+                            <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold font-mono text-slate-900 dark:text-white">${{r.costing}}</td>
                             <td class="px-4 sm:px-5 py-3 sm:py-3.5">
                                 <span class="px-2.5 py-1 rounded-full text-[10px] font-bold border ${{statusBadge}}">${{r.status.replace('_', ' ')}}</span><br>
-                                <small class="text-slate-400 mt-1 block">QC: ${{r.qc_result}}</small>
+                                <small class="text-slate-400 dark:text-slate-500 mt-1 block">QC: ${{r.qc_result}}</small>
                             </td>
                         </tr>
                     `;
@@ -1725,12 +1801,12 @@ async def dashboard_view(request: Request):
             currentAuditTimeframe = tf;
             document.querySelectorAll('.audit-tf-btn').forEach(btn => {{
                 btn.classList.remove('bg-blue-600', 'text-white');
-                btn.classList.add('text-slate-600', 'hover:text-slate-900');
+                btn.classList.add('text-slate-600', 'dark:text-slate-300', 'hover:text-slate-900', 'dark:hover:text-white');
             }});
             const activeBtn = document.getElementById('timeframe-btn-' + tf);
             if (activeBtn) {{
                 activeBtn.classList.add('bg-blue-600', 'text-white');
-                activeBtn.classList.remove('text-slate-600', 'hover:text-slate-900');
+                activeBtn.classList.remove('text-slate-600', 'dark:text-slate-300', 'hover:text-slate-900', 'dark:hover:text-white');
             }}
             if (cachedData && cachedData.fleet) {{
                 filterLedgerTable();
@@ -1752,39 +1828,39 @@ async def dashboard_view(request: Request):
             const spCardsContainer = document.getElementById('fleet-salesperson-cards');
             if (spCardsContainer && fleet.salespersons) {{
                 if (fleet.salespersons.length === 0) {{
-                    spCardsContainer.innerHTML = '<div class="text-xs text-slate-400 p-3 col-span-full">No salesperson ledger records yet.</div>';
+                    spCardsContainer.innerHTML = '<div class="text-xs text-slate-400 dark:text-slate-500 p-3 col-span-full">No salesperson ledger records yet.</div>';
                 }} else {{
                     spCardsContainer.innerHTML = fleet.salespersons.map(sp => {{
-                        let badgeClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                        let badgeClass = 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
                         let badgeText = '🟢 Cleared / Healthy';
                         if (sp.risk_level === 'HIGH_ALERT') {{
-                            badgeClass = 'bg-red-100 text-red-800 border-red-200 font-bold';
+                            badgeClass = 'bg-red-100 dark:bg-red-950/80 text-red-800 dark:text-red-300 border-red-200 dark:border-red-800 font-bold';
                             badgeText = '🔴 High Debt Alert';
                         }} else if (sp.risk_level === 'ACTIVE_PENDING') {{
-                            badgeClass = 'bg-amber-100 text-amber-800 border-amber-200 font-semibold';
+                            badgeClass = 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800 font-semibold';
                             badgeText = '🟡 Pending Recovery';
                         }}
 
                         return `
-                            <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between hover:shadow-sm transition">
+                            <div class="bg-slate-50 dark:bg-[#11192e] border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col justify-between hover:shadow-md transition">
                                 <div>
                                     <div class="flex items-start justify-between gap-1">
                                         <div>
-                                            <div class="font-extrabold text-slate-900 text-sm">${{sp.name}}</div>
-                                            <div class="text-[11px] text-slate-500 font-mono">+${{sp.phone}}</div>
+                                            <div class="font-extrabold text-slate-900 dark:text-white text-sm">${{sp.name}}</div>
+                                            <div class="text-[11px] text-slate-500 dark:text-slate-400 font-mono">+${{sp.phone}}</div>
                                         </div>
                                         <span class="text-[10px] px-2 py-0.5 rounded-full border ${{badgeClass}}">${{badgeText}}</span>
                                     </div>
-                                    <div class="mt-3.5 bg-white border border-slate-200 rounded-lg p-2.5">
-                                        <div class="text-[10px] uppercase font-bold text-slate-400">Current Outstanding Debt</div>
-                                        <div class="text-xl font-extrabold font-mono ${{sp.net_balance > 0 ? 'text-rose-600' : 'text-emerald-600'}} mt-0.5">
+                                    <div class="mt-3.5 bg-white dark:bg-[#070b14] border border-slate-200 dark:border-slate-800 rounded-lg p-2.5">
+                                        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500">Current Outstanding Debt</div>
+                                        <div class="text-xl font-extrabold font-mono ${{sp.net_balance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}} mt-0.5">
                                             $${{sp.net_balance.toFixed(2)}}
                                         </div>
                                     </div>
                                 </div>
-                                <div class="mt-3 pt-2.5 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-600">
-                                    <span>Accrued: <strong class="text-rose-600">$${{sp.total_shortfalls.toFixed(2)}}</strong></span>
-                                    <span>Recovered: <strong class="text-emerald-600">$${{sp.total_recovered.toFixed(2)}}</strong></span>
+                                <div class="mt-3 pt-2.5 border-t border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400">
+                                    <span>Accrued: <strong class="text-rose-600 dark:text-rose-400">$${{sp.total_shortfalls.toFixed(2)}}</strong></span>
+                                    <span>Recovered: <strong class="text-emerald-600 dark:text-emerald-400">$${{sp.total_recovered.toFixed(2)}}</strong></span>
                                 </div>
                             </div>
                         `;
@@ -1863,34 +1939,34 @@ async def dashboard_view(request: Request):
             const alertNote = document.getElementById('audit-stat-flags-note');
             alertEl.textContent = alertCount;
             if (alertCount > 0) {{
-                alertEl.className = 'text-base sm:text-lg font-extrabold text-red-600 font-mono mt-0.5';
-                alertNote.innerHTML = '<span class="text-red-600 font-bold">⚠️ Discrepancy Found</span>';
+                alertEl.className = 'text-base sm:text-lg font-extrabold text-red-600 dark:text-red-400 font-mono mt-0.5';
+                alertNote.innerHTML = '<span class="text-red-600 dark:text-red-400 font-bold">⚠️ Discrepancy Found</span>';
             }} else {{
-                alertEl.className = 'text-base sm:text-lg font-extrabold text-emerald-600 font-mono mt-0.5';
-                alertNote.innerHTML = '<span class="text-emerald-600 font-semibold">100% Math Match</span>';
+                alertEl.className = 'text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5';
+                alertNote.innerHTML = '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">100% Math Match</span>';
             }}
 
             const tbody = document.getElementById('fleet-ledger-table-body');
             if (tbody) {{
                 if (filtered.length === 0) {{
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-4 text-center text-slate-400">No ledger transactions in this timeframe.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-4 text-center text-slate-400 dark:text-slate-500">No ledger transactions in this timeframe.</td></tr>';
                 }} else {{
                     tbody.innerHTML = filtered.map(e => {{
                         const isRec = e.is_recovery;
-                        const amtClass = isRec ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+                        const amtClass = isRec ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold';
                         const sign = isRec ? '-' : '+';
                         const typeBadge = isRec
-                            ? '<span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">SURPLUS RECOVERY</span>'
-                            : '<span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">SHORTFALL DEFICIT</span>';
+                            ? '<span class="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">SURPLUS RECOVERY</span>'
+                            : '<span class="bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">SHORTFALL DEFICIT</span>';
 
                         return `
-                            <tr class="hover:bg-slate-50/80 transition">
-                                <td class="px-4 sm:px-5 py-3 text-slate-500 font-mono text-[11px]">${{e.created_at}}</td>
-                                <td class="px-4 sm:px-5 py-3"><strong>${{e.salesperson_name}}</strong><br><small class="text-slate-400 font-mono">+${{e.salesperson_phone}}</small></td>
-                                <td class="px-4 sm:px-5 py-3 font-mono font-bold text-blue-600">${{e.trip_id}}</td>
+                            <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition">
+                                <td class="px-4 sm:px-5 py-3 text-slate-500 dark:text-slate-400 font-mono text-[11px]">${{e.created_at}}</td>
+                                <td class="px-4 sm:px-5 py-3"><strong class="text-slate-900 dark:text-white">${{e.salesperson_name}}</strong><br><small class="text-slate-400 dark:text-slate-500 font-mono">+${{e.salesperson_phone}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 font-mono font-bold text-blue-600 dark:text-blue-400">${{e.trip_id}}</td>
                                 <td class="px-4 sm:px-5 py-3">${{typeBadge}}</td>
                                 <td class="px-4 sm:px-5 py-3 font-mono ${{amtClass}}">${{sign}}$${{Math.abs(e.amount).toFixed(2)}}</td>
-                                <td class="px-4 sm:px-5 py-3 text-slate-600">${{e.notes || '--'}}</td>
+                                <td class="px-4 sm:px-5 py-3 text-slate-600 dark:text-slate-300">${{e.notes || '--'}}</td>
                             </tr>
                         `;
                     }}).join('');
@@ -1923,41 +1999,41 @@ async def dashboard_view(request: Request):
             const tbody = document.getElementById('fleet-approvals-table-body');
             if (tbody) {{
                 if (records.length === 0) {{
-                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-slate-400">No matching trip approvals found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-slate-400 dark:text-slate-500">No matching trip approvals found.</td></tr>';
                 }} else {{
                     tbody.innerHTML = records.map(r => {{
-                        let statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
-                        if (r.status === 'APPROVED' || r.status === 'DISPATCHED') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-                        else if (r.status === 'SHORTFALL_RECORDED') statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
+                        let statusBadge = 'bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-800';
+                        if (r.status === 'APPROVED' || r.status === 'DISPATCHED') statusBadge = 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
+                        else if (r.status === 'SHORTFALL_RECORDED') statusBadge = 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
 
-                        let auditBadge = '<span class="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit">✅ Verified Parity</span>';
+                        let auditBadge = '<span class="bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit">✅ Verified Parity</span>';
                         if (!r.is_clean) {{
-                            auditBadge = `<span class="bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit" title="${{r.audit_flags.join('; ')}}">⚠️ Audit Alert (${{r.audit_flags.length}})</span>`;
+                            auditBadge = `<span class="bg-red-50 dark:bg-red-950/80 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit" title="${{r.audit_flags.join('; ')}}">⚠️ Audit Alert (${{r.audit_flags.length}})</span>`;
                         }}
 
                         return `
-                            <tr class="hover:bg-slate-50/80 transition">
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600">${{r.trip_id}}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.salesperson_name}}</strong><br><small class="text-slate-400 font-mono">+${{r.salesperson_phone}}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><span class="font-bold text-slate-800">📍 ${{r.destination_city}}</span><br><small class="text-slate-500">${{r.route}}</small></td>
+                            <tr class="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400">${{r.trip_id}}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-white">${{r.salesperson_name}}</strong><br><small class="text-slate-400 dark:text-slate-500 font-mono">+${{r.salesperson_phone}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><span class="font-bold text-slate-800 dark:text-slate-200">📍 ${{r.destination_city}}</span><br><small class="text-slate-500 dark:text-slate-400">${{r.route}}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono">
-                                    <span class="font-bold ${{r.trip_sales_value >= r.required_minimum ? 'text-emerald-600' : 'text-slate-900'}}">$${{r.trip_sales_value.toFixed(2)}}</span>
-                                    <br><small class="text-slate-400">Min: $${{r.required_minimum.toFixed(2)}}</small>
+                                    <span class="font-bold ${{r.trip_sales_value >= r.required_minimum ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-900 dark:text-white'}}">$${{r.trip_sales_value.toFixed(2)}}</span>
+                                    <br><small class="text-slate-400 dark:text-slate-500">Min: $${{r.required_minimum.toFixed(2)}}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono">
-                                    ${{r.has_shortfall ? `<span class="text-rose-600 font-bold">-$${{r.shortfall.toFixed(2)}}</span><br><small class="text-indigo-600 font-bold">Fee: $${{r.transport_charge.toFixed(2)}}</small>` : '<span class="text-emerald-600 font-bold">Compliant (No Fee)</span>'}}
+                                    ${{r.has_shortfall ? `<span class="text-rose-600 dark:text-rose-400 font-bold">-$${{r.shortfall.toFixed(2)}}</span><br><small class="text-indigo-600 dark:text-indigo-400 font-bold">Fee: $${{r.transport_charge.toFixed(2)}}</small>` : '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Compliant (No Fee)</span>'}}
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-xs">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-xs text-slate-700 dark:text-slate-300">
                                     ${{r.has_shortfall ? `
-                                        <span>Customer Paid: <strong class="text-emerald-700 font-mono">$${{r.amount_charged_to_customer.toFixed(2)}}</strong></span><br>
-                                        <span>Debt Added: <strong class="text-amber-700 font-mono">$${{r.pending_balance_recorded.toFixed(2)}}</strong></span>
-                                    ` : '<span class="text-slate-400">Direct Clearance</span>'}}
+                                        <span>Customer Paid: <strong class="text-emerald-700 dark:text-emerald-400 font-mono">$${{r.amount_charged_to_customer.toFixed(2)}}</strong></span><br>
+                                        <span>Debt Added: <strong class="text-amber-700 dark:text-amber-400 font-mono">$${{r.pending_balance_recorded.toFixed(2)}}</strong></span>
+                                    ` : '<span class="text-slate-400 dark:text-slate-500">Direct Clearance</span>'}}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5">${{auditBadge}}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5">
                                     <span class="px-2.5 py-1 rounded-full text-[10px] font-bold border ${{statusBadge}}">${{r.status.replace('_', ' ')}}</span>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500 text-[11px] font-mono">${{r.created_at}}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500 dark:text-slate-400 text-[11px] font-mono">${{r.created_at}}</td>
                             </tr>
                         `;
                     }}).join('');

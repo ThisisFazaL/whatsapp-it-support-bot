@@ -753,9 +753,15 @@ async def process_webhook_payload(body: dict):
                 text_val = btn_obj.get("text", "")
                 message_text = payload if payload else text_val
                 logger.info(f"Received Template Quick Reply button click from {sender_phone}: payload='{payload}', text='{text_val}' -> text='{message_text}'")
+            elif msg_type in {"reaction", "sticker", "order", "system", "ephemeral", "unknown"}:
+                logger.info(f"Silently ignoring message type '{msg_type}' from {sender_phone}.")
+                return
             else:
-                logger.info(f"Unsupported message type '{msg_type}' received from {sender_phone}.")
-                await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
+                logger.info(f"Unhandled non-text message type '{msg_type}' received from {sender_phone}.")
+                # Only notify if in an active conversation expecting user action
+                state_check = await get_user_state(db, sender_phone)
+                if state_check and state_check.current_step:
+                    await meta_api.send_text_message(sender_phone, "ℹ️ Please send text messages, numbers, photo attachments, or tap interactive buttons.")
                 return
 
             # Step 0: Identify user roles across Workshop, IT Support, Admins, and Observers
@@ -786,6 +792,21 @@ async def process_webhook_payload(body: dict):
             clean_txt = (message_text or "").strip().lower()
             clean_kw = re.sub(r"[^\w\s]", "", clean_txt).strip()
             state = await get_user_state(db, sender_phone)
+
+            # Passive chatter / acknowledgment check:
+            # Prevents constant spam replies when users say "ok", "thanks", "👍", etc. without initiating a flow
+            PASSIVE_CHATTER = {
+                "ok", "okay", "k", "kk", "thanks", "thank you", "thx", "noted", "cool",
+                "alright", "good", "great", "nice", "bye", "good night", "goodnight",
+                "see you", "👍", "🙏", "👌", "done", "got it", "understood", "sure", "fine",
+                "no problem", "welcome", "youre welcome", "you're welcome", "np"
+            }
+            if clean_kw in PASSIVE_CHATTER or clean_txt in PASSIVE_CHATTER:
+                # If user is in an active data-entry step that expects freeform notes or trip ID, fall through
+                freeform_steps = {"awaiting_description", "awaiting_note", "awaiting_resolution_note", "awaiting_admin_resolution_note", "awaiting_trip_id", "awaiting_recovery_trip_id"}
+                if not state or not state.current_step or state.current_step not in freeform_steps:
+                    logger.info(f"Silently acknowledged passive chatter '{message_text}' from {sender_phone} without unsolicited reply.")
+                    return
 
             # Step 0.5: Master Admin Role Switch & Salesperson Handler
             from app.handlers.fleet_approval_handler import (

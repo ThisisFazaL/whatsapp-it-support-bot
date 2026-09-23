@@ -178,7 +178,7 @@ async def handle_flow(
     text_clean = message_text.strip().lower()
     choice_num = extract_numeric_choice(message_text)
 
-    # Global Reset Check
+    # Global Reset & No-State Check
     if text_clean in GLOBAL_RESET_KEYWORDS or not state or not state.current_step:
         # Check if admin or user tapped domain button or typed domain keyword directly:
         if "domain_it" in text_clean or text_clean in {"it support", "it", "💻 it support"}:
@@ -202,6 +202,17 @@ async def handle_flow(
                 await meta_api.send_text_message(phone, "⚠️ *Access Denied*: Sales pending balance is restricted to authorized Sales personnel.")
             return
 
+        # If user has no state, ONLY launch ticket creation or menus on explicit user intent / greeting
+        if not state or not state.current_step:
+            is_intent = (
+                text_clean in GLOBAL_RESET_KEYWORDS
+                or text_clean in {"hi", "hello", "hey", "menu", "start", "/start", "/menu", "ticket", "new ticket", "report", "issue", "support", "help", "1", "2"}
+                or any(text_clean.startswith(g + " ") for g in ["hi", "hello", "hey", "need", "issue with", "create ticket"])
+            )
+            if not is_intent:
+                logger.info(f"Ignoring passive/unprompted text '{message_text}' from {phone} without active conversation.")
+                return
+
         # If user is a SupportAdmin, sending 'hi' / 'menu' / 'reset' or having no state MUST show Admin Dashboard!
         from app.state_manager import is_admin
         admin_obj = await is_admin(session, phone)
@@ -220,20 +231,23 @@ async def handle_flow(
 
     # Check Sales Portal Domain Selection
     if state and state.flow_name == "sales_portal":
-        if "domain_fleet" in text_clean or text_clean in {"fleet approval", "fleet", "🚛 fleet approval"}:
+        if "domain_fleet" in text_clean or text_clean in {"fleet approval", "fleet", "🚛 fleet approval", "1", "1️⃣"}:
             from app.handlers.fleet_approval_handler import handle_fleet_approval_flow
             await handle_fleet_approval_flow(session, phone, employee, message_text, state)
             return
-        elif "sales_pending" in text_clean or text_clean in {"pending balance", "pending", "balance", "ledger", "⚖️ pending balance"}:
+        elif "sales_pending" in text_clean or text_clean in {"pending balance", "pending", "balance", "ledger", "⚖️ pending balance", "2", "2️⃣"}:
             from app.handlers.fleet_approval_handler import handle_fleet_approval_flow
             await handle_fleet_approval_flow(session, phone, employee, message_text, state)
             return
-        elif "domain_it" in text_clean or text_clean in {"it support", "it", "💻 it support"}:
+        elif "domain_it" in text_clean or text_clean in {"it support", "it", "💻 it support", "3", "3️⃣"}:
             await send_categories_menu(session, phone, domain="IT", data={"domain": "IT"})
             return
-        else:
+        elif text_clean in GLOBAL_RESET_KEYWORDS or text_clean in {"hi", "hello", "menu", "start", "/menu", "portal", "sales"}:
             from app.handlers.fleet_approval_handler import send_sales_portal_menu
             await send_sales_portal_menu(session, phone, employee)
+            return
+        else:
+            logger.info(f"Ignoring unrecognized text '{message_text}' in sales_portal for {phone} to prevent loop.")
             return
 
     step = state.current_step
