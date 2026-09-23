@@ -10,35 +10,63 @@ from fastapi import Request
 # Security secret for signing session cookies
 SECRET_KEY = os.getenv("DASHBOARD_SECRET_KEY", "tg_enterprise_sec_key_2026_98xLa9!#")
 
-# Hardened High-Entropy Credentials (overridable via environment variables)
+# Hardened Credentials (overridable via environment variables)
 USERS_DB = {
     "admin": {
         "username": "admin",
-        "password": os.getenv("DASHBOARD_ADMIN_PASS", "Tg9$xK#82vM!Lz91"),
+        "password": os.getenv("DASHBOARD_ADMIN_PASS", "Admin@Tagoneswa2026!"),
         "role": "MASTER_ADMIN",
         "name": "Master Administrator",
-        "allowed_domains": ["it", "projects", "logistics"]
+        "allowed_domains": ["it", "projects", "logistics", "fleet"]
+    },
+    "fleet": {
+        "username": "fleet",
+        "password": os.getenv("DASHBOARD_FLEET_PASS", "Fleet@Tagoneswa2026!"),
+        "role": "FLEET_ADMIN",
+        "name": "Fleet Operations Manager",
+        "allowed_domains": ["fleet", "logistics"]
+    },
+    "sujit": {
+        "username": "sujit",
+        "password": os.getenv("DASHBOARD_SUJIT_PASS", "Sujit@Fleet2026!"),
+        "role": "FLEET_ADMIN",
+        "name": "Sujit (Fleet Admin)",
+        "allowed_domains": ["fleet", "logistics"]
+    },
+    "sales": {
+        "username": "sales",
+        "password": os.getenv("DASHBOARD_SALES_PASS", "Sales@Tagoneswa2026!"),
+        "role": "SALES_ADMIN",
+        "name": "Sales & Commercial Lead",
+        "allowed_domains": ["fleet"]
     },
     "logistics": {
         "username": "logistics",
-        "password": os.getenv("DASHBOARD_LOGISTICS_PASS", "Wk#7331$FlT!9842"),
+        "password": os.getenv("DASHBOARD_LOGISTICS_PASS", "Logistics@2026!"),
         "role": "LOGISTICS_ADMIN",
-        "name": "Logistics & Fleet Manager",
-        "allowed_domains": ["logistics"]
+        "name": "Logistics & Workshop Lead",
+        "allowed_domains": ["logistics", "fleet"]
     },
     "itsupport": {
         "username": "itsupport",
-        "password": os.getenv("DASHBOARD_IT_PASS", "It#9328$Sec!6514"),
+        "password": os.getenv("DASHBOARD_IT_PASS", "ITSupport@2026!"),
         "role": "IT_ADMIN",
         "name": "IT Support Administrator",
         "allowed_domains": ["it"]
     },
     "projects": {
         "username": "projects",
-        "password": os.getenv("DASHBOARD_PROJECTS_PASS", "Pr#7800$Bld!3602"),
+        "password": os.getenv("DASHBOARD_PROJECTS_PASS", "Projects@2026!"),
         "role": "PROJECTS_ADMIN",
         "name": "Building Projects Administrator",
         "allowed_domains": ["projects"]
+    },
+    "executive": {
+        "username": "executive",
+        "password": os.getenv("DASHBOARD_EXECUTIVE_PASS", "Executive@Tagoneswa2026!"),
+        "role": "EXECUTIVE_OBSERVER",
+        "name": "Executive Observer",
+        "allowed_domains": ["it", "projects", "logistics", "fleet"]
     }
 }
 

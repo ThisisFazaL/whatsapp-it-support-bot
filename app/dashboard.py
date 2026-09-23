@@ -9,7 +9,8 @@ from sqlalchemy.orm import selectinload
 
 from app.database import (
     get_db, Ticket, MaintenanceTicket, TicketAssignment, MaintenanceTicketAssignment,
-    SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus
+    SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus,
+    FleetTripApproval, FleetPendingLedger
 )
 from app.workshop.models import (
     WorkshopTicket, WorkshopTruck, WorkshopStaff, WorkshopPartsRequest
@@ -186,7 +187,7 @@ async def process_login(request: Request):
         )
 
     token = create_session_token(user["username"], user["role"])
-    default_tab = "logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it")
+    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
     
     resp = JSONResponse({
         "status": "success",
@@ -235,11 +236,12 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized session. Please log in.")
 
-    allowed = user.get("allowed_domains", ["it", "projects", "logistics"])
+    allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet"])
     
     it_payload = None
     projects_payload = None
     logistics_payload = None
+    fleet_payload = None
 
     # 1. Process IT Support Domain (only if permitted - newest first)
     if "it" in allowed:
@@ -503,6 +505,209 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "fleet_count": len(ws_trucks)
         }
 
+    # 4. Process Fleet Approval Domain (only if permitted - newest first)
+    if "fleet" in allowed:
+        fleet_stmt = select(FleetTripApproval).order_by(FleetTripApproval.created_at.desc())
+        fleet_approvals = (await db.execute(fleet_stmt)).scalars().all()
+
+        ledger_stmt = select(FleetPendingLedger).order_by(FleetPendingLedger.created_at.desc())
+        ledger_entries = (await db.execute(ledger_stmt)).scalars().all()
+
+        # A. Aggregate Salesperson Pending Balances & Performance
+        salesperson_map = {}
+        for entry in ledger_entries:
+            p = entry.salesperson_phone
+            if p not in salesperson_map:
+                salesperson_map[p] = {
+                    "phone": p,
+                    "name": entry.salesperson_name or "Sales Rep",
+                    "total_shortfalls": 0.0,
+                    "total_recovered": 0.0,
+                    "net_balance": 0.0,
+                    "entries_count": 0,
+                    "trips": set(),
+                    "recent_date": entry.created_at.strftime("%Y-%m-%d %H:%M") if entry.created_at else ""
+                }
+            s_obj = salesperson_map[p]
+            s_obj["entries_count"] += 1
+            if entry.trip_id:
+                s_obj["trips"].add(entry.trip_id)
+            if entry.amount > 0:
+                s_obj["total_shortfalls"] += entry.amount
+            else:
+                s_obj["total_recovered"] += abs(entry.amount)
+            s_obj["net_balance"] += entry.amount
+
+        # Also register any salesperson who has trip approvals but no ledger entries yet
+        for fa in fleet_approvals:
+            p = fa.salesperson_phone
+            if p and p not in salesperson_map:
+                salesperson_map[p] = {
+                    "phone": p,
+                    "name": fa.salesperson_name or "Sales Rep",
+                    "total_shortfalls": 0.0,
+                    "total_recovered": 0.0,
+                    "net_balance": 0.0,
+                    "entries_count": 0,
+                    "trips": {fa.trip_id} if fa.trip_id else set(),
+                    "recent_date": fa.created_at.strftime("%Y-%m-%d %H:%M") if fa.created_at else ""
+                }
+            elif p and fa.trip_id:
+                salesperson_map[p]["trips"].add(fa.trip_id)
+
+        salespersons_list = []
+        for p, s in salesperson_map.items():
+            net = round(s["net_balance"], 2)
+            risk = "HEALTHY"
+            if net > 250:
+                risk = "HIGH_ALERT"
+            elif net > 0:
+                risk = "ACTIVE_PENDING"
+
+            salespersons_list.append({
+                "phone": p,
+                "name": s["name"],
+                "total_shortfalls": round(s["total_shortfalls"], 2),
+                "total_recovered": round(s["total_recovered"], 2),
+                "net_balance": net,
+                "trips_count": len(s["trips"]),
+                "entries_count": s["entries_count"],
+                "recent_date": s["recent_date"],
+                "risk_level": risk
+            })
+        salespersons_list.sort(key=lambda x: x["net_balance"], reverse=True)
+
+        # B. Trip Approvals Records & Anti-Fraud Audit
+        approval_records = []
+        fleet_stats = {
+            "total_trips": len(fleet_approvals),
+            "approved_trips": 0,
+            "shortfall_trips": 0,
+            "total_sales_value": 0.0,
+            "total_transport_charges": 0.0,
+            "total_charged_customer": 0.0,
+            "total_pending_recorded": 0.0,
+            "total_outstanding_backlog": round(sum(s["net_balance"] for s in salespersons_list if s["net_balance"] > 0), 2),
+            "total_recovered": round(sum(s["total_recovered"] for s in salespersons_list), 2),
+            "audit_flags_count": 0
+        }
+
+        cities_set = set()
+        for fa in fleet_approvals:
+            if fa.destination_city:
+                cities_set.add(fa.destination_city)
+            is_app = fa.status in ("APPROVED", "DISPATCHED")
+            if is_app:
+                fleet_stats["approved_trips"] += 1
+            if fa.has_shortfall:
+                fleet_stats["shortfall_trips"] += 1
+
+            s_val = fa.trip_sales_value or 0.0
+            t_charge = fa.transport_charge or 0.0
+            c_charged = getattr(fa, "amount_charged_to_customer", 0.0) or 0.0
+            p_rec = getattr(fa, "pending_balance_recorded", 0.0) or 0.0
+
+            fleet_stats["total_sales_value"] += s_val
+            fleet_stats["total_transport_charges"] += t_charge
+            fleet_stats["total_charged_customer"] += c_charged
+            fleet_stats["total_pending_recorded"] += p_rec
+
+            # Anti-Fraud Audit Check
+            audit_flags = []
+            if fa.has_shortfall and t_charge > 0:
+                expected_total = round(t_charge, 2)
+                declared_total = round(c_charged + p_rec, 2)
+                if abs(expected_total - declared_total) > 0.05:
+                    audit_flags.append(f"Math Mismatch: Required ${expected_total:.2f} vs Declared ${declared_total:.2f}")
+                    fleet_stats["audit_flags_count"] += 1
+
+            is_erp_grounded = bool(s_val > 0)
+            if not is_erp_grounded:
+                audit_flags.append("ERP Data Missing: Trip not validated in live Favlogix ERP")
+                fleet_stats["audit_flags_count"] += 1
+
+            approval_records.append({
+                "id": fa.id,
+                "trip_id": fa.trip_id,
+                "salesperson_name": fa.salesperson_name or "Sales Rep",
+                "salesperson_phone": fa.salesperson_phone,
+                "destination_city": fa.destination_city,
+                "route": fa.route or "--",
+                "trip_sales_value": round(s_val, 2),
+                "required_minimum": round(fa.required_minimum or 0.0, 2),
+                "shortfall": round(fa.shortfall or 0.0, 2),
+                "transport_charge": round(t_charge, 2),
+                "amount_charged_to_customer": round(c_charged, 2),
+                "pending_balance_recorded": round(p_rec, 2),
+                "dispatch_option": getattr(fa, "dispatch_option", "STANDARD"),
+                "has_shortfall": bool(fa.has_shortfall),
+                "status": fa.status,
+                "audit_flags": audit_flags,
+                "is_clean": len(audit_flags) == 0,
+                "created_at": fa.created_at.strftime("%Y-%m-%d %H:%M") if fa.created_at else "",
+                "date_only": fa.created_at.strftime("%Y-%m-%d") if fa.created_at else ""
+            })
+
+        fleet_stats["total_sales_value"] = round(fleet_stats["total_sales_value"], 2)
+        fleet_stats["total_transport_charges"] = round(fleet_stats["total_transport_charges"], 2)
+        fleet_stats["total_charged_customer"] = round(fleet_stats["total_charged_customer"], 2)
+        fleet_stats["total_pending_recorded"] = round(fleet_stats["total_pending_recorded"], 2)
+
+        # C. Detailed Ledger Entries Audit
+        ledger_records = []
+        for le in ledger_entries:
+            ledger_records.append({
+                "id": le.id,
+                "salesperson_name": le.salesperson_name or "Sales Rep",
+                "salesperson_phone": le.salesperson_phone,
+                "trip_id": le.trip_id or "--",
+                "entry_type": le.entry_type,
+                "amount": round(le.amount, 2),
+                "is_recovery": le.amount < 0,
+                "notes": le.notes or "",
+                "created_at": le.created_at.strftime("%Y-%m-%d %H:%M") if le.created_at else "",
+                "date_only": le.created_at.strftime("%Y-%m-%d") if le.created_at else ""
+            })
+
+        fleet_payload = {
+            "stats": fleet_stats,
+            "salespersons": salespersons_list,
+            "records": approval_records,
+            "ledger": ledger_records,
+            "cities": sorted(list(cities_set))
+        }
+
+    # Master Cross-Domain Executive KPI Calculation
+    active_ops = 0
+    resolved_ops = 0
+    total_ops = 0
+    if it_payload:
+        active_ops += (it_payload["stats"]["open"] + it_payload["stats"]["in_progress"])
+        resolved_ops += (it_payload["stats"]["resolved"] + it_payload["stats"]["closed"])
+        total_ops += it_payload["stats"]["total"]
+    if projects_payload:
+        active_ops += (projects_payload["stats"]["open"] + projects_payload["stats"]["in_progress"])
+        resolved_ops += (projects_payload["stats"]["resolved"] + projects_payload["stats"]["closed"])
+        total_ops += projects_payload["stats"]["total"]
+    if logistics_payload:
+        active_ops += (logistics_payload["stats"]["in_workshop"] + logistics_payload["stats"]["under_review"] + logistics_payload["stats"]["awaiting_parts"])
+        resolved_ops += logistics_payload["stats"]["closed_fleet"]
+        total_ops += len(logistics_payload["records"])
+    if fleet_payload:
+        active_ops += (fleet_payload["stats"]["shortfall_trips"] - fleet_payload["stats"]["approved_trips"] if fleet_payload["stats"]["shortfall_trips"] > fleet_payload["stats"]["approved_trips"] else 0)
+        resolved_ops += fleet_payload["stats"]["approved_trips"]
+        total_ops += fleet_payload["stats"]["total_trips"]
+
+    res_rate = int((resolved_ops / total_ops) * 100) if total_ops > 0 else 100
+    master_kpis = {
+        "active_operations": active_ops,
+        "resolved_operations": resolved_ops,
+        "total_operations": total_ops,
+        "resolution_rate_pct": res_rate,
+        "total_financial_backlog": fleet_payload["stats"]["total_outstanding_backlog"] if fleet_payload else 0.0,
+        "transport_revenue": fleet_payload["stats"]["total_transport_charges"] if fleet_payload else 0.0
+    }
+
     return {
         "user": {
             "username": user["username"],
@@ -510,9 +715,11 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "role": user["role"],
             "allowed_domains": allowed
         },
+        "master_kpis": master_kpis,
         "it": it_payload,
         "projects": projects_payload,
-        "logistics": logistics_payload
+        "logistics": logistics_payload,
+        "fleet": fleet_payload
     }
 
 # -------------------------------------------------------------
@@ -525,17 +732,19 @@ async def dashboard_view(request: Request):
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    allowed = user.get("allowed_domains", ["it", "projects", "logistics"])
-    default_tab = "logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it")
+    allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet"])
+    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
 
     # Generate navigation tab buttons based on allowed domains
     tabs_html = []
+    if "fleet" in allowed:
+        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Fleet Approval</button>')
     if "it" in allowed:
         tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>💻</span> IT Support</button>')
     if "projects" in allowed:
         tabs_html.append('<button id="btn-tab-projects" onclick="switchDomain(\'projects\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🏗️</span> Building Projects</button>')
     if "logistics" in allowed:
-        tabs_html.append('<button id="btn-tab-logistics" onclick="switchDomain(\'logistics\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Workshop & Fleet</button>')
+        tabs_html.append('<button id="btn-tab-logistics" onclick="switchDomain(\'logistics\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🔧</span> Workshop Fleet</button>')
 
     nav_tabs_markup = "\n".join(tabs_html)
     allowed_domains_json = str(allowed).replace("'", '"')
@@ -631,6 +840,46 @@ async def dashboard_view(request: Request):
 
     <!-- Main Content Container -->
     <main class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8 space-y-6 sm:space-y-8">
+
+        <!-- Executive Master Cross-Task KPI Banner -->
+        <div id="master-kpi-banner" class="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white rounded-3xl p-5 sm:p-7 shadow-lg border border-slate-800">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4 mb-5">
+                <div>
+                    <div class="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 border border-blue-400/30 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase mb-1.5">
+                        ⚡ Tagoneswa Master Operations Console
+                    </div>
+                    <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Task & Fleet Command Center</h2>
+                </div>
+                <div class="flex items-center gap-3 text-xs text-slate-300">
+                    <span class="flex items-center gap-1.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-xl font-bold">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live System Sync
+                    </span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Active Tasks</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-400 mt-1" id="master-active-ops">0</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Across all departments</div>
+                </div>
+                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Clearance Rate</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1" id="master-res-rate">100%</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Completed vs logged</div>
+                </div>
+                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Transport Billed</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1" id="master-transport-revenue">$0.00</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Shortfall recovery charges</div>
+                </div>
+                <div class="bg-slate-800/60 backdrop-blur border border-slate-700/60 rounded-2xl p-4">
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Salesperson Debt Backlog</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1" id="master-financial-backlog">$0.00</div>
+                    <div class="text-[11px] text-slate-400 mt-0.5 font-medium">Pending shortfall recovery</div>
+                </div>
+            </div>
+        </div>
 
         <!-- ========================================================= -->
         <!-- TAB 1: IT SUPPORT (Rendered only if permitted) -->
@@ -913,6 +1162,173 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
         </div>
+
+        <!-- ========================================================= -->
+        <!-- TAB 4: FLEET APPROVAL & ANTI-FRAUD SALES AUDIT -->
+        <!-- ========================================================= -->
+        <div id="view-fleet" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'fleet' in allowed and default_tab == 'fleet' else 'none'}">
+            <!-- Fleet Approval Top Stats Cards -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Total Trips Verified</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 mt-1.5" id="fleet-stat-trips">0</div>
+                    <div class="text-[11px] sm:text-xs text-blue-600 font-semibold mt-1" id="fleet-stat-sales-val">$0.00 ERP Sales</div>
+                </div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Approved for Dispatch</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 mt-1.5" id="fleet-stat-approved">0</div>
+                    <div class="text-[11px] sm:text-xs text-emerald-600 font-semibold mt-1">Cleared Trips</div>
+                </div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Shortfalls Detected</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 mt-1.5" id="fleet-stat-shortfalls">0</div>
+                    <div class="text-[11px] sm:text-xs text-amber-600 font-semibold mt-1">Below City Threshold</div>
+                </div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Transport Charges</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 mt-1.5" id="fleet-stat-transport">$0.00</div>
+                    <div class="text-[11px] sm:text-xs text-indigo-600 font-semibold mt-1">Total Fee Assessed</div>
+                </div>
+                <div class="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs col-span-2 sm:col-span-1">
+                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400">Salesperson Debt</div>
+                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 mt-1.5" id="fleet-stat-backlog">$0.00</div>
+                    <div class="text-[11px] sm:text-xs text-rose-600 font-semibold mt-1">Pending Shortfall Ledger</div>
+                </div>
+            </div>
+
+            <!-- Salesperson Pending Balance & Performance Grid -->
+            <div class="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
+                    <div>
+                        <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                            <span>👥</span> Salesperson Outstanding Balance & Recovery Audit
+                        </h2>
+                        <p class="text-[11px] text-slate-500 mt-0.5">Real-time balances tracked per sales representative</p>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xs font-bold text-slate-500">Total Pending Backlog: </span>
+                        <span class="text-sm font-extrabold text-rose-600 font-mono" id="fleet-total-pending-pill">$0.00</span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4" id="fleet-salesperson-cards">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Daily Anti-Fraud Reconciliation & Ledger Audit Panel -->
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div class="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/75">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <div class="inline-flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider mb-1">
+                                🛡️ Anti-Cheating & Parity Guard
+                            </div>
+                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900">
+                                Daily Recovery & Shortfall Audit Ledger
+                            </h3>
+                            <p class="text-[11px] text-slate-500">Cross-verifies customer charges and ledger declarations against Favlogix ERP</p>
+                        </div>
+
+                        <!-- Date Filters -->
+                        <div class="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-300 self-start md:self-auto">
+                            <button onclick="setAuditTimeframe('ALL')" id="timeframe-btn-ALL" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 text-white transition">All Dates</button>
+                            <button onclick="setAuditTimeframe('TODAY')" id="timeframe-btn-TODAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">Today</button>
+                            <button onclick="setAuditTimeframe('YESTERDAY')" id="timeframe-btn-YESTERDAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">Yesterday</button>
+                            <button onclick="setAuditTimeframe('WEEK')" id="timeframe-btn-WEEK" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 transition">Last 7 Days</button>
+                        </div>
+                    </div>
+
+                    <!-- Daily Audit Metrics Bar -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-200/80">
+                        <div class="bg-white border border-slate-200 rounded-xl p-3">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Customer Paid</div>
+                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 font-mono mt-0.5" id="audit-stat-customer-paid">$0.00</div>
+                            <div class="text-[10px] text-slate-500">Collected at dispatch</div>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-xl p-3">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Deferred to Ledger</div>
+                            <div class="text-base sm:text-lg font-extrabold text-amber-600 font-mono mt-0.5" id="audit-stat-deferred">$0.00</div>
+                            <div class="text-[10px] text-slate-500">Added to sales debt</div>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-xl p-3">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Surplus Recovered</div>
+                            <div class="text-base sm:text-lg font-extrabold text-purple-600 font-mono mt-0.5" id="audit-stat-recovered">$0.00</div>
+                            <div class="text-[10px] text-slate-500">Cleared from debt</div>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-xl p-3">
+                            <div class="text-[10px] font-bold text-slate-400 uppercase">Audit Alert Flags</div>
+                            <div class="text-base sm:text-lg font-extrabold text-slate-800 font-mono mt-0.5" id="audit-stat-flags">0</div>
+                            <div class="text-[10px] text-slate-500" id="audit-stat-flags-note">100% Math Match</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ledger Audit Table -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[760px]">
+                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3">Date</th>
+                                <th class="px-4 sm:px-5 py-3">Salesperson</th>
+                                <th class="px-4 sm:px-5 py-3">Trip Ref</th>
+                                <th class="px-4 sm:px-5 py-3">Transaction Type</th>
+                                <th class="px-4 sm:px-5 py-3">Amount</th>
+                                <th class="px-4 sm:px-5 py-3">Audit Details & Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-ledger-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Fleet Trip Approvals Master Table Section -->
+            <div class="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/50">
+                    <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+                        <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable()" class="bg-white border border-slate-300 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64">
+                        
+                        <!-- City Filter -->
+                        <select id="fleet-city-filter" onchange="filterFleetApprovalsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                            <option value="ALL">All Destination Cities</option>
+                        </select>
+
+                        <!-- Status Filter -->
+                        <select id="fleet-status-filter" onchange="filterFleetApprovalsTable()" class="bg-white border border-slate-300 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto">
+                            <option value="ALL">All Statuses</option>
+                            <option value="APPROVED">Approved for Dispatch</option>
+                            <option value="SHORTFALL_RECORDED">Shortfall Pending Resolution</option>
+                            <option value="DISPATCHED">Dispatched</option>
+                        </select>
+                    </div>
+
+                    <div class="flex items-center justify-between sm:justify-end gap-2">
+                        <span id="fleet-count-badge" class="bg-blue-50 text-blue-700 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-full">
+                            Showing 0 trips
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[850px]">
+                        <thead class="bg-slate-100/75 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3.5">Trip ID</th>
+                                <th class="px-4 sm:px-5 py-3.5">Salesperson</th>
+                                <th class="px-4 sm:px-5 py-3.5">Destination & Route</th>
+                                <th class="px-4 sm:px-5 py-3.5">ERP Valuation</th>
+                                <th class="px-4 sm:px-5 py-3.5">Shortfall / Transport</th>
+                                <th class="px-4 sm:px-5 py-3.5">Settlement (Customer vs Debt)</th>
+                                <th class="px-4 sm:px-5 py-3.5">Audit Check</th>
+                                <th class="px-4 sm:px-5 py-3.5">Status</th>
+                                <th class="px-4 sm:px-5 py-3.5">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-approvals-table-body" class="divide-y divide-slate-200 text-slate-700"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </main>
 
     <script>
@@ -1002,9 +1418,11 @@ async def dashboard_view(request: Request):
                     if (uRole) uRole.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> ${{data.user.role.replace('_', ' ')}}`;
                 }}
 
+                if (data.master_kpis) renderMasterKPIs(data.master_kpis);
                 if (data.it) renderIT(data.it);
                 if (data.projects) renderProjects(data.projects);
                 if (data.logistics) renderLogistics(data.logistics);
+                if (data.fleet) renderFleet(data.fleet);
 
                 const allowed = (data.user && data.user.allowed_domains) || initialAllowedDomains;
                 let hash = window.location.hash.replace('#', '');
@@ -1286,6 +1704,264 @@ async def dashboard_view(request: Request):
                         </tr>
                     `;
                 }}).join('');
+            }}
+        }}
+
+        let currentAuditTimeframe = 'ALL';
+
+        function renderMasterKPIs(kpis) {{
+            if (!kpis) return;
+            const elActive = document.getElementById('master-active-ops');
+            if (elActive) elActive.textContent = kpis.active_operations;
+            const elRate = document.getElementById('master-res-rate');
+            if (elRate) elRate.textContent = kpis.resolution_rate_pct + '%';
+            const elRev = document.getElementById('master-transport-revenue');
+            if (elRev) elRev.textContent = '$' + Number(kpis.transport_revenue).toFixed(2);
+            const elBacklog = document.getElementById('master-financial-backlog');
+            if (elBacklog) elBacklog.textContent = '$' + Number(kpis.total_financial_backlog).toFixed(2);
+        }}
+
+        function setAuditTimeframe(tf) {{
+            currentAuditTimeframe = tf;
+            document.querySelectorAll('.audit-tf-btn').forEach(btn => {{
+                btn.classList.remove('bg-blue-600', 'text-white');
+                btn.classList.add('text-slate-600', 'hover:text-slate-900');
+            }});
+            const activeBtn = document.getElementById('timeframe-btn-' + tf);
+            if (activeBtn) {{
+                activeBtn.classList.add('bg-blue-600', 'text-white');
+                activeBtn.classList.remove('text-slate-600', 'hover:text-slate-900');
+            }}
+            if (cachedData && cachedData.fleet) {{
+                filterLedgerTable();
+            }}
+        }}
+
+        function renderFleet(fleet) {{
+            if (!fleet) return;
+            // 1. Top Stats Cards
+            document.getElementById('fleet-stat-trips').textContent = fleet.stats.total_trips;
+            document.getElementById('fleet-stat-sales-val').textContent = '$' + Number(fleet.stats.total_sales_value).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}) + ' ERP Sales';
+            document.getElementById('fleet-stat-approved').textContent = fleet.stats.approved_trips;
+            document.getElementById('fleet-stat-shortfalls').textContent = fleet.stats.shortfall_trips;
+            document.getElementById('fleet-stat-transport').textContent = '$' + Number(fleet.stats.total_transport_charges).toFixed(2);
+            document.getElementById('fleet-stat-backlog').textContent = '$' + Number(fleet.stats.total_outstanding_backlog).toFixed(2);
+            document.getElementById('fleet-total-pending-pill').textContent = '$' + Number(fleet.stats.total_outstanding_backlog).toFixed(2);
+
+            // 2. Salesperson Pending Balance & Audit Cards
+            const spCardsContainer = document.getElementById('fleet-salesperson-cards');
+            if (spCardsContainer && fleet.salespersons) {{
+                if (fleet.salespersons.length === 0) {{
+                    spCardsContainer.innerHTML = '<div class="text-xs text-slate-400 p-3 col-span-full">No salesperson ledger records yet.</div>';
+                }} else {{
+                    spCardsContainer.innerHTML = fleet.salespersons.map(sp => {{
+                        let badgeClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                        let badgeText = '🟢 Cleared / Healthy';
+                        if (sp.risk_level === 'HIGH_ALERT') {{
+                            badgeClass = 'bg-red-100 text-red-800 border-red-200 font-bold';
+                            badgeText = '🔴 High Debt Alert';
+                        }} else if (sp.risk_level === 'ACTIVE_PENDING') {{
+                            badgeClass = 'bg-amber-100 text-amber-800 border-amber-200 font-semibold';
+                            badgeText = '🟡 Pending Recovery';
+                        }}
+
+                        return `
+                            <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between hover:shadow-sm transition">
+                                <div>
+                                    <div class="flex items-start justify-between gap-1">
+                                        <div>
+                                            <div class="font-extrabold text-slate-900 text-sm">${{sp.name}}</div>
+                                            <div class="text-[11px] text-slate-500 font-mono">+${{sp.phone}}</div>
+                                        </div>
+                                        <span class="text-[10px] px-2 py-0.5 rounded-full border ${{badgeClass}}">${{badgeText}}</span>
+                                    </div>
+                                    <div class="mt-3.5 bg-white border border-slate-200 rounded-lg p-2.5">
+                                        <div class="text-[10px] uppercase font-bold text-slate-400">Current Outstanding Debt</div>
+                                        <div class="text-xl font-extrabold font-mono ${{sp.net_balance > 0 ? 'text-rose-600' : 'text-emerald-600'}} mt-0.5">
+                                            $${{sp.net_balance.toFixed(2)}}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mt-3 pt-2.5 border-t border-slate-200/80 flex items-center justify-between text-[11px] text-slate-600">
+                                    <span>Accrued: <strong class="text-rose-600">$${{sp.total_shortfalls.toFixed(2)}}</strong></span>
+                                    <span>Recovered: <strong class="text-emerald-600">$${{sp.total_recovered.toFixed(2)}}</strong></span>
+                                </div>
+                            </div>
+                        `;
+                    }}).join('');
+                }}
+            }}
+
+            // 3. Populate City Filter dropdown
+            const cityFilter = document.getElementById('fleet-city-filter');
+            if (cityFilter && fleet.cities) {{
+                const curCity = cityFilter.value;
+                cityFilter.innerHTML = '<option value="ALL">All Destination Cities</option>' + fleet.cities.map(c => `
+                    <option value="${{c}}" ${{curCity === c ? 'selected' : ''}}>${{c}}</option>
+                `).join('');
+            }}
+
+            filterLedgerTable();
+            filterFleetApprovalsTable();
+        }}
+
+        function filterLedgerTable() {{
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.ledger) return;
+            const entries = cachedData.fleet.ledger;
+
+            const todayStr = new Date().toISOString().substring(0, 10);
+            const yesterdayObj = new Date();
+            yesterdayObj.setDate(yesterdayObj.getDate() - 1);
+            const yesterdayStr = yesterdayObj.toISOString().substring(0, 10);
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+            let filtered = entries.filter(e => {{
+                if (currentAuditTimeframe === 'TODAY') {{
+                    return e.date_only === todayStr;
+                }} else if (currentAuditTimeframe === 'YESTERDAY') {{
+                    return e.date_only === yesterdayStr;
+                }} else if (currentAuditTimeframe === 'WEEK') {{
+                    return new Date(e.date_only) >= sevenDaysAgo;
+                }}
+                return true;
+            }});
+
+            // Calculate daily audit metrics
+            let paidTotal = 0;
+            let deferredTotal = 0;
+            let recoveredTotal = 0;
+            let alertCount = 0;
+
+            filtered.forEach(e => {{
+                if (e.is_recovery) {{
+                    recoveredTotal += Math.abs(e.amount);
+                }} else {{
+                    deferredTotal += e.amount;
+                }}
+            }});
+
+            // Count alerts across approvals matching current timeframe
+            if (cachedData.fleet.records) {{
+                cachedData.fleet.records.forEach(r => {{
+                    let inTf = true;
+                    if (currentAuditTimeframe === 'TODAY') inTf = (r.date_only === todayStr);
+                    else if (currentAuditTimeframe === 'YESTERDAY') inTf = (r.date_only === yesterdayStr);
+                    else if (currentAuditTimeframe === 'WEEK') inTf = (new Date(r.date_only) >= sevenDaysAgo);
+
+                    if (inTf) {{
+                        paidTotal += (r.amount_charged_to_customer || 0);
+                        if (!r.is_clean) alertCount += r.audit_flags.length;
+                    }}
+                }});
+            }}
+
+            document.getElementById('audit-stat-customer-paid').textContent = '$' + paidTotal.toFixed(2);
+            document.getElementById('audit-stat-deferred').textContent = '$' + deferredTotal.toFixed(2);
+            document.getElementById('audit-stat-recovered').textContent = '$' + recoveredTotal.toFixed(2);
+            const alertEl = document.getElementById('audit-stat-flags');
+            const alertNote = document.getElementById('audit-stat-flags-note');
+            alertEl.textContent = alertCount;
+            if (alertCount > 0) {{
+                alertEl.className = 'text-base sm:text-lg font-extrabold text-red-600 font-mono mt-0.5';
+                alertNote.innerHTML = '<span class="text-red-600 font-bold">⚠️ Discrepancy Found</span>';
+            }} else {{
+                alertEl.className = 'text-base sm:text-lg font-extrabold text-emerald-600 font-mono mt-0.5';
+                alertNote.innerHTML = '<span class="text-emerald-600 font-semibold">100% Math Match</span>';
+            }}
+
+            const tbody = document.getElementById('fleet-ledger-table-body');
+            if (tbody) {{
+                if (filtered.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-4 text-center text-slate-400">No ledger transactions in this timeframe.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = filtered.map(e => {{
+                        const isRec = e.is_recovery;
+                        const amtClass = isRec ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+                        const sign = isRec ? '-' : '+';
+                        const typeBadge = isRec
+                            ? '<span class="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">SURPLUS RECOVERY</span>'
+                            : '<span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">SHORTFALL DEFICIT</span>';
+
+                        return `
+                            <tr class="hover:bg-slate-50/80 transition">
+                                <td class="px-4 sm:px-5 py-3 text-slate-500 font-mono text-[11px]">${{e.created_at}}</td>
+                                <td class="px-4 sm:px-5 py-3"><strong>${{e.salesperson_name}}</strong><br><small class="text-slate-400 font-mono">+${{e.salesperson_phone}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 font-mono font-bold text-blue-600">${{e.trip_id}}</td>
+                                <td class="px-4 sm:px-5 py-3">${{typeBadge}}</td>
+                                <td class="px-4 sm:px-5 py-3 font-mono ${{amtClass}}">${{sign}}$${{Math.abs(e.amount).toFixed(2)}}</td>
+                                <td class="px-4 sm:px-5 py-3 text-slate-600">${{e.notes || '--'}}</td>
+                            </tr>
+                        `;
+                    }}).join('');
+                }}
+            }}
+        }}
+
+        function filterFleetApprovalsTable() {{
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.records) return;
+            const q = document.getElementById('fleet-search').value.toLowerCase().trim();
+            const cityFilter = document.getElementById('fleet-city-filter').value;
+            const statusFilter = document.getElementById('fleet-status-filter').value;
+
+            let records = cachedData.fleet.records.filter(r => {{
+                const matchesQ = !q || r.trip_id.toLowerCase().includes(q) ||
+                                 r.salesperson_name.toLowerCase().includes(q) ||
+                                 r.salesperson_phone.toLowerCase().includes(q) ||
+                                 r.destination_city.toLowerCase().includes(q) ||
+                                 r.route.toLowerCase().includes(q);
+                const matchesCity = cityFilter === 'ALL' || r.destination_city === cityFilter;
+                const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
+                return matchesQ && matchesCity && matchesStatus;
+            }});
+
+            // Enforce newest first
+            records.sort((a, b) => (b.id || 0) - (a.id || 0));
+
+            document.getElementById('fleet-count-badge').textContent = `Showing ${{records.length}} of ${{cachedData.fleet.records.length}} trips`;
+
+            const tbody = document.getElementById('fleet-approvals-table-body');
+            if (tbody) {{
+                if (records.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-4 text-center text-slate-400">No matching trip approvals found.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = records.map(r => {{
+                        let statusBadge = 'bg-blue-100 text-blue-800 border-blue-200';
+                        if (r.status === 'APPROVED' || r.status === 'DISPATCHED') statusBadge = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+                        else if (r.status === 'SHORTFALL_RECORDED') statusBadge = 'bg-amber-100 text-amber-800 border-amber-200';
+
+                        let auditBadge = '<span class="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit">✅ Verified Parity</span>';
+                        if (!r.is_clean) {{
+                            auditBadge = `<span class="bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded flex items-center gap-1 w-fit" title="${{r.audit_flags.join('; ')}}">⚠️ Audit Alert (${{r.audit_flags.length}})</span>`;
+                        }}
+
+                        return `
+                            <tr class="hover:bg-slate-50/80 transition">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600">${{r.trip_id}}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong>${{r.salesperson_name}}</strong><br><small class="text-slate-400 font-mono">+${{r.salesperson_phone}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><span class="font-bold text-slate-800">📍 ${{r.destination_city}}</span><br><small class="text-slate-500">${{r.route}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono">
+                                    <span class="font-bold ${{r.trip_sales_value >= r.required_minimum ? 'text-emerald-600' : 'text-slate-900'}}">$${{r.trip_sales_value.toFixed(2)}}</span>
+                                    <br><small class="text-slate-400">Min: $${{r.required_minimum.toFixed(2)}}</small>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono">
+                                    ${{r.has_shortfall ? `<span class="text-rose-600 font-bold">-$${{r.shortfall.toFixed(2)}}</span><br><small class="text-indigo-600 font-bold">Fee: $${{r.transport_charge.toFixed(2)}}</small>` : '<span class="text-emerald-600 font-bold">Compliant (No Fee)</span>'}}
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-xs">
+                                    ${{r.has_shortfall ? `
+                                        <span>Customer Paid: <strong class="text-emerald-700 font-mono">$${{r.amount_charged_to_customer.toFixed(2)}}</strong></span><br>
+                                        <span>Debt Added: <strong class="text-amber-700 font-mono">$${{r.pending_balance_recorded.toFixed(2)}}</strong></span>
+                                    ` : '<span class="text-slate-400">Direct Clearance</span>'}}
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5">${{auditBadge}}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5">
+                                    <span class="px-2.5 py-1 rounded-full text-[10px] font-bold border ${{statusBadge}}">${{r.status.replace('_', ' ')}}</span>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500 text-[11px] font-mono">${{r.created_at}}</td>
+                            </tr>
+                        `;
+                    }}).join('');
+                }}
             }}
         }}
 
