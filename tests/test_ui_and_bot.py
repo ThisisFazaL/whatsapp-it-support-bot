@@ -37,6 +37,28 @@ async def test_dashboard_and_auth():
         assert "localStorage.getItem('tagoneswa_theme')" in html
         print("✅ Dark/Light theme toggle controls and persistence script verified")
 
+        # Verify Pure OLED Black Theme & Widescreen Enterprise Container
+        assert "max-w-[1780px]" in html, "Widescreen fluid layout max-w-[1780px] missing!"
+        assert ("dark:bg-black" in html or "dark:bg-[#000000]" in html), "Pure OLED pitch black dark:bg-black missing!"
+        print("✅ Pure OLED black theme & widescreen enterprise fluid layout verified")
+
+        # Verify Technician Performance Cards at Top (Above Tickets Table)
+        admin_cards_pos = html.find('id="it-admin-cards"')
+        it_table_pos = html.find('id="it-table-card"')
+        assert admin_cards_pos != -1 and it_table_pos != -1
+        assert admin_cards_pos < it_table_pos, "Technician SLA cards must appear ABOVE the 100-ticket table!"
+        assert "filterByITAdmin" in html, "Interactive click-to-filter technician helper missing!"
+        print("✅ Technician performance SLA cards verified at top above tickets table")
+
+        # Verify 15-per-page Pagination Controls across all 5 tables
+        assert 'id="it-pagination-controls"' in html
+        assert 'id="proj-pagination-controls"' in html
+        assert 'id="ws-pagination-controls"' in html
+        assert 'id="ledger-pagination-controls"' in html
+        assert 'id="fleet-pagination-controls"' in html
+        assert "renderPaginationControls" in html
+        print("✅ 15-per-page pagination controls verified across all 5 dashboard views")
+
         # 3. Test API data
         data_res = await client.get("/api/dashboard/data", cookies=cookies)
         assert data_res.status_code == 200
