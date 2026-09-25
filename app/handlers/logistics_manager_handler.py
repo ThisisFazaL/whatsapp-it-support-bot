@@ -31,12 +31,15 @@ async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: 
     if not trip:
         return
 
+    from app.handlers.fleet_approval_handler import get_solo_test_mode
+    is_solo = get_solo_test_mode()
     mgr_phone = clean_phone(settings.logistics_manager_phone)
+    tag = "🎭 *[SOLO TEST: SIMULATING LOGISTICS MANAGER]*\n" if is_solo else ""
 
     if abs(trip.discrepancy_amount) > 0.01:
         header = "TRIP ADJUDICATION"
         body = (
-            "TRIP ADJUDICATION NEEDED\n"
+            f"{tag}TRIP ADJUDICATION NEEDED\n"
             "────────────────────\n"
             f"Company: {trip.company_name}\n"
             f"Trip: {trip.trip_id} | Route: {trip.route or trip.destination_city}\n"
@@ -54,7 +57,7 @@ async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: 
     else:
         header = "TRIP CLOSURE"
         body = (
-            "TRIP READY FOR CLOSURE\n"
+            f"{tag}TRIP READY FOR CLOSURE\n"
             "────────────────────\n"
             f"Company: {trip.company_name}\n"
             f"Trip: {trip.trip_id} | Route: {trip.route or trip.destination_city}\n"
@@ -68,9 +71,10 @@ async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: 
             {"id": f"flt_mgr_close_{trip.trip_id}", "title": "Close Trip"}
         ]
 
-    recipients = {mgr_phone}
-    if getattr(settings, "test_user_role", "").upper() == "LOGISTICS_MANAGER":
+    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {mgr_phone}
+    if not is_solo and getattr(settings, "test_user_role", "").upper() == "LOGISTICS_MANAGER":
         recipients.add(clean_phone(settings.master_admin_phone))
+
 
     for r in recipients:
         if r:
@@ -137,13 +141,6 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
     else:
         operational_recipients.add(clean_phone(settings.sales_admin_tg_phone))
 
-    for rec_phone in operational_recipients:
-        if rec_phone:
-            try:
-                await meta_api.send_text_message(rec_phone, operational_msg)
-            except Exception as e:
-                logger.warning(f"Could not deliver closed broadcast to {rec_phone}: {e}")
-
     # Executive confidential report to Master / Fleet Admin (Sujit) with full metrics
     exec_msg = (
         "👑 *EXECUTIVE AUDIT: TRIP CLOSED*\n"
@@ -155,6 +152,29 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
         "────────────────────\n"
         "Operational staff notified with sales total concealed."
     )
+
+    from app.handlers.fleet_approval_handler import get_solo_test_mode
+    is_solo = get_solo_test_mode()
+    if is_solo:
+        admin_p = clean_phone(settings.master_admin_phone)
+        await meta_api.send_text_message(
+            admin_p,
+            f"🎭 *[SOLO TEST: OPERATIONAL BROADCAST (SALES TOTAL CONCEALED)]*\n{operational_msg}"
+        )
+        await meta_api.send_text_message(
+            admin_p,
+            f"🎭 *[SOLO TEST: EXECUTIVE AUDIT COPY (CONFIDENTIAL SALES INCLUDED)]*\n{exec_msg}"
+        )
+        logger.info(f"Delivered both solo test closure broadcasts for {trip_id} to Master Admin")
+        return
+
+    for rec_phone in operational_recipients:
+        if rec_phone:
+            try:
+                await meta_api.send_text_message(rec_phone, operational_msg)
+            except Exception as e:
+                logger.warning(f"Could not deliver closed broadcast to {rec_phone}: {e}")
+
     admin_phones = {clean_phone(settings.fleet_admin_phone), clean_phone(settings.master_admin_phone)}
     for ap in admin_phones:
         if ap:
@@ -162,6 +182,7 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
                 await meta_api.send_text_message(ap, exec_msg)
             except Exception as e:
                 logger.warning(f"Could not deliver executive closed report to {ap}: {e}")
+
 
 
 async def handle_logistics_manager_interaction(

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     master_admin_phone: str = "919265368695"
     fleet_admin_phone: str = "263718352518"  # Sujit (+263 71 835 2518) receives all sales fleet activity alerts
     test_user_role: str = "SALES"  # Set to "SALES" to test Fleet Approval; "MASTER_ADMIN" to revert in one word
+    solo_test_mode: bool = True  # When True, all 7 fleet stages route to master_admin_phone for 1-person end-to-end sandbox testing
+
 
     # Fleet Subsystem Roles & Operational Phones
     zayn_phone: str = "263713866223"

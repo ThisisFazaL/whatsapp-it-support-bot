@@ -26,6 +26,20 @@ GLOBAL_RESET_KEYWORDS = {
 # In-memory role override cache for instant WhatsApp one-word role toggling
 # Allows +919265368695 to switch live between "SALES" and "MASTER_ADMIN" via chat
 SESSION_ROLE_OVERRIDES: Dict[str, str] = {}
+SOLO_TEST_OVERRIDE: Optional[bool] = None
+
+
+def get_solo_test_mode() -> bool:
+    global SOLO_TEST_OVERRIDE
+    if SOLO_TEST_OVERRIDE is not None:
+        return SOLO_TEST_OVERRIDE
+    return getattr(settings, "solo_test_mode", True)
+
+
+def set_solo_test_mode(enabled: bool):
+    global SOLO_TEST_OVERRIDE
+    SOLO_TEST_OVERRIDE = enabled
+
 
 
 def is_valid_phone(phone_str: Optional[str]) -> bool:
@@ -118,7 +132,47 @@ async def handle_role_switch_command(session: AsyncSession, phone: str, message_
         return False
 
     cmd = message_text.strip().lower()
-    if cmd in {"role sales", "switch sales", "mode sales", "test sales"}:
+    if cmd in {"mode solo", "test solo", "solo mode", "solo on", "sandbox"}:
+        set_solo_test_mode(True)
+        SESSION_ROLE_OVERRIDES[clean_phone] = "SALES"
+        await clear_user_state(session, clean_phone)
+        notice = (
+            "🎭 *1-PERSON SOLO TEST SANDBOX ACTIVE* 🟢\n"
+            "────────────────────\n"
+            "You can now test the **entire A-Z 7-stage workflow** completely alone from this phone number!\n\n"
+            "📱 *How it works:*\n"
+            "• You play **every role sequentially** directly in this WhatsApp chat!\n"
+            "• Stage 1: Sales Rep (Submit trip)\n"
+            "• Stage 3: Edward (Allocate vehicle & driver)\n"
+            "• Stage 4: Zayn (Approve allowance) & Accounts (Confirm payout)\n"
+            "• Stage 5: Driver (Departure, live transit, customer payment, fuel video)\n"
+            "• Stage 6: Sales Admin (Physical balancing)\n"
+            "• Stage 7: Logistics Manager (Adjudication & closed broadcast)\n\n"
+            "🚫 *Real staff are NOT messaged* — all alerts come directly to you.\n\n"
+            "💡 To exit solo mode anytime, reply `mode live`.\n"
+            "👉 Please select an option below to start:"
+        )
+        await meta_api.send_text_message(clean_phone, notice)
+        emp_res = await session.execute(select(Employee).where(Employee.phone == clean_phone))
+        emp = emp_res.scalars().first()
+        await send_sales_portal_menu(session, clean_phone, emp)
+        return True
+
+    elif cmd in {"mode live", "test live", "live mode", "solo off"}:
+        set_solo_test_mode(False)
+        notice = (
+            "🏢 *LIVE PRODUCTION MODE RESTORED* 🔴\n"
+            "────────────────────\n"
+            "Notifications will now route to real staff numbers:\n"
+            f"• Edward: `+{settings.edward_phone}`\n"
+            f"• Zayn: `+{settings.zayn_phone}`\n"
+            f"• Fleet Admin: `+{settings.fleet_admin_phone}`\n\n"
+            "💡 Reply `mode solo` anytime to return to 1-person sandbox testing."
+        )
+        await meta_api.send_text_message(clean_phone, notice)
+        return True
+
+    elif cmd in {"role sales", "switch sales", "mode sales", "test sales"}:
         SESSION_ROLE_OVERRIDES[clean_phone] = "SALES"
         await clear_user_state(session, clean_phone)
         notice = (

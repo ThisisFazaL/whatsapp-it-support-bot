@@ -56,9 +56,12 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
         emg_lines.append(f"• {e.charge_type}: ${e.amount:,.2f} ({e.description or ''})")
     emg_text = "\n".join(emg_lines) if emg_lines else "• None"
 
+    from app.handlers.fleet_approval_handler import get_solo_test_mode
+    is_solo = get_solo_test_mode()
     header = "BALANCING SESSION"
+    tag = "🎭 *[SOLO TEST: SIMULATING SALES ADMIN]*\n" if is_solo else ""
     body = (
-        "PHYSICAL BALANCING SESSION\n"
+        f"{tag}PHYSICAL BALANCING SESSION\n"
         "────────────────────\n"
         f"Company: {trip.company_name}\n"
         f"Trip: {trip.trip_id} | Route: {trip.route or trip.destination_city}\n"
@@ -80,9 +83,10 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
         {"id": f"flt_adm_unbal_{trip.trip_id}", "title": "Not Balancing"}
     ]
 
-    recipients = {admin_phone}
-    if getattr(settings, "test_user_role", "").upper() == "SALES_ADMIN":
+    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {admin_phone}
+    if not is_solo and getattr(settings, "test_user_role", "").upper() == "SALES_ADMIN":
         recipients.add(clean_phone(settings.master_admin_phone))
+
 
     for r in recipients:
         if r:

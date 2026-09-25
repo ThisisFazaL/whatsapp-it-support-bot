@@ -38,10 +38,13 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
     if not trip:
         return
 
+    from app.handlers.fleet_approval_handler import get_solo_test_mode
+    is_solo = get_solo_test_mode()
     edw_phone = clean_phone(settings.edward_phone)
     header = "NEW TRIP DISPATCH"
+    tag = "🎭 *[SOLO TEST: SIMULATING EDWARD]*\n" if is_solo else ""
     body = (
-        "NEW TRIP DISPATCH ALLOCATION\n"
+        f"{tag}NEW TRIP DISPATCH ALLOCATION\n"
         "────────────────────\n"
         f"Company: {trip.company_name}\n"
         f"Trip: {trip.trip_id}\n"
@@ -56,10 +59,11 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
         {"id": "flt_edw_queue", "title": "Trip Queue"}
     ]
 
-    # Deliver to Edward (and master admin if configured)
-    recipients = {edw_phone}
-    if getattr(settings, "test_user_role", "").upper() == "EDWARD":
+    # In solo mode, deliver exclusively to Master Admin
+    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {edw_phone}
+    if not is_solo and getattr(settings, "test_user_role", "").upper() == "EDWARD":
         recipients.add(clean_phone(settings.master_admin_phone))
+
 
     for r in recipients:
         if r:
