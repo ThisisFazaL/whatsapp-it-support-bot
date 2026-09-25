@@ -8,16 +8,15 @@ from app.database import (
     FleetTripRequest,
     get_fleet_trip_request_by_id
 )
-from app.state_manager import set_user_state, clear_user_state, get_user_state
+from app.state_manager import set_user_state, clear_user_state, get_user_state, normalize_phone_number
 from app.meta_api import meta_api
 
 logger = logging.getLogger("zayn_accounts_handler")
 
 
 def clean_phone(phone: Optional[str]) -> str:
-    if not phone:
-        return ""
-    return re.sub(r"[^\d]", "", str(phone))
+    return normalize_phone_number(str(phone or ""))
+
 
 
 async def notify_zayn_allowance_approval(session: AsyncSession, trip_id: str):

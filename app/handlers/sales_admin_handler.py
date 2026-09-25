@@ -9,16 +9,15 @@ from app.database import (
     get_fleet_trip_request_by_id,
     get_trip_reconciliation_summary
 )
-from app.state_manager import set_user_state, clear_user_state, get_user_state
+from app.state_manager import set_user_state, clear_user_state, get_user_state, normalize_phone_number
 from app.meta_api import meta_api
 
 logger = logging.getLogger("sales_admin_handler")
 
 
 def clean_phone(phone: Optional[str]) -> str:
-    if not phone:
-        return ""
-    return re.sub(r"[^\d]", "", str(phone))
+    return normalize_phone_number(str(phone or ""))
+
 
 
 def get_sales_admin_phone_for_company(company_name: str) -> str:
@@ -109,6 +108,19 @@ async def handle_sales_admin_interaction(
     clean_p = clean_phone(phone)
     text_strip = message_text.strip()
     text_lower = text_strip.lower()
+
+    # 0. Manual trigger: balance <trip_id> or settle <trip_id>
+    if text_lower.startswith(("balance ", "settle ", "reconcile ")):
+        parts = text_strip.split(maxsplit=1)
+        if len(parts) > 1:
+            req_trip_id = parts[1].strip().upper()
+            trip = await get_fleet_trip_request_by_id(session, req_trip_id)
+            if trip:
+                await notify_sales_admin_balancing_session(session, trip.trip_id)
+                return True
+            else:
+                await meta_api.send_text_message(clean_p, f"⚠️ Trip '{req_trip_id}' not found.")
+                return True
 
     # 1. Sales Admin clicks [Balanced]
     if text_lower.startswith("flt_adm_bal_"):

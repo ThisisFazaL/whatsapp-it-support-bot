@@ -19,6 +19,25 @@ def clean_phone_number(phone: str) -> str:
     digits = re.sub(r"[^\d]", "", str(phone))
     return digits
 
+
+def normalize_phone_number(phone: str) -> str:
+    """
+    Cleans and normalizes phone numbers into E.164 digits without leading '+'.
+    Specifically auto-resolves Zimbabwean local numbers:
+    - 07XXXXXXXX (10 digits starting with 0) -> 2637XXXXXXXX
+    - 7XXXXXXXX (9 digits starting with 7) -> 2637XXXXXXXX
+    Leaves international numbers (e.g. 91..., 1..., 27...) untouched.
+    """
+    if not phone:
+        return ""
+    digits = re.sub(r"[^\d]", "", str(phone))
+    if len(digits) == 10 and digits.startswith("0"):
+        digits = "263" + digits[1:]
+    elif len(digits) == 9 and digits.startswith("7"):
+        digits = "263" + digits
+    return digits
+
+
 def invalidate_user_cache(phone: str):
     """Evicts phone from in-memory employee and admin caches."""
     if not phone:

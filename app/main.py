@@ -774,6 +774,17 @@ async def process_webhook_payload(body: dict):
                 image_id = image_obj.get("id")
                 message_text = image_obj.get("caption", "Photo attachment").strip()
                 logger.info(f"Received Image attachment ID '{image_id}' from {sender_phone}.")
+            elif msg_type == "video":
+                video_obj = msg_obj.get("video", {})
+                video_id = video_obj.get("id")
+                message_text = video_obj.get("caption", "").strip() or "video_attachment"
+                logger.info(f"Received Video attachment ID '{video_id}' from {sender_phone}.")
+            elif msg_type == "location":
+                loc_obj = msg_obj.get("location", {})
+                lat = loc_obj.get("latitude")
+                lng = loc_obj.get("longitude")
+                message_text = f"location_pin_{lat}_{lng}"
+                logger.info(f"Received Location pin ({lat}, {lng}) from {sender_phone}.")
             elif msg_type == "interactive":
                 interactive_obj = msg_obj.get("interactive", {})
                 btn_reply = interactive_obj.get("button_reply", {})

@@ -10,13 +10,13 @@ from app.handlers.driver_handler import handle_driver_interaction
 from app.handlers.sales_admin_handler import handle_sales_admin_interaction
 from app.handlers.logistics_manager_handler import handle_logistics_manager_interaction
 
+from app.state_manager import normalize_phone_number
+
 logger = logging.getLogger("fleet_dispatcher")
 
 
 def clean_phone(phone: Optional[str]) -> str:
-    if not phone:
-        return ""
-    return re.sub(r"[^\d]", "", str(phone))
+    return normalize_phone_number(str(phone or ""))
 
 
 def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) -> bool:
@@ -35,7 +35,12 @@ def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) ->
     if is_edward(clean_p) and txt in {"trip queue", "queue", "allocate trip"}:
         return True
 
+    # Support manual balance/settle command for Sales Admin
+    if txt.startswith(("balance ", "settle ", "reconcile ")):
+        return True
+
     return False
+
 
 
 async def dispatch_fleet_message(

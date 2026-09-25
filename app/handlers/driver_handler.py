@@ -14,16 +14,15 @@ from app.database import (
     record_driver_delivery_payment,
     record_emergency_expense
 )
-from app.state_manager import set_user_state, clear_user_state, get_user_state
+from app.state_manager import set_user_state, clear_user_state, get_user_state, normalize_phone_number
 from app.meta_api import meta_api
 
 logger = logging.getLogger("driver_handler")
 
 
 def clean_phone(phone: Optional[str]) -> str:
-    if not phone:
-        return ""
-    return re.sub(r"[^\d]", "", str(phone))
+    return normalize_phone_number(str(phone or ""))
+
 
 
 async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: str):
@@ -209,12 +208,15 @@ async def handle_driver_interaction(
 
     # 6. Payment method clicked: [Cash], [Bank/EcoCash], [Unpaid]
     if text_lower.startswith(("flt_pay_cash_", "flt_pay_bank_", "flt_pay_unpaid_")):
-        parts = text_strip.split("_")
-        # flt_pay_<method>_<trip_id>
-        pay_type = parts[2].upper()
-        if pay_type == "BANK":
+        if text_lower.startswith("flt_pay_cash_"):
+            pay_type = "CASH"
+            trip_id = text_strip[len("flt_pay_cash_"):].strip()
+        elif text_lower.startswith("flt_pay_bank_"):
             pay_type = "BANK_ECOCASH"
-        trip_id = parts[3] if len(parts) > 3 else ""
+            trip_id = text_strip[len("flt_pay_bank_"):].strip()
+        else:
+            pay_type = "UNPAID"
+            trip_id = text_strip[len("flt_pay_unpaid_"):].strip()
 
         data = (state.current_data or {}) if state else {}
         if not trip_id:
@@ -297,6 +299,12 @@ async def handle_driver_interaction(
     if state and state.flow_name == "fleet_driver":
         data = state.current_data or {}
         trip_id = data.get("trip_id", "")
+
+        if text_lower in {"cancel", "exit", "back", "menu"}:
+            if state.current_step != "awaiting_departure_time":
+                await send_driver_transit_menu(session, clean_p, trip_id)
+                return True
+
 
         # Awaiting departure time
         if state.current_step == "awaiting_departure_time":
@@ -387,6 +395,13 @@ async def handle_driver_interaction(
 
         # Awaiting Emergency Fuel Amount
         if state.current_step == "awaiting_fuel_amount":
+            if "video" in text_strip.lower():
+                await meta_api.send_text_message(
+                    clean_p,
+                    "📹 *Fuel pump video received!*\n\nNow please type the total amount spent on fuel in USD:\n_(e.g. 25.00)_"
+                )
+                return True
+
             clean_val = re.sub(r"[^\d.]", "", text_strip)
             try:
                 fuel_amt = float(clean_val)

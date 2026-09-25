@@ -11,16 +11,15 @@ from app.database import (
     get_trip_reconciliation_summary,
     record_driver_pending_entry
 )
-from app.state_manager import set_user_state, clear_user_state, get_user_state
+from app.state_manager import set_user_state, clear_user_state, get_user_state, normalize_phone_number
 from app.meta_api import meta_api
 
 logger = logging.getLogger("logistics_manager_handler")
 
 
 def clean_phone(phone: Optional[str]) -> str:
-    if not phone:
-        return ""
-    return re.sub(r"[^\d]", "", str(phone))
+    return normalize_phone_number(str(phone or ""))
+
 
 
 async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: str):
