@@ -1,6 +1,6 @@
 import datetime
 import json
-from typing import AsyncGenerator, Optional, List
+from typing import AsyncGenerator, Optional, List, Dict, Any
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float
 )
@@ -217,6 +217,88 @@ class FleetPendingLedger(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class FleetTripRequest(Base):
+    __tablename__ = "fleet_trip_requests"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trip_id = Column(String(100), unique=True, nullable=False, index=True)
+    company_name = Column(String(100), nullable=False)  # "A. TG Hardware", "B. LG Plast", "C. Kreckle"
+    sales_admin_phone = Column(String(30), nullable=True, index=True)
+    salesperson_phone = Column(String(30), nullable=False, index=True)
+    salesperson_name = Column(String(100), nullable=True)
+    destination_city = Column(String(100), nullable=False)
+    route = Column(String(100), nullable=True)
+    trip_sales_value = Column(Float, nullable=False, default=0.0)  # Confidential from operational staff
+    transport_charge = Column(Float, nullable=False, default=0.0)
+    
+    # Edward Assignment
+    truck_plate = Column(String(50), nullable=True, index=True)
+    driver_name = Column(String(100), nullable=True)
+    driver_phone = Column(String(30), nullable=True, index=True)
+    crew_count = Column(Integer, nullable=False, default=2)
+    meal_count = Column(Integer, nullable=False, default=3)
+    toll_gates_count = Column(Integer, nullable=False, default=0)
+    toll_cost = Column(Float, nullable=False, default=0.0)
+    food_allowance = Column(Float, nullable=False, default=0.0)
+    total_allowance = Column(Float, nullable=False, default=0.0)
+    
+    # Zayn & Accounts
+    allowance_status = Column(String(50), default="PENDING_APPROVAL")  # PENDING_APPROVAL, APPROVED, TRANSFERRED
+    allowance_approved_by = Column(String(100), nullable=True)
+    departure_time = Column(String(20), nullable=True)
+    
+    # Driver Transit & Return
+    status = Column(String(50), default="CREATED", index=True)
+    # CREATED -> PENDING_ASSIGNMENT -> ASSIGNED -> ALLOWANCE_APPROVED -> TRANSFERRED -> ACTIVE -> RETURNING -> RETURNED -> BALANCED -> CLOSED
+    is_live_location_active = Column(Boolean, default=False)
+    departed_at = Column(DateTime, nullable=True)
+    returning_at = Column(DateTime, nullable=True)
+    returned_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    
+    # Balancing & Adjudication
+    discrepancy_amount = Column(Float, nullable=False, default=0.0)
+    discrepancy_reason = Column(Text, nullable=True)
+    reimbursement_status = Column(String(50), default="NONE")  # NONE, PENDING, APPROVED, REJECTED
+    
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class FleetCustomerSchedule(Base):
+    __tablename__ = "fleet_customer_schedules"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trip_id = Column(String(100), nullable=False, index=True)
+    customer_id = Column(String(100), nullable=False, index=True)
+    expected_charge = Column(Float, nullable=False, default=0.0)
+    collected_charge = Column(Float, nullable=False, default=0.0)
+    payment_method = Column(String(50), default="CASH")  # CASH, BANK_ECOCASH, UNPAID
+    reference_note = Column(String(255), nullable=True)
+    status = Column(String(50), default="PENDING")  # PENDING, MATCHED, VARIANCE
+    variance = Column(Float, nullable=False, default=0.0)
+    recorded_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class FleetEmergencyExpense(Base):
+    __tablename__ = "fleet_emergency_expenses"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trip_id = Column(String(100), nullable=False, index=True)
+    driver_phone = Column(String(30), nullable=False, index=True)
+    charge_type = Column(String(50), nullable=False)  # EMERGENCY_FUEL, OTHER
+    amount = Column(Float, nullable=False, default=0.0)
+    description = Column(Text, nullable=True)
+    has_video_evidence = Column(Boolean, default=False)
+    verified_in_balancing = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class DriverPendingLedger(Base):
+    __tablename__ = "driver_pending_ledger"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    driver_phone = Column(String(30), nullable=False, index=True)
+    driver_name = Column(String(100), nullable=True)
+    trip_id = Column(String(100), nullable=True, index=True)
+    amount = Column(Float, nullable=False, default=0.0)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 class IncomingWebhookLog(Base):
     __tablename__ = "incoming_webhook_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -415,6 +497,94 @@ async def init_db_models():
                         updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
                     )
                 """))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fleet_trip_requests (
+                        id SERIAL PRIMARY KEY,
+                        trip_id VARCHAR(100) UNIQUE NOT NULL,
+                        company_name VARCHAR(100) NOT NULL,
+                        sales_admin_phone VARCHAR(30),
+                        salesperson_phone VARCHAR(30) NOT NULL,
+                        salesperson_name VARCHAR(100),
+                        destination_city VARCHAR(100) NOT NULL,
+                        route VARCHAR(100),
+                        trip_sales_value DOUBLE PRECISION DEFAULT 0.0,
+                        transport_charge DOUBLE PRECISION DEFAULT 0.0,
+                        truck_plate VARCHAR(50),
+                        driver_name VARCHAR(100),
+                        driver_phone VARCHAR(30),
+                        crew_count INTEGER DEFAULT 2,
+                        meal_count INTEGER DEFAULT 3,
+                        toll_gates_count INTEGER DEFAULT 0,
+                        toll_cost DOUBLE PRECISION DEFAULT 0.0,
+                        food_allowance DOUBLE PRECISION DEFAULT 0.0,
+                        total_allowance DOUBLE PRECISION DEFAULT 0.0,
+                        allowance_status VARCHAR(50) DEFAULT 'PENDING_APPROVAL',
+                        allowance_approved_by VARCHAR(100),
+                        departure_time VARCHAR(20),
+                        status VARCHAR(50) DEFAULT 'CREATED',
+                        is_live_location_active BOOLEAN DEFAULT FALSE,
+                        departed_at TIMESTAMP WITHOUT TIME ZONE,
+                        returning_at TIMESTAMP WITHOUT TIME ZONE,
+                        returned_at TIMESTAMP WITHOUT TIME ZONE,
+                        closed_at TIMESTAMP WITHOUT TIME ZONE,
+                        discrepancy_amount DOUBLE PRECISION DEFAULT 0.0,
+                        discrepancy_reason TEXT,
+                        reimbursement_status VARCHAR(50) DEFAULT 'NONE',
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ftr_trip_id ON fleet_trip_requests(trip_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ftr_driver_phone ON fleet_trip_requests(driver_phone)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ftr_status ON fleet_trip_requests(status)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fleet_customer_schedules (
+                        id SERIAL PRIMARY KEY,
+                        trip_id VARCHAR(100) NOT NULL,
+                        customer_id VARCHAR(100) NOT NULL,
+                        expected_charge DOUBLE PRECISION DEFAULT 0.0,
+                        collected_charge DOUBLE PRECISION DEFAULT 0.0,
+                        payment_method VARCHAR(50) DEFAULT 'CASH',
+                        reference_note VARCHAR(255),
+                        status VARCHAR(50) DEFAULT 'PENDING',
+                        variance DOUBLE PRECISION DEFAULT 0.0,
+                        recorded_at TIMESTAMP WITHOUT TIME ZONE,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fcs_trip_id ON fleet_customer_schedules(trip_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fcs_cust_id ON fleet_customer_schedules(customer_id)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fleet_emergency_expenses (
+                        id SERIAL PRIMARY KEY,
+                        trip_id VARCHAR(100) NOT NULL,
+                        driver_phone VARCHAR(30) NOT NULL,
+                        charge_type VARCHAR(50) NOT NULL,
+                        amount DOUBLE PRECISION DEFAULT 0.0,
+                        description TEXT,
+                        has_video_evidence BOOLEAN DEFAULT FALSE,
+                        verified_in_balancing BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fee_trip_id ON fleet_emergency_expenses(trip_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fee_driver_phone ON fleet_emergency_expenses(driver_phone)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS driver_pending_ledger (
+                        id SERIAL PRIMARY KEY,
+                        driver_phone VARCHAR(30) NOT NULL,
+                        driver_name VARCHAR(100),
+                        trip_id VARCHAR(100),
+                        amount DOUBLE PRECISION DEFAULT 0.0,
+                        reason TEXT,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_dpl_driver_phone ON driver_pending_ledger(driver_phone)"))
         except Exception as e:
             print(f"Database table init note: {e}")
             
@@ -772,4 +942,281 @@ async def record_pending_ledger_entry(
     await session.commit()
     await session.refresh(entry)
     return entry
+
+
+async def create_or_update_fleet_trip_request(
+    session: AsyncSession,
+    trip_id: str,
+    company_name: str,
+    salesperson_phone: str,
+    destination_city: str,
+    salesperson_name: Optional[str] = None,
+    sales_admin_phone: Optional[str] = None,
+    route: Optional[str] = None,
+    trip_sales_value: float = 0.0,
+    transport_charge: float = 0.0
+) -> FleetTripRequest:
+    """Creates or updates a FleetTripRequest for a sales rep."""
+    clean_sales_phone = salesperson_phone.replace("+", "").strip() if salesperson_phone else ""
+    clean_admin_phone = sales_admin_phone.replace("+", "").strip() if sales_admin_phone else ""
+    trip_id_clean = trip_id.strip()
+
+    stmt = select(FleetTripRequest).where(FleetTripRequest.trip_id == trip_id_clean)
+    res = await session.execute(stmt)
+    req = res.scalars().first()
+
+    if not req:
+        req = FleetTripRequest(
+            trip_id=trip_id_clean,
+            company_name=company_name,
+            sales_admin_phone=clean_admin_phone,
+            salesperson_phone=clean_sales_phone,
+            salesperson_name=salesperson_name,
+            destination_city=destination_city,
+            route=route or destination_city,
+            trip_sales_value=round(float(trip_sales_value), 2),
+            transport_charge=round(float(transport_charge), 2),
+            status="PENDING_ASSIGNMENT",
+            created_at=datetime.datetime.utcnow()
+        )
+        session.add(req)
+    else:
+        req.company_name = company_name
+        req.salesperson_phone = clean_sales_phone
+        if salesperson_name:
+            req.salesperson_name = salesperson_name
+        if clean_admin_phone:
+            req.sales_admin_phone = clean_admin_phone
+        req.destination_city = destination_city
+        req.route = route or destination_city
+        req.trip_sales_value = round(float(trip_sales_value), 2)
+        req.transport_charge = round(float(transport_charge), 2)
+        req.status = "PENDING_ASSIGNMENT"
+        req.updated_at = datetime.datetime.utcnow()
+
+    await session.commit()
+    await session.refresh(req)
+    return req
+
+
+async def get_fleet_trip_request_by_id(session: AsyncSession, trip_id: str) -> Optional[FleetTripRequest]:
+    """Retrieves FleetTripRequest by trip_id."""
+    clean_id = trip_id.strip()
+    stmt = select(FleetTripRequest).where(FleetTripRequest.trip_id == clean_id)
+    res = await session.execute(stmt)
+    return res.scalars().first()
+
+
+async def get_pending_trips_for_edward(session: AsyncSession) -> List[FleetTripRequest]:
+    """Retrieves all trip requests awaiting Edward's allocation in FIFO order."""
+    stmt = (
+        select(FleetTripRequest)
+        .where(FleetTripRequest.status.in_(["CREATED", "PENDING_ASSIGNMENT"]))
+        .order_by(FleetTripRequest.id.asc())
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def get_active_trip_for_driver(session: AsyncSession, driver_phone: str) -> Optional[FleetTripRequest]:
+    """Retrieves currently active or in-transit trip for a driver."""
+    clean_p = driver_phone.replace("+", "").strip() if driver_phone else ""
+    last_9 = clean_p[-9:] if len(clean_p) >= 9 else clean_p
+    stmt = (
+        select(FleetTripRequest)
+        .where(
+            (FleetTripRequest.driver_phone == clean_p) | (FleetTripRequest.driver_phone.endswith(last_9)),
+            FleetTripRequest.status.in_(["ALLOWANCE_APPROVED", "TRANSFERRED", "ACTIVE", "RETURNING"])
+        )
+        .order_by(FleetTripRequest.id.desc())
+    )
+    res = await session.execute(stmt)
+    return res.scalars().first()
+
+
+async def save_customer_schedules_batch(
+    session: AsyncSession,
+    trip_id: str,
+    schedules: List[Dict[str, Any]]
+) -> List[FleetCustomerSchedule]:
+    """Saves a batch of customer schedules for autonomous driver matching."""
+    clean_id = trip_id.strip()
+    # Remove existing pending schedules for this trip
+    stmt_del = delete(FleetCustomerSchedule).where(FleetCustomerSchedule.trip_id == clean_id)
+    await session.execute(stmt_del)
+
+    created_schedules = []
+    for item in schedules:
+        c_id = str(item.get("customer_id", "")).strip().upper()
+        if not c_id:
+            continue
+        exp_charge = round(float(item.get("expected_charge", 0.0)), 2)
+        sched = FleetCustomerSchedule(
+            trip_id=clean_id,
+            customer_id=c_id,
+            expected_charge=exp_charge,
+            collected_charge=0.0,
+            payment_method="CASH",
+            status="PENDING",
+            variance=0.0,
+            created_at=datetime.datetime.utcnow()
+        )
+        session.add(sched)
+        created_schedules.append(sched)
+
+    await session.commit()
+    return created_schedules
+
+
+async def get_customer_schedules_for_trip(session: AsyncSession, trip_id: str) -> List[FleetCustomerSchedule]:
+    """Returns all customer schedule records for a trip."""
+    clean_id = trip_id.strip()
+    stmt = (
+        select(FleetCustomerSchedule)
+        .where(FleetCustomerSchedule.trip_id == clean_id)
+        .order_by(FleetCustomerSchedule.id.asc())
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def record_driver_delivery_payment(
+    session: AsyncSession,
+    trip_id: str,
+    customer_id: str,
+    collected_amount: float,
+    payment_method: str = "CASH",
+    reference_note: Optional[str] = None
+) -> FleetCustomerSchedule:
+    """Updates or creates a customer schedule entry with the collected amount from driver."""
+    clean_id = trip_id.strip()
+    cust_clean = customer_id.strip().upper()
+    col_amt = round(float(collected_amount), 2)
+
+    stmt = select(FleetCustomerSchedule).where(
+        FleetCustomerSchedule.trip_id == clean_id,
+        FleetCustomerSchedule.customer_id == cust_clean
+    )
+    res = await session.execute(stmt)
+    sched = res.scalars().first()
+
+    if not sched:
+        sched = FleetCustomerSchedule(
+            trip_id=clean_id,
+            customer_id=cust_clean,
+            expected_charge=col_amt,
+            collected_charge=col_amt,
+            payment_method=payment_method.upper(),
+            reference_note=reference_note,
+            status="MATCHED",
+            variance=0.0,
+            recorded_at=datetime.datetime.utcnow(),
+            created_at=datetime.datetime.utcnow()
+        )
+        session.add(sched)
+    else:
+        sched.collected_charge = col_amt
+        sched.payment_method = payment_method.upper()
+        sched.reference_note = reference_note
+        sched.recorded_at = datetime.datetime.utcnow()
+        sched.variance = round(col_amt - sched.expected_charge, 2)
+        sched.status = "MATCHED" if abs(sched.variance) < 0.01 else "VARIANCE"
+
+    await session.commit()
+    await session.refresh(sched)
+    return sched
+
+
+async def record_emergency_expense(
+    session: AsyncSession,
+    trip_id: str,
+    driver_phone: str,
+    charge_type: str,
+    amount: float,
+    description: Optional[str] = None,
+    has_video: bool = False
+) -> FleetEmergencyExpense:
+    """Logs an emergency expense spent by a driver during transit."""
+    clean_p = driver_phone.replace("+", "").strip() if driver_phone else ""
+    exp = FleetEmergencyExpense(
+        trip_id=trip_id.strip(),
+        driver_phone=clean_p,
+        charge_type=charge_type.upper(),
+        amount=round(float(amount), 2),
+        description=description,
+        has_video_evidence=has_video,
+        verified_in_balancing=False,
+        created_at=datetime.datetime.utcnow()
+    )
+    session.add(exp)
+    await session.commit()
+    await session.refresh(exp)
+    return exp
+
+
+async def get_emergency_expenses_for_trip(session: AsyncSession, trip_id: str) -> List[FleetEmergencyExpense]:
+    """Retrieves all emergency expenses logged for a trip."""
+    clean_id = trip_id.strip()
+    stmt = (
+        select(FleetEmergencyExpense)
+        .where(FleetEmergencyExpense.trip_id == clean_id)
+        .order_by(FleetEmergencyExpense.id.asc())
+    )
+    res = await session.execute(stmt)
+    return list(res.scalars().all())
+
+
+async def record_driver_pending_entry(
+    session: AsyncSession,
+    driver_phone: str,
+    driver_name: Optional[str],
+    trip_id: Optional[str],
+    amount: float,
+    reason: Optional[str] = None
+) -> DriverPendingLedger:
+    """Records an outstanding deficit in driver pending ledger."""
+    clean_p = driver_phone.replace("+", "").strip() if driver_phone else ""
+    entry = DriverPendingLedger(
+        driver_phone=clean_p,
+        driver_name=driver_name,
+        trip_id=trip_id.strip() if trip_id else None,
+        amount=round(float(amount), 2),
+        reason=reason,
+        created_at=datetime.datetime.utcnow()
+    )
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry
+
+
+async def get_trip_reconciliation_summary(session: AsyncSession, trip_id: str) -> Dict[str, Any]:
+    """Calculates complete reconciliation metrics for Sales Admin physical balancing session."""
+    clean_id = trip_id.strip()
+    trip = await get_fleet_trip_request_by_id(session, clean_id)
+    schedules = await get_customer_schedules_for_trip(session, clean_id)
+    emergencies = await get_emergency_expenses_for_trip(session, clean_id)
+
+    total_expected = sum(s.expected_charge for s in schedules)
+    total_collected = sum(s.collected_charge for s in schedules)
+    cash_collected = sum(s.collected_charge for s in schedules if s.payment_method == "CASH")
+    bank_collected = sum(s.collected_charge for s in schedules if s.payment_method in {"BANK_ECOCASH", "BANK", "ECOCASH"})
+    unpaid_amount = sum(s.expected_charge for s in schedules if s.payment_method == "UNPAID" or (s.expected_charge > 0 and s.collected_charge == 0))
+    total_emergencies = sum(e.amount for e in emergencies)
+    total_allowance = trip.total_allowance if trip else 0.0
+
+    return {
+        "trip": trip,
+        "schedules": schedules,
+        "emergencies": emergencies,
+        "total_expected": round(total_expected, 2),
+        "total_collected": round(total_collected, 2),
+        "cash_collected": round(cash_collected, 2),
+        "bank_collected": round(bank_collected, 2),
+        "unpaid_amount": round(unpaid_amount, 2),
+        "total_emergencies": round(total_emergencies, 2),
+        "total_allowance": round(total_allowance, 2),
+        "net_cash_due_to_admin": round(cash_collected, 2)
+    }
+
 

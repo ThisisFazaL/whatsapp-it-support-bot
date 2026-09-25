@@ -196,6 +196,33 @@ async def send_morning_shift_opener(session: AsyncSession):
         )
         await asyncio.sleep(0.5)
 
+    # 3. Fleet Operations Staff (Zayn, Edward, Accounts, Sales Admin)
+    fleet_roles_to_wake = [
+        ("Zayn", getattr(settings, "zayn_phone", "263713866223"), "Allowance Approver"),
+        ("Edward Chemhere", getattr(settings, "edward_phone", "263715025982"), "Logistics Supervisor"),
+        ("Sujit", getattr(settings, "fleet_admin_phone", "263718352518"), "Fleet Admin / Sales Admin"),
+    ]
+    for name, ph, role in fleet_roles_to_wake:
+        clean_p = re.sub(r"[^\d]", "", str(ph))
+        if clean_p and clean_p != settings.master_admin_phone:
+            flt_msg = (
+                f"🌅 *Good Morning, {name}!* 👋\n\n"
+                f"Role: *{role}*\n"
+                f"Please tap **Start My Shift** below to open your 24-hour window for sales trip and dispatch notifications."
+            )
+            flt_buttons = [
+                {"id": "cmd_start_shift", "title": "☀️ Start My Shift"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=flt_msg,
+                buttons=flt_buttons,
+                header_text="☀️ FLEET SHIFT OPENER",
+                fallback_template="tagoneswa_launch_announcement"
+            )
+            await asyncio.sleep(0.5)
+
+
 async def scheduled_morning_staff_wakeup_loop():
     """
     Background task to send a morning shift opener & 24h window keep-alive
@@ -805,8 +832,11 @@ async def process_webhook_payload(body: dict):
             is_workshop_user = bool(workshop_user)
             is_dual_domain = is_workshop_user and is_it_user
 
-            # Unauthorized check: If not registered in workshop AND not registered in IT/Admin/Observer
-            if not is_workshop_user and not is_it_user:
+            from app.handlers.fleet_dispatcher import is_fleet_interaction, dispatch_fleet_message
+            is_fleet_op = is_fleet_interaction(sender_phone, message_text, state)
+
+            # Unauthorized check: If not registered in workshop AND not registered in IT/Admin/Observer AND not fleet op
+            if not is_workshop_user and not is_it_user and not is_fleet_op:
                 logger.warning(f"Unregistered phone number attempted access: {sender_phone}")
                 warning_msg = (
                     f"🚫 *Access Restricted*\n\n"
@@ -826,8 +856,27 @@ async def process_webhook_payload(body: dict):
             if await handle_role_switch_command(db, sender_phone, message_text):
                 return
 
-            # Step 0.6: Global Domain Selection Buttons [ 🚚 Logistics & Fleet ] vs [ 💻 IT Support ]
-            if clean_txt in {"btn_domain_workshop", "logistics & fleet", "logistics", "fleet", "workshop", "🚚 logistics & fleet"}:
+            # Step 0.55: Fleet Operations Subsystem Dispatcher
+            if is_fleet_op:
+                if await dispatch_fleet_message(db, sender_phone, message_text, state):
+                    return
+
+            # Check if user is actively in a ticket creation flow or requirement flow
+            is_in_active_flow = bool(state and (
+                state.flow_name in {"raise_ticket", "maintenance_ticket", "product_requirement", "fleet_approval", "fleet_pending"} or
+                state.current_step in {
+                    "select_domain", "select_location", "awaiting_other_location", "awaiting_room_area",
+                    "awaiting_category", "awaiting_subcategory", "awaiting_issue", "select_priority",
+                    "select_safety_hazard", "awaiting_description", "awaiting_image", "awaiting_resolution_confirmation",
+                    "awaiting_product_title", "awaiting_product_details", "awaiting_product_image"
+                }
+            ))
+
+            # Step 0.6: Dual-Domain Portal Selection Buttons [ 🚚 Logistics & Fleet ] vs [ 💻 IT Support ]
+            is_portal_ws = clean_txt in {"btn_portal_workshop", "btn_domain_workshop"} or (clean_txt in {"logistics & fleet", "🚚 logistics & fleet"} and not is_in_active_flow)
+            is_portal_it = clean_txt in {"btn_portal_it"}
+
+            if is_portal_ws and not is_in_active_flow:
                 if is_workshop_user:
                     await clear_user_state(db, sender_phone)
                     from app.workshop.flow_handler import start_workshop_flow
@@ -837,14 +886,14 @@ async def process_webhook_payload(body: dict):
                     await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: Logistics & Fleet portal is restricted to authorized workshop and logistics staff.")
                     return
 
-            if clean_txt in {"btn_domain_it", "it support", "it", "💻 it support"}:
+            if is_portal_it and not is_in_active_flow:
                 if is_it_user:
                     await clear_user_state(db, sender_phone)
                     if admin:
                         await handle_admin_command(db, sender_phone, "hi")
                     else:
-                        from app.handlers.flow_handler import start_ticket_creation_flow
-                        await start_ticket_creation_flow(db, sender_phone, employee)
+                        from app.handlers.flow_handler import send_categories_menu
+                        await send_categories_menu(db, sender_phone, domain="IT", data={"domain": "IT"})
                     return
                 else:
                     await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: IT Support portal is restricted to registered company employees.")
@@ -884,8 +933,8 @@ async def process_webhook_payload(body: dict):
                             f"Please select the service you wish to access:"
                         )
                     buttons = [
-                        {"id": "btn_domain_workshop", "title": "🚚 Logistics & Fleet"},
-                        {"id": "btn_domain_it", "title": "💻 IT Support"}
+                        {"id": "btn_portal_workshop", "title": "🚚 Logistics & Fleet"},
+                        {"id": "btn_portal_it", "title": "💻 IT Support"}
                     ]
                     await clear_user_state(db, sender_phone)
                     await meta_api.send_button_message(

@@ -15,6 +15,15 @@ class Settings(BaseSettings):
     fleet_admin_phone: str = "263718352518"  # Sujit (+263 71 835 2518) receives all sales fleet activity alerts
     test_user_role: str = "SALES"  # Set to "SALES" to test Fleet Approval; "MASTER_ADMIN" to revert in one word
 
+    # Fleet Subsystem Roles & Operational Phones
+    zayn_phone: str = "263713866223"
+    edward_phone: str = "263715025982"
+    sales_admin_tg_phone: str = "263718352518"  # Tagoneswa Hardware Sales Admin (Sujit fallback)
+    sales_admin_lg_phone: str = "263718352518"  # LG Plast Sales Admin
+    sales_admin_kreckle_phone: str = "263718352518"  # Kreckle Sales Admin
+    accounts_phones: list = ["263718352518", "919265368695"]
+    logistics_manager_phone: str = "263718352518"
+
     # Favlogix Direct Background API Configuration (Option 1 - Headless)
     favlogix_api_enabled: bool = True
     favlogix_api_url: str = "https://api.favlogix.com/api"

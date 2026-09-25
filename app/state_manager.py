@@ -19,6 +19,15 @@ def clean_phone_number(phone: str) -> str:
     digits = re.sub(r"[^\d]", "", str(phone))
     return digits
 
+def invalidate_user_cache(phone: str):
+    """Evicts phone from in-memory employee and admin caches."""
+    if not phone:
+        return
+    clean_p = clean_phone_number(phone)
+    _EMPLOYEE_CACHE.pop(clean_p, None)
+    _ADMIN_CACHE.pop(clean_p, None)
+
+
 async def is_employee_registered(session: AsyncSession, phone: str) -> Optional[Employee]:
     """Returns Employee if clean phone digits match and active == True with relationships eagerly loaded."""
     if not phone:

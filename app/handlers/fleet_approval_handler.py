@@ -8,8 +8,9 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.database import (
     Employee, Department, ConversationState, FleetTripApproval,
-    FleetPendingLedger, get_sales_rep_pending_balance,
-    get_sales_rep_ledger_entries, record_pending_ledger_entry
+    FleetPendingLedger, FleetTripRequest, get_sales_rep_pending_balance,
+    get_sales_rep_ledger_entries, record_pending_ledger_entry,
+    create_or_update_fleet_trip_request, save_customer_schedules_batch
 )
 from app.state_manager import set_user_state, clear_user_state, get_user_state
 from app.meta_api import meta_api
@@ -439,24 +440,22 @@ async def handle_existing_trip_response(
             f"────────────────────\n"
             f"🚛 *Trip:* `{existing.trip_id}`\n"
             f"📍 *Destination:* {existing.destination_city}\n"
-            f"💰 *Trip Total Sales:* ${existing.trip_sales_value:,.2f}\n"
-            f"🎯 *Required Minimum:* ${existing.required_minimum:,.2f}\n\n"
-            f"⚠️ *SHORTFALL DETECTED:* ${existing.shortfall:,.2f}\n"
-            f"💸 *Transport Charge:* *${existing.transport_charge:,.2f}*\n"
+            f"💰 *Sales Total:* ${existing.trip_sales_value:,.2f}\n"
+            f"💸 *Transport Fee to Take:* *${existing.transport_charge:,.2f}*\n"
             f"📅 *Submitted:* {formatted_date}\n"
             f"👤 *Submitted By:* You (`+{existing.salesperson_phone}`)\n"
             f"────────────────────\n"
             f"📊 *Current Status:* ❌ *NOT APPROVED (Pending Resolution)*\n\n"
             f"⚠️ *Action Required:* You previously submitted this trip. Each trip can only be entered once.\n"
-            f"Please select a transport charge resolution to authorize dispatch, or reply *cancel*:\n\n"
-            f"1️⃣ *Full Charge:* Customer paid ${existing.transport_charge:,.2f} in full. Order clear to go.\n"
-            f"2️⃣ *Partial Charge:* Customer paid part; remainder recorded to your pending balance.\n"
-            f"3️⃣ *Full to Pending:* Uncharged; full ${existing.transport_charge:,.2f} recorded to your pending balance."
+            f"Please select how transport fee will be handled:\n\n"
+            f"• *Full Charge:* Customer paid in full.\n"
+            f"• *Partial Charge:* Customer paid part; remainder recorded to your pending balance.\n"
+            f"• *Add to Pending:* Full ${existing.transport_charge:,.2f} recorded to your pending balance."
         )
         buttons = [
-            {"id": f"btn_short_full_{clean_btn_id}", "title": "1️⃣ Full Charge"},
-            {"id": f"btn_short_part_{clean_btn_id}", "title": "2️⃣ Partial Charge"},
-            {"id": f"btn_short_none_{clean_btn_id}", "title": "3️⃣ Full to Pending"}
+            {"id": f"flt_sf_full_{clean_btn_id}", "title": "Full Charge"},
+            {"id": f"flt_sf_part_{clean_btn_id}", "title": "Partial Charge"},
+            {"id": f"flt_sf_pend_{clean_btn_id}", "title": "Add to Pending"}
         ]
         await set_user_state(
             session,
@@ -528,13 +527,59 @@ async def handle_fleet_approval_flow(
 
     # 1. User taps [ 🚛 Fleet Approval ] button or types 1
     if text_lower in {"btn_domain_fleet", "fleet approval", "🚛 fleet approval", "fleet", "trip approval", "1", "1️⃣", "1️⃣ fleet trip approval"}:
-        await set_user_state(session, phone, "awaiting_trip_id", {}, flow_name="fleet_approval")
-        prompt = (
-            "🚛 *FLEET TRIP APPROVAL REQUEST*\n"
+        await set_user_state(session, phone, "awaiting_company_selection", {}, flow_name="fleet_approval")
+        header = "SELECT COMPANY"
+        body = (
+            "🏢 *SELECT COMPANY*\n"
             "────────────────────\n"
-            "Please enter the *Trip ID* or *Trip Name* from Favlogix:\n\n"
-            "_(e.g., `20042026-BINDURA` or `TRIP-20042026-BINDURA`)_\n\n"
-            "💡 _Reply 'cancel' or 'menu' to return to the main menu._"
+            "Please select the company for this fleet trip:"
+        )
+        buttons = [
+            {"id": "flt_co_tg", "title": "A. TG Hardware"},
+            {"id": "flt_co_lg", "title": "B. LG Plast"},
+            {"id": "flt_co_kr", "title": "C. Kreckle"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=body,
+            buttons=buttons,
+            header_text=header
+        )
+        return True
+
+    # 1.1 Company Selection button or reply
+    if text_lower in {"flt_co_tg", "flt_co_lg", "flt_co_kr"} or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_company_selection"
+    ):
+        co_map = {
+            "flt_co_tg": "A. TG Hardware",
+            "flt_co_lg": "B. LG Plast",
+            "flt_co_kr": "C. Kreckle"
+        }
+        company_name = co_map.get(text_lower)
+        if not company_name:
+            if "tg" in text_lower or "hardware" in text_lower or text_lower == "a":
+                company_name = "A. TG Hardware"
+            elif "lg" in text_lower or "plast" in text_lower or text_lower == "b":
+                company_name = "B. LG Plast"
+            elif "kreckle" in text_lower or text_lower == "c":
+                company_name = "C. Kreckle"
+            else:
+                company_name = "A. TG Hardware"
+
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_trip_id",
+            {"company_name": company_name},
+            flow_name="fleet_approval"
+        )
+        prompt = (
+            f"🚛 *FLEET TRIP APPROVAL: {company_name}*\n"
+            "────────────────────\n"
+            "Please enter the *Trip ID* from Favlogix:\n\n"
+            "_(e.g. `20042026-BINDURA` or `TRIP-2026-00456`)_\n\n"
+            "💡 _Reply 'cancel' to return to the main menu._"
         )
         await meta_api.send_text_message(phone, prompt)
         return True
@@ -695,45 +740,28 @@ async def handle_fleet_approval_flow(
         return True
 
     # 6. Standard Dispatch Button (For trips passing minimum sales threshold)
-    if text_lower.startswith(("btn_accept_fleet_", "btn_dispatch_")):
-        trip_id = text_strip.replace("btn_accept_fleet_", "").replace("btn_dispatch_", "").strip()
-        await clear_user_state(session, phone)
+    if text_lower.startswith(("flt_disp_ok_", "btn_accept_fleet_", "btn_dispatch_")):
+        trip_id = text_strip.replace("flt_disp_ok_", "").replace("btn_accept_fleet_", "").replace("btn_dispatch_", "").strip()
+        data = (state.current_data or {}) if state else {}
+        if not data.get("trip_id"):
+            data["trip_id"] = trip_id
+        clean_btn_id = data.get("clean_btn_id", trip_id)
 
-        rec_stmt = (
-            select(FleetTripApproval)
-            .where(FleetTripApproval.trip_id == trip_id)
-            .order_by(FleetTripApproval.id.desc())
-        )
-        rec = (await session.execute(rec_stmt)).scalars().first()
-        if rec and (rec.status in {"DISPATCHED", "DISPATCHED_WITH_TRANSPORT_CHARGE"} or rec.dispatch_option is not None):
-            await handle_existing_trip_response(session, phone, employee, rec)
-            return True
-        if rec:
-            rec.status = "DISPATCHED"
-            rec.dispatch_option = "APPROVED_THRESHOLD"
-            await session.commit()
+        data["charged_amount"] = 0.0
+        data["pending_amount"] = 0.0
+        data["transport_charge"] = 0.0
 
-        ack = (
-            f"✅ *TRIP DISPATCH AUTHORIZED*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"👤 *Authorized By:* {employee.full_name if employee else 'Sales Agent'} (`+{phone}`)\n"
-            f"📊 *Status:* Cleared for Vehicle Loading & Dispatch\n\n"
-            f"Notification has been logged for Logistics & Dispatch team! 🚛💨"
+        await set_user_state(session, phone, "awaiting_favlogix_charged", data, flow_name="fleet_approval")
+        prompt = (
+            f"✅ *TRIP VERIFICATION PASSED: {trip_id}*\n"
+            "────────────────────\n"
+            "Please charge all customers in Favlogix and select YES when done:"
         )
-        await meta_api.send_text_message(phone, ack)
-        dest = rec.destination_city if rec else ""
-        sales_val = rec.trip_sales_value if rec else 0.0
-        admin_alert = (
-            f"📢 *FLEET DISPATCH: PASSED MINIMUM SALES*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"📍 *Destination:* {dest}\n"
-            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-            f"💰 *Trip Sales Value:* ${sales_val:,.2f}\n"
-            f"📊 *Status:* Cleared for Loading & Dispatch (Threshold Passed) 🚛💨"
-        )
-        await notify_fleet_admin(admin_alert)
+        buttons = [
+            {"id": f"flt_chg_yes_{clean_btn_id}", "title": "YES"},
+            {"id": f"flt_chg_no_{clean_btn_id}", "title": "NO"}
+        ]
+        await meta_api.send_button_message(to_phone=phone, body_text=prompt, buttons=buttons, header_text="FAVLOGIX CHARGES")
         return True
 
     # 6.5. Add Transport Charge Button (When shortfall is not there, sales can add transport charge to reduce pending balance)
@@ -891,110 +919,92 @@ async def handle_fleet_approval_flow(
         return True
 
     # 7. Shortfall Option 1: Full Charge Paid
-    if text_lower.startswith("btn_short_full_") or (
+    if text_lower.startswith(("flt_sf_full_", "btn_short_full_")) or (
         state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_shortfall_decision" and text_lower in {"1", "1️⃣", "full", "full charge", "full charge paid"}
     ):
-        trip_id = ""
-        required_charge = 0.0
-        if state and state.current_data:
-            trip_id = state.current_data.get("trip_id", "")
-            required_charge = float(state.current_data.get("required_charge", 0.0))
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        req_charge = float(data.get("required_charge", 0.0))
+        clean_btn_id = data.get("clean_btn_id", trip_id)
 
-        if not trip_id and text_lower.startswith("btn_short_full_"):
-            clean_id = text_strip.replace("btn_short_full_", "").strip()
+        if not trip_id and text_lower.startswith(("flt_sf_full_", "btn_short_full_")):
+            clean_id = text_strip.replace("flt_sf_full_", "").replace("btn_short_full_", "").strip()
             rec_chk = (await session.execute(
                 select(FleetTripApproval).where(FleetTripApproval.trip_id.ilike(f"%{clean_id}%")).order_by(FleetTripApproval.id.desc())
             )).scalars().first()
             if rec_chk:
                 trip_id = rec_chk.trip_id
-                required_charge = rec_chk.transport_charge
+                req_charge = rec_chk.transport_charge
+                clean_btn_id = clean_id
+                data.update({
+                    "trip_id": trip_id,
+                    "clean_btn_id": clean_id,
+                    "required_charge": req_charge,
+                    "dest": rec_chk.destination_city,
+                    "route": rec_chk.route or rec_chk.destination_city,
+                    "sales_val": rec_chk.trip_sales_value,
+                    "transport_charge": req_charge
+                })
 
-        await clear_user_state(session, phone)
+        # No need to ask amount because we know full charge is paid!
+        data["charged_amount"] = req_charge
+        data["pending_amount"] = 0.0
 
-        if trip_id:
-            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
-            rec = (await session.execute(rec_stmt)).scalars().first()
-            if rec and rec.dispatch_option is not None:
-                await handle_existing_trip_response(session, phone, employee, rec)
-                return True
-            if rec:
-                rec.status = "DISPATCHED_FULL_CHARGE"
-                rec.amount_charged_to_customer = required_charge
-                rec.pending_balance_recorded = 0.0
-                rec.dispatch_option = "FULL_CHARGE_PAID"
-                await session.commit()
-
-        ack = (
-            f"✅ *TRIP DISPATCH AUTHORIZED (FULL CHARGE)*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"💸 *Transport Charged to Customer:* ${required_charge:,.2f}\n"
-            f"⚖️ *Pending Balance Added:* $0.00\n"
-            f"👤 *Authorized By:* {employee.full_name if employee else 'Sales Agent'} (`+{phone}`)\n"
-            f"📊 *Status:* Cleared for Vehicle Loading & Dispatch 🚛💨\n\n"
-            f"Order is clear to go! Notification logged for Logistics."
+        await set_user_state(session, phone, "awaiting_favlogix_charged", data, flow_name="fleet_approval")
+        prompt = (
+            f"💵 *FULL TRANSPORT CHARGE SELECTED*\n"
+            f"Trip: `{trip_id}` | Transport Fee: ${req_charge:,.2f}\n"
+            "────────────────────\n"
+            "Please charge all customers in Favlogix and select YES when done:"
         )
         buttons = [
-            {"id": "btn_domain_fleet", "title": "🚛 Fleet Approval"},
-            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+            {"id": f"flt_chg_yes_{clean_btn_id}", "title": "YES"},
+            {"id": f"flt_chg_no_{clean_btn_id}", "title": "NO"}
         ]
-        await meta_api.send_button_message(
-            to_phone=phone,
-            body_text=ack,
-            buttons=buttons,
-            header_text="✅ TRIP DISPATCH AUTHORIZED"
-        )
-        # Notify Sujit & master group
-        admin_alert = (
-            f"📢 *FLEET DISPATCH: FULL CHARGE PAID*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-            f"💸 *Transport Charged to Customer:* ${required_charge:,.2f}\n"
-            f"⚖️ *Pending Balance Added:* $0.00\n"
-            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
-        )
-        await notify_fleet_admin(admin_alert)
+        await meta_api.send_button_message(to_phone=phone, body_text=prompt, buttons=buttons, header_text="FAVLOGIX CHARGES")
         return True
 
     # 8. Shortfall Option 2: Partial Charge Initiated
-    if text_lower.startswith("btn_short_part_") or (
+    if text_lower.startswith(("flt_sf_part_", "btn_short_part_")) or (
         state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_shortfall_decision" and text_lower in {"2", "2️⃣", "partial", "partial charge"}
     ):
-        trip_id = ""
-        required_charge = 0.0
-        clean_btn_id = ""
-        if state and state.current_data:
-            trip_id = state.current_data.get("trip_id", "")
-            required_charge = float(state.current_data.get("required_charge", 0.0))
-            clean_btn_id = state.current_data.get("clean_btn_id", "")
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        req_charge = float(data.get("required_charge", 0.0))
+        clean_btn_id = data.get("clean_btn_id", trip_id)
 
-        if not trip_id and text_lower.startswith("btn_short_part_"):
-            clean_id = text_strip.replace("btn_short_part_", "").strip()
+        if not trip_id and text_lower.startswith(("flt_sf_part_", "btn_short_part_")):
+            clean_id = text_strip.replace("flt_sf_part_", "").replace("btn_short_part_", "").strip()
             rec_chk = (await session.execute(
                 select(FleetTripApproval).where(FleetTripApproval.trip_id.ilike(f"%{clean_id}%")).order_by(FleetTripApproval.id.desc())
             )).scalars().first()
             if rec_chk:
                 trip_id = rec_chk.trip_id
-                required_charge = rec_chk.transport_charge
+                req_charge = rec_chk.transport_charge
                 clean_btn_id = clean_id
+                data.update({
+                    "trip_id": trip_id,
+                    "clean_btn_id": clean_id,
+                    "required_charge": req_charge,
+                    "dest": rec_chk.destination_city,
+                    "route": rec_chk.route or rec_chk.destination_city,
+                    "sales_val": rec_chk.trip_sales_value,
+                    "transport_charge": req_charge
+                })
 
         await set_user_state(
             session,
             phone,
             "awaiting_partial_charge",
-            {"trip_id": trip_id, "required_charge": required_charge, "clean_btn_id": clean_btn_id},
+            data,
             flow_name="fleet_approval"
         )
         prompt = (
-            f"💵 *PARTIAL TRANSPORT CHARGE*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"💸 *Required Transport Charge:* ${required_charge:,.2f}\n\n"
-            f"Please enter the *amount charged to the customer*:\n"
-            f"_(e.g. `50` or `75.50`)_\n\n"
-            f"💡 _The remaining deficit will be added to your pending recovery balance._\n"
-            f"💡 _Reply 'cancel' to exit._"
+            f"💵 *PARTIAL TRANSPORT CHARGE: {trip_id}*\n"
+            f"Transport Fee: ${req_charge:,.2f}\n"
+            "────────────────────\n"
+            "Please enter the amount charged to customer in USD:\n"
+            "_(e.g. 50.00)_"
         )
         await meta_api.send_text_message(phone, prompt)
         return True
@@ -1014,27 +1024,18 @@ async def handle_fleet_approval_flow(
         except ValueError:
             await meta_api.send_text_message(
                 phone,
-                "⚠️ Please enter a valid number for the amount charged (e.g. `50` or `75.50`):"
+                "⚠️ Please enter a valid number for the amount charged (e.g. 50.00):"
             )
             return True
 
         data = state.current_data or {}
         trip_id = data.get("trip_id", "")
+        clean_btn_id = data.get("clean_btn_id", trip_id)
         required_charge = float(data.get("required_charge", 0.0))
         charged_amt = round(charged_amt, 2)
-        rec = None
-        if trip_id:
-            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
-            rec = (await session.execute(rec_stmt)).scalars().first()
-            if rec and rec.dispatch_option is not None:
-                await handle_existing_trip_response(session, phone, employee, rec)
-                return True
 
-        if charged_amt >= required_charge:
-            charged_amt = required_charge
-            remaining_pending = 0.0
-        else:
-            remaining_pending = round(required_charge - charged_amt, 2)
+        remaining_pending = max(0.0, round(required_charge - charged_amt, 2))
+        if remaining_pending > 0:
             await record_pending_ledger_entry(
                 session=session,
                 phone=phone,
@@ -1042,134 +1043,192 @@ async def handle_fleet_approval_flow(
                 trip_id=trip_id,
                 entry_type="SHORTFALL_PARTIAL_BALANCE",
                 amount=remaining_pending,
-                notes=f"Partial charge ${charged_amt:,.2f} of ${required_charge:,.2f} on {trip_id}"
+                notes=f"Partial charge deficit on trip {trip_id}"
             )
 
-        if rec:
-            rec.status = "DISPATCHED_PARTIAL_CHARGE"
-            rec.amount_charged_to_customer = charged_amt
-            rec.pending_balance_recorded = remaining_pending
-            rec.dispatch_option = "PARTIAL_CHARGE"
-            await session.commit()
+        data["charged_amount"] = charged_amt
+        data["pending_amount"] = remaining_pending
 
-        tot_pending = await get_sales_rep_pending_balance(session, phone)
-        await clear_user_state(session, phone)
-
-        ack = (
-            f"✅ *TRIP DISPATCH AUTHORIZED (PARTIAL CHARGE)*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"💸 *Amount Charged to Customer:* ${charged_amt:,.2f}\n"
-            f"⚖️ *Balance Added to Your Pending:* ${remaining_pending:,.2f}\n"
-            f"🎯 *Your Total Pending to Recover:* *${tot_pending:,.2f}*\n"
-            f"👤 *Authorized By:* {employee.full_name if employee else 'Sales Agent'} (`+{phone}`)\n"
-            f"📊 *Status:* Cleared for Vehicle Loading & Dispatch 🚛💨\n\n"
-            f"Order is clear to go! Remaining deficit of ${remaining_pending:,.2f} will be covered by future trip recoveries."
+        await set_user_state(session, phone, "awaiting_favlogix_charged", data, flow_name="fleet_approval")
+        prompt = (
+            f"💵 Charged: ${charged_amt:,.2f} | Remaining ${remaining_pending:,.2f} added to pending balance.\n"
+            "────────────────────\n"
+            "Please charge all customers in Favlogix and select YES when done:"
         )
         buttons = [
-            {"id": "btn_pending_check_balance", "title": "📊 My Pending Total"},
-            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+            {"id": f"flt_chg_yes_{clean_btn_id}", "title": "YES"},
+            {"id": f"flt_chg_no_{clean_btn_id}", "title": "NO"}
         ]
-        await meta_api.send_button_message(
-            to_phone=phone,
-            body_text=ack,
-            buttons=buttons,
-            header_text="✅ TRIP DISPATCH AUTHORIZED"
-        )
-        # Notify Sujit & master group
-        admin_alert = (
-            f"📢 *FLEET DISPATCH: PARTIAL CHARGE*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-            f"💸 *Customer Paid:* ${charged_amt:,.2f}\n"
-            f"⚖️ *Added to Rep Pending:* ${remaining_pending:,.2f}\n"
-            f"🎯 *Rep Net Pending Balance:* ${tot_pending:,.2f}\n"
-            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
-        )
-        await notify_fleet_admin(admin_alert)
+        await meta_api.send_button_message(to_phone=phone, body_text=prompt, buttons=buttons, header_text="FAVLOGIX CHARGES")
         return True
 
     # 10. Shortfall Option 3: Full to Pending
-    if text_lower.startswith("btn_short_none_") or (
-        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_shortfall_decision" and text_lower in {"3", "3️⃣", "pending", "full to pending", "cannot charge", "none"}
+    if text_lower.startswith(("flt_sf_pend_", "btn_short_none_")) or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_shortfall_decision" and text_lower in {"3", "3️⃣", "pending", "add to pending", "full to pending", "none"}
     ):
-        trip_id = ""
-        required_charge = 0.0
-        if state and state.current_data:
-            trip_id = state.current_data.get("trip_id", "")
-            required_charge = float(state.current_data.get("required_charge", 0.0))
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        clean_btn_id = data.get("clean_btn_id", trip_id)
+        req_charge = float(data.get("required_charge", 0.0))
 
-        if not trip_id and text_lower.startswith("btn_short_none_"):
-            clean_id = text_strip.replace("btn_short_none_", "").strip()
+        if not trip_id and text_lower.startswith(("flt_sf_pend_", "btn_short_none_")):
+            clean_id = text_strip.replace("flt_sf_pend_", "").replace("btn_short_none_", "").strip()
             rec_chk = (await session.execute(
                 select(FleetTripApproval).where(FleetTripApproval.trip_id.ilike(f"%{clean_id}%")).order_by(FleetTripApproval.id.desc())
             )).scalars().first()
             if rec_chk:
                 trip_id = rec_chk.trip_id
-                required_charge = rec_chk.transport_charge
+                req_charge = rec_chk.transport_charge
+                clean_btn_id = clean_id
+                data.update({
+                    "trip_id": trip_id,
+                    "clean_btn_id": clean_id,
+                    "required_charge": req_charge,
+                    "dest": rec_chk.destination_city,
+                    "route": rec_chk.route or rec_chk.destination_city,
+                    "sales_val": rec_chk.trip_sales_value,
+                    "transport_charge": req_charge
+                })
 
-        rec = None
-        if trip_id:
-            rec_stmt = select(FleetTripApproval).where(FleetTripApproval.trip_id == trip_id).order_by(FleetTripApproval.id.desc())
-            rec = (await session.execute(rec_stmt)).scalars().first()
-            if rec and rec.dispatch_option is not None:
-                await handle_existing_trip_response(session, phone, employee, rec)
-                return True
-
+        # No need to ask amount; full transport charge added to pending ledger
         await record_pending_ledger_entry(
             session=session,
             phone=phone,
             name=employee.full_name if employee else "Sales Colleague",
             trip_id=trip_id,
             entry_type="SHORTFALL_FULL_UNCHARGED",
-            amount=required_charge,
+            amount=req_charge,
             notes=f"Uncharged transport charge on trip {trip_id}"
         )
 
-        if rec:
-            rec.status = "DISPATCHED_FULL_PENDING"
-            rec.amount_charged_to_customer = 0.0
-            rec.pending_balance_recorded = required_charge
-            rec.dispatch_option = "FULL_TO_PENDING"
-            await session.commit()
+        data["charged_amount"] = 0.0
+        data["pending_amount"] = req_charge
 
-        tot_pending = await get_sales_rep_pending_balance(session, phone)
+        await set_user_state(session, phone, "awaiting_favlogix_charged", data, flow_name="fleet_approval")
+        prompt = (
+            f"⚖️ Full transport fee of ${req_charge:,.2f} added to your pending recovery balance.\n"
+            "────────────────────\n"
+            "Please charge all customers in Favlogix and select YES when done:"
+        )
+        buttons = [
+            {"id": f"flt_chg_yes_{clean_btn_id}", "title": "YES"},
+            {"id": f"flt_chg_no_{clean_btn_id}", "title": "NO"}
+        ]
+        await meta_api.send_button_message(to_phone=phone, body_text=prompt, buttons=buttons, header_text="FAVLOGIX CHARGES")
+        return True
+
+    # 10.5 Stage 2: Favlogix Charged Confirmation [YES] / [NO]
+    if text_lower.startswith("flt_chg_yes_") or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_favlogix_charged" and text_lower in {"yes", "y", "done"}
+    ):
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        if not trip_id and text_lower.startswith("flt_chg_yes_"):
+            trip_id = text_strip.replace("flt_chg_yes_", "").strip()
+            data["trip_id"] = trip_id
+
+        await set_user_state(session, phone, "awaiting_customer_manifest", data, flow_name="fleet_approval")
+        prompt = (
+            f"📋 *CUSTOMER CHARGES MANIFEST: {trip_id}*\n"
+            "────────────────────\n"
+            "To verify customer charges autonomously during driver transit, please enter customer charges in this format:\n\n"
+            "👉 `CUST-101: 45, CUST-102: 60`\n\n"
+            "_(or type *SKIP* if charging a single general customer)_"
+        )
+        await meta_api.send_text_message(phone, prompt)
+        return True
+
+    if text_lower.startswith("flt_chg_no_") or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_favlogix_charged" and text_lower in {"no", "n"}
+    ):
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        clean_btn_id = data.get("clean_btn_id", trip_id)
+        prompt = (
+            "⚠️ Please charge all customers in Favlogix first.\n\n"
+            "Select *YES* below once all charges have been entered in Favlogix:"
+        )
+        buttons = [
+            {"id": f"flt_chg_yes_{clean_btn_id}", "title": "YES"}
+        ]
+        await meta_api.send_button_message(to_phone=phone, body_text=prompt, buttons=buttons, header_text="FAVLOGIX CHARGES")
+        return True
+
+    # 10.6 Stage 2 Manifest Submission -> Save Schedules & Notify Edward
+    if state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_customer_manifest":
+        data = state.current_data or {}
+        trip_id = data.get("trip_id", "")
+        company_name = data.get("company_name", "A. TG Hardware")
+        dest = data.get("dest", "")
+        route = data.get("route", dest)
+        sales_val = float(data.get("sales_val", 0.0))
+        transport_charge = float(data.get("transport_charge", 0.0))
+
+        schedules = []
+        raw_manifest = text_strip
+        if raw_manifest.upper() == "SKIP" or ":" not in raw_manifest:
+            schedules.append({
+                "customer_id": "GENERAL",
+                "expected_charge": transport_charge
+            })
+        else:
+            items = re.split(r"[,;\n]+", raw_manifest)
+            for item in items:
+                if ":" in item:
+                    c_id, amt_str = item.split(":", 1)
+                    clean_c = c_id.strip().upper()
+                    clean_amt = re.sub(r"[^\d.]", "", amt_str.strip())
+                    try:
+                        exp_amt = float(clean_amt)
+                    except ValueError:
+                        exp_amt = 0.0
+                    if clean_c:
+                        schedules.append({
+                            "customer_id": clean_c,
+                            "expected_charge": exp_amt
+                        })
+
+        if not schedules:
+            schedules.append({
+                "customer_id": "GENERAL",
+                "expected_charge": transport_charge
+            })
+
+        # Save customer schedules batch
+        await save_customer_schedules_batch(session, trip_id, schedules)
+
+        # Create or update FleetTripRequest
+        await create_or_update_fleet_trip_request(
+            session=session,
+            trip_id=trip_id,
+            company_name=company_name,
+            salesperson_phone=phone,
+            destination_city=dest,
+            salesperson_name=employee.full_name if employee else "Sales Colleague",
+            route=route,
+            trip_sales_value=sales_val,
+            transport_charge=transport_charge
+        )
+
         await clear_user_state(session, phone)
 
         ack = (
-            f"✅ *TRIP DISPATCH AUTHORIZED (FULL TO PENDING)*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"💸 *Amount Charged to Customer:* $0.00\n"
-            f"⚖️ *Balance Added to Your Pending:* ${required_charge:,.2f}\n"
-            f"🎯 *Your Total Pending to Recover:* *${tot_pending:,.2f}*\n"
-            f"👤 *Authorized By:* {employee.full_name if employee else 'Sales Agent'} (`+{phone}`)\n"
-            f"📊 *Status:* Cleared for Vehicle Loading & Dispatch 🚛💨\n\n"
-            f"Order is clear to go! Transport charge of ${required_charge:,.2f} has been recorded to your pending balance to be covered by other trips over time."
+            f"✅ *TRIP DISPATCH CLEARED: {trip_id}*\n"
+            "────────────────────\n"
+            f"Company: {company_name}\n"
+            f"Route: {route or dest}\n"
+            f"Registered Customers: {len(schedules)}\n"
+            "────────────────────\n"
+            "Order is cleared! Notification forwarded to Edward for truck and driver allocation. 🚛💨"
         )
         buttons = [
-            {"id": "btn_pending_check_balance", "title": "📊 My Pending Total"},
-            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+            {"id": "btn_sales_menu", "title": "Main Menu"}
         ]
-        await meta_api.send_button_message(
-            to_phone=phone,
-            body_text=ack,
-            buttons=buttons,
-            header_text="✅ TRIP DISPATCH AUTHORIZED"
-        )
-        # Notify Sujit & master group
-        admin_alert = (
-            f"📢 *FLEET DISPATCH: FULL TO PENDING*\n"
-            f"────────────────────\n"
-            f"🚛 *Trip:* `{trip_id}`\n"
-            f"👤 *Sales Rep:* {employee.full_name if employee else 'Sales'} (`+{phone}`)\n"
-            f"💸 *Customer Paid:* $0.00\n"
-            f"⚖️ *Full Charge Added to Pending:* ${required_charge:,.2f}\n"
-            f"🎯 *Rep Net Pending Balance:* ${tot_pending:,.2f}\n"
-            f"📊 *Status:* Cleared for Loading & Dispatch 🚛💨"
-        )
-        await notify_fleet_admin(admin_alert)
+        await meta_api.send_button_message(to_phone=phone, body_text=ack, buttons=buttons, header_text="DISPATCH CLEARED")
+
+        # Forward immediately to Edward for Stage 3!
+        from app.handlers.logistics_handler import notify_edward_new_trip
+        await notify_edward_new_trip(session, trip_id)
         return True
 
     # 11. Cancel button
@@ -1238,6 +1297,7 @@ async def handle_fleet_approval_flow(
             await handle_existing_trip_response(session, phone, employee, existing_canonical)
             return True
 
+        company_name = (state.current_data or {}).get("company_name", "A. TG Hardware") if state else "A. TG Hardware"
         dest = result.get("destination_city", "Unknown")
         route = result.get("route", "")
         route_str = f" ({route})" if route else ""
@@ -1279,20 +1339,19 @@ async def handle_fleet_approval_flow(
                 )
 
             card_body = (
-                f"✅ *FLEET TRIP APPROVED FOR DISPATCH*\n"
+                f"✅ *FLEET TRIP DETAILS*\n"
                 f"────────────────────\n"
+                f"🏢 *Company:* {company_name}\n"
                 f"🚛 *Trip:* `{trip_id}`\n"
                 f"📍 *Destination:* {dest}{route_str}\n"
-                f"💰 *Trip Total Sales:* ${sales_val:,.2f}\n"
-                f"🎯 *Required Minimum:* ${req_min:,.2f}\n"
-                f"📊 *Status:* ✅ *Passed Minimum Sales Threshold*\n"
+                f"💰 *Sales Total:* ${sales_val:,.2f}\n"
                 f"────────────────────\n"
-                f"🎉 Trip meets all sales requirements! Cleared for driver dispatch and vehicle loading.{pending_notice}"
+                f"Trip meets route requirements! Cleared for dispatch.{pending_notice}"
             )
             buttons = [
-                {"id": f"btn_dispatch_{clean_btn_id}", "title": "🚛 Dispatch Trip"},
-                {"id": f"btn_add_trans_{clean_btn_id}", "title": "💵 Add Transport"},
-                {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+                {"id": f"flt_disp_ok_{clean_btn_id}", "title": "Authorize Dispatch"},
+                {"id": f"flt_add_trans_{clean_btn_id}", "title": "Add Transport"},
+                {"id": "btn_sales_menu", "title": "Main Menu"}
             ]
             await set_user_state(
                 session,
@@ -1301,9 +1360,13 @@ async def handle_fleet_approval_flow(
                 {
                     "trip_id": trip_id,
                     "clean_btn_id": clean_btn_id,
+                    "company_name": company_name,
                     "cur_pending": cur_pending,
                     "dest": dest,
-                    "sales_val": sales_val
+                    "route": route,
+                    "sales_val": sales_val,
+                    "transport_charge": 0.0,
+                    "required_charge": 0.0
                 },
                 flow_name="fleet_approval"
             )
@@ -1311,11 +1374,11 @@ async def handle_fleet_approval_flow(
                 to_phone=phone,
                 body_text=card_body,
                 buttons=buttons,
-                header_text="🚛 TRIP VERIFICATION PASSED"
+                header_text="FLEET TRIP DETAILS"
             )
         else:
-            # Shortfall detected -> Save record & Send 3 Options
-            # CONFIDENTIALITY: Strictly NO '4%' mention anywhere!
+            # Shortfall detected -> Save record & Send 3 clean options
+            # Hide route minimum, shortfall amount, and 4% formula as requested!
             approval_record = FleetTripApproval(
                 trip_id=trip_id,
                 salesperson_phone=phone,
@@ -1336,38 +1399,42 @@ async def handle_fleet_approval_flow(
             await session.commit()
 
             card_body = (
-                f"📋 *FLEET TRIP VERIFICATION*\n"
+                f"📋 *FLEET TRIP DETAILS*\n"
                 f"────────────────────\n"
+                f"🏢 *Company:* {company_name}\n"
                 f"🚛 *Trip:* `{trip_id}`\n"
                 f"📍 *Destination:* {dest}{route_str}\n"
-                f"💰 *Trip Total Sales:* ${sales_val:,.2f}\n"
-                f"🎯 *Required Minimum:* ${req_min:,.2f}\n\n"
-                f"⚠️ *SHORTFALL DETECTED:* ${shortfall:,.2f}\n"
-                f"💸 *Transport Charge:* *${transport_charge:,.2f}*\n"
+                f"💰 *Sales Total:* ${sales_val:,.2f}\n"
+                f"💸 *Transport Fee to Take:* *${transport_charge:,.2f}*\n"
                 f"────────────────────\n"
-                f"⚠️ *Action Required:* Minimum sales threshold not reached.\n"
-                f"Please select a transport charge resolution for dispatch:\n\n"
-                f"1️⃣ *Full Charge:* Customer paid ${transport_charge:,.2f} in full. Order clear to go.\n"
-                f"2️⃣ *Partial Charge:* Customer paid part; remainder recorded to your pending balance.\n"
-                f"3️⃣ *Full to Pending:* Uncharged; full ${transport_charge:,.2f} recorded to your pending balance."
+                f"Please select an option below:"
             )
             buttons = [
-                {"id": f"btn_short_full_{clean_btn_id}", "title": "1️⃣ Full Charge"},
-                {"id": f"btn_short_part_{clean_btn_id}", "title": "2️⃣ Partial Charge"},
-                {"id": f"btn_short_none_{clean_btn_id}", "title": "3️⃣ Full to Pending"}
+                {"id": f"flt_sf_full_{clean_btn_id}", "title": "Full Charge"},
+                {"id": f"flt_sf_part_{clean_btn_id}", "title": "Partial Charge"},
+                {"id": f"flt_sf_pend_{clean_btn_id}", "title": "Add to Pending"}
             ]
             await set_user_state(
                 session,
                 phone,
                 "awaiting_shortfall_decision",
-                {"trip_id": trip_id, "required_charge": transport_charge, "clean_btn_id": clean_btn_id},
+                {
+                    "trip_id": trip_id,
+                    "clean_btn_id": clean_btn_id,
+                    "company_name": company_name,
+                    "dest": dest,
+                    "route": route,
+                    "sales_val": sales_val,
+                    "transport_charge": transport_charge,
+                    "required_charge": transport_charge
+                },
                 flow_name="fleet_approval"
             )
             await meta_api.send_button_message(
                 to_phone=phone,
                 body_text=card_body,
                 buttons=buttons,
-                header_text="⚠️ SHORTFALL - SELECT ACTION"
+                header_text="FLEET TRIP DETAILS"
             )
         return True
 
