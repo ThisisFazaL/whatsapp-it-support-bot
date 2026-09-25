@@ -165,6 +165,11 @@ async def handle_zayn_accounts_interaction(
 
     # 3. Zayn enters recalculation notes
     if state and state.flow_name == "fleet_zayn" and state.current_step == "awaiting_recalc_notes":
+        if text_lower in {"cancel", "reset", "menu", "back", "exit"}:
+            await clear_user_state(session, clean_p)
+            await meta_api.send_text_message(clean_p, "Recalculation request cancelled.")
+            return True
+
         data = state.current_data or {}
         trip_id = data.get("trip_id", "")
         trip = await get_fleet_trip_request_by_id(session, trip_id)

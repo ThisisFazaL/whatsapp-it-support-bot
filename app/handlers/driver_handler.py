@@ -300,8 +300,12 @@ async def handle_driver_interaction(
         data = state.current_data or {}
         trip_id = data.get("trip_id", "")
 
-        if text_lower in {"cancel", "exit", "back", "menu"}:
-            if state.current_step != "awaiting_departure_time":
+        if text_lower in {"cancel", "exit", "back", "menu", "reset"}:
+            if state.current_step == "awaiting_departure_time":
+                await clear_user_state(session, clean_p)
+                await meta_api.send_text_message(clean_p, "Departure entry cancelled. You can reply when ready.")
+                return True
+            else:
                 await send_driver_transit_menu(session, clean_p, trip_id)
                 return True
 

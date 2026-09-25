@@ -173,6 +173,11 @@ async def handle_sales_admin_interaction(
 
     # 3. Active state handling for Sales Admin
     if state and state.flow_name == "fleet_sales_admin":
+        if text_lower in {"cancel", "reset", "menu", "back", "exit"}:
+            await clear_user_state(session, clean_p)
+            await meta_api.send_text_message(clean_p, "Balancing session cancelled.")
+            return True
+
         data = state.current_data or {}
         trip_id = data.get("trip_id", "")
         trip = await get_fleet_trip_request_by_id(session, trip_id)

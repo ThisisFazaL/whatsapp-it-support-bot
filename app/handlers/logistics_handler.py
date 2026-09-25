@@ -218,7 +218,7 @@ async def handle_edward_interaction(
         trip_id = data.get("trip_id", "")
         trip = await get_fleet_trip_request_by_id(session, trip_id) if trip_id else None
 
-        if text_lower in {"cancel", "exit", "menu"}:
+        if text_lower in {"cancel", "reset", "menu", "back", "exit"}:
             await clear_user_state(session, clean_p)
             await meta_api.send_text_message(clean_p, "Allocation cancelled.")
             return True
