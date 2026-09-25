@@ -23,4 +23,4 @@ COPY . .
 EXPOSE 8000
 
 # Start production server with single high-performance async worker for optimal memory efficiency (<60MB)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
