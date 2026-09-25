@@ -45,6 +45,7 @@ async def run_tests():
     async with async_session_factory() as session:
         # Check initial state with TEST_USER_ROLE=SALES
         SESSION_ROLE_OVERRIDES.clear()
+        settings.test_user_role = "SALES"
         is_sales = await is_salesperson(session, fazal_phone)
         print(f"Fazal role when TEST_USER_ROLE=SALES: is_salesperson = {is_sales}")
         assert is_sales is True, "Expected Fazal to be SALES when TEST_USER_ROLE=SALES"
