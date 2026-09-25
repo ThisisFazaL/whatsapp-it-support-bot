@@ -434,7 +434,21 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             self.assertIn(t1, body)
             self.assertIn(t2, body)
 
-            print("[SUCCESS] Multi-trip FIFO queue concurrency verified!")
+            # Verify queue selection via digit '2'
+            state = await get_user_state(session, self.edward_phone)
+            self.assertIsNotNone(state)
+            self.assertEqual(state.flow_name, "fleet_edward")
+            self.assertEqual(state.current_step, "awaiting_queue_selection")
+
+            handled = await handle_edward_interaction(session, self.edward_phone, "2", state)
+            self.assertTrue(handled)
+
+            # Verify state transitions to awaiting_truck_plate for t2
+            state = await get_user_state(session, self.edward_phone)
+            self.assertEqual(state.current_step, "awaiting_truck_plate")
+            self.assertEqual(state.current_data.get("trip_id"), t2)
+
+            print("[SUCCESS] Multi-trip FIFO queue concurrency & digit selection verified!")
 
 
 if __name__ == "__main__":

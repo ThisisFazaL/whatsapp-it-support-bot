@@ -79,20 +79,24 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
 
 async def send_edward_queue(session: AsyncSession, phone: str):
     """Presents Edward with multi-trip FIFO queue selector."""
+    clean_p = clean_phone(phone)
     pending = await get_pending_trips_for_edward(session)
     if not pending:
         await meta_api.send_text_message(
-            phone,
+            clean_p,
             "✅ *No Pending Trips*\n────────────────────\nAll trip allocation requests have been processed!"
         )
         return
 
     lines = []
     buttons = []
+    trip_ids = [t.trip_id for t in pending]
     for idx, t in enumerate(pending[:3], start=1):
-        lines.append(f"{idx}. *{t.trip_id}* | {t.company_name} | {t.route or t.destination_city}")
-        # Button title strictly <= 20 chars, NO emojis
-        btn_title = f"Allocate {t.trip_id}"[:20]
+        lines.append(f"{idx}. *{t.trip_id}* | {t.company_name} | {t.route or t.destination_city or 'Depot'}")
+        # Button title strictly <= 20 chars, NO emojis, unique
+        btn_title = f"{idx}. {t.trip_id}"
+        if len(btn_title) > 20:
+            btn_title = f"Allocate #{idx}"
         buttons.append({"id": f"flt_edw_alloc_{t.trip_id}", "title": btn_title})
 
     queue_text = "\n".join(lines)
@@ -101,14 +105,24 @@ async def send_edward_queue(session: AsyncSession, phone: str):
         "────────────────────\n"
         f"{queue_text}\n"
         "────────────────────\n"
-        "Select a trip to allocate:"
+        "Select a trip to allocate by tapping below or replying with its number (1, 2, or 3):"
     )
+
+    await set_user_state(
+        session,
+        clean_p,
+        current_step="awaiting_queue_selection",
+        current_data={"pending_trip_ids": trip_ids},
+        flow_name="fleet_edward"
+    )
+
     await meta_api.send_button_message(
-        to_phone=phone,
+        to_phone=clean_p,
         body_text=body,
         buttons=buttons,
         header_text="TRIP QUEUE"
     )
+
 
 
 async def prompt_truck_plate(session: AsyncSession, phone: str, trip_id: str):
@@ -208,6 +222,30 @@ async def handle_edward_interaction(
             await clear_user_state(session, clean_p)
             await meta_api.send_text_message(clean_p, "Allocation cancelled.")
             return True
+
+        # Step 0: Selection from Pending Trip Queue (e.g. user replies "1", "2", "3" or types trip ID)
+        if state.current_step == "awaiting_queue_selection":
+            pending_ids = data.get("pending_trip_ids", [])
+            chosen_trip_id = None
+            clean_digits = re.sub(r"[^\d]", "", text_strip)
+            if clean_digits.isdigit():
+                idx = int(clean_digits) - 1
+                if 0 <= idx < len(pending_ids):
+                    chosen_trip_id = pending_ids[idx]
+            if not chosen_trip_id:
+                for tid in pending_ids:
+                    if text_strip.upper() == tid.upper():
+                        chosen_trip_id = tid
+                        break
+            if chosen_trip_id:
+                await prompt_truck_plate(session, clean_p, chosen_trip_id)
+                return True
+            else:
+                await meta_api.send_text_message(
+                    clean_p,
+                    f"⚠️ Please select a valid trip number (1 to {len(pending_ids)}) or tap one of the buttons."
+                )
+                return True
 
         # Step 1: Truck Plate entered
         if state.current_step == "awaiting_truck_plate":
