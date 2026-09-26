@@ -293,4 +293,57 @@ class MetaWhatsAppAPI:
         logger.info(f"[OUTGOING TEMPLATE '{template_name}' WITH PARAMS -> {clean_phone}]: {body_params}")
         return await self._post_with_retry(payload)
 
+    async def send_location_message(
+        self,
+        to_phone: str,
+        latitude: float,
+        longitude: float,
+        name: str = None,
+        address: str = None,
+        fallback_template: str = None,
+        template_params: list = None
+    ) -> dict:
+        """
+        Sends an interactive native WhatsApp location pin message to recipient.
+        Displays interactive map snippet in the user's WhatsApp chat.
+        """
+        clean_phone = to_phone.replace("+", "").replace(" ", "").strip()
+        loc_payload = {
+            "latitude": str(latitude),
+            "longitude": str(longitude)
+        }
+        if name:
+            loc_payload["name"] = name[:100]
+        if address:
+            loc_payload["address"] = address[:200]
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_phone,
+            "type": "location",
+            "location": loc_payload
+        }
+        logger.info(f"[OUTGOING LOCATION PIN -> {clean_phone}]\nLat: {latitude}, Lng: {longitude}, Name: {name}, Address: {address}")
+        res = await self._post_with_retry(payload)
+
+        # Check for 24-hour window restriction and fallback to Template Message if available
+        err_code = res.get("error", {}).get("code") if isinstance(res.get("error"), dict) else None
+        if err_code in {131047, 131042, 131026}:
+            template_name = fallback_template or DEFAULT_APPROVED_TEMPLATE
+            logger.info(f"[AUTO-FALLBACK] 24h window expired for +{clean_phone}. Sending approved template '{template_name}'.")
+            return await self.send_template_message(clean_phone, template_name, body_params=template_params or [])
+
+        # If sending location fails for non-24h reasons, fallback to text message with Google Maps link
+        if "error" in res or res.get("error"):
+            fallback_text = (
+                f"📍 *Location Update*\n"
+                f"{name or 'Live Location'}\n"
+                f"{address or ''}\n\n"
+                f"🔗 View on Google Maps:\nhttps://www.google.com/maps?q={latitude},{longitude}"
+            ).strip()
+            return await self.send_text_message(clean_phone, fallback_text, fallback_template=fallback_template, template_params=template_params)
+
+        return res
+
 meta_api = MetaWhatsAppAPI()

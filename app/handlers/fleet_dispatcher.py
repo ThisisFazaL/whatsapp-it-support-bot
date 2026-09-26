@@ -23,7 +23,7 @@ def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) ->
     """Fast check whether an incoming message belongs to the fleet operations subsystem."""
     txt = (message_text or "").strip().lower()
 
-    if txt.startswith("flt_"):
+    if txt.startswith(("flt_", "location_pin_")):
         return True
 
     if state and state.flow_name:
@@ -64,6 +64,13 @@ async def dispatch_fleet_message(
         if handled:
             return True
 
+    # 1.5 Sales Rep Allowance Configuration
+    if txt.startswith("flt_rep_") or fn == "fleet_rep_allowance":
+        from app.handlers.fleet_approval_handler import handle_sales_rep_allowance_interaction
+        handled = await handle_sales_rep_allowance_interaction(session, clean_p, message_text, state)
+        if handled:
+            return True
+
     # 2. Zayn & Accounts
     if txt.startswith(("flt_zayn_", "flt_acc_")) or fn in {"fleet_zayn", "fleet_accounts"}:
         handled = await handle_zayn_accounts_interaction(session, clean_p, message_text, state)
@@ -71,7 +78,7 @@ async def dispatch_fleet_message(
             return True
 
     # 3. Driver Transit Actions
-    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_")) or fn == "fleet_driver":
+    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "location_pin_")) or fn == "fleet_driver":
         handled = await handle_driver_interaction(session, clean_p, message_text, state)
         if handled:
             return True

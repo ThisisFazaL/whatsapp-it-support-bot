@@ -245,11 +245,21 @@ class FleetTripRequest(Base):
     allowance_status = Column(String(50), default="PENDING_APPROVAL")  # PENDING_APPROVAL, APPROVED, TRANSFERRED
     allowance_approved_by = Column(String(100), nullable=True)
     departure_time = Column(String(20), nullable=True)
+    return_time = Column(String(20), nullable=True)
+    night_count = Column(Integer, nullable=False, default=0)
+    accommodation_allowance = Column(Float, nullable=False, default=0.0)
+    recalculate_note = Column(Text, nullable=True)
     
     # Driver Transit & Return
     status = Column(String(50), default="CREATED", index=True)
     # CREATED -> PENDING_ASSIGNMENT -> ASSIGNED -> ALLOWANCE_APPROVED -> TRANSFERRED -> ACTIVE -> RETURNING -> RETURNED -> BALANCED -> CLOSED
     is_live_location_active = Column(Boolean, default=False)
+    last_latitude = Column(Float, nullable=True)
+    last_longitude = Column(Float, nullable=True)
+    last_location_time = Column(DateTime, nullable=True)
+    start_odometer = Column(Float, nullable=True)
+    end_odometer = Column(Float, nullable=True)
+    distance_km = Column(Float, nullable=True)
     departed_at = Column(DateTime, nullable=True)
     returning_at = Column(DateTime, nullable=True)
     returned_at = Column(DateTime, nullable=True)
@@ -286,6 +296,8 @@ class FleetEmergencyExpense(Base):
     amount = Column(Float, nullable=False, default=0.0)
     description = Column(Text, nullable=True)
     has_video_evidence = Column(Boolean, default=False)
+    status = Column(String(50), default="PENDING")  # PENDING, APPROVED, REJECTED
+    approved_by = Column(String(100), nullable=True)
     verified_in_balancing = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -1057,6 +1069,7 @@ async def save_customer_schedules_batch(
             expected_charge=exp_charge,
             collected_charge=0.0,
             payment_method="CASH",
+            reference_note=item.get("reference_note"),
             status="PENDING",
             variance=0.0,
             created_at=datetime.datetime.utcnow()
@@ -1134,7 +1147,9 @@ async def record_emergency_expense(
     charge_type: str,
     amount: float,
     description: Optional[str] = None,
-    has_video: bool = False
+    has_video: bool = False,
+    status: str = "PENDING",
+    approved_by: Optional[str] = None
 ) -> FleetEmergencyExpense:
     """Logs an emergency expense spent by a driver during transit."""
     clean_p = driver_phone.replace("+", "").strip() if driver_phone else ""
@@ -1145,12 +1160,37 @@ async def record_emergency_expense(
         amount=round(float(amount), 2),
         description=description,
         has_video_evidence=has_video,
+        status=status,
+        approved_by=approved_by,
         verified_in_balancing=False,
         created_at=datetime.datetime.utcnow()
     )
     session.add(exp)
     await session.commit()
     await session.refresh(exp)
+    return exp
+
+
+async def get_emergency_expense_by_id(session: AsyncSession, exp_id: int) -> Optional[FleetEmergencyExpense]:
+    """Retrieves an emergency expense record by ID."""
+    stmt = select(FleetEmergencyExpense).where(FleetEmergencyExpense.id == exp_id)
+    res = await session.execute(stmt)
+    return res.scalars().first()
+
+
+async def set_emergency_expense_status(
+    session: AsyncSession,
+    exp_id: int,
+    status: str,
+    approved_by: str
+) -> Optional[FleetEmergencyExpense]:
+    """Updates approval status for an emergency expense."""
+    exp = await get_emergency_expense_by_id(session, exp_id)
+    if exp:
+        exp.status = status
+        exp.approved_by = approved_by
+        await session.commit()
+        await session.refresh(exp)
     return exp
 
 

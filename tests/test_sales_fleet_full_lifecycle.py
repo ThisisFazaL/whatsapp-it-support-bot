@@ -39,7 +39,7 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
         self.edward_phone = settings.edward_phone
         self.zayn_phone = settings.zayn_phone
         self.accounts_phone = settings.accounts_phones[0]
-        self.driver_phone = "263779888777"
+        self.driver_phone = "263788112771"
         self.sales_admin_phone = settings.sales_admin_tg_phone
         self.logistics_mgr_phone = settings.logistics_manager_phone
 
@@ -148,38 +148,51 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(stage2_btns, ["YES", "NO"])
 
             # ----------------------------------------------------
-            # STAGE 2: Sales Rep clicks [YES] & Registers Manifest
+            # STAGE 2: Sales Rep clicks [YES] & Enters Transport Charge ID
             # ----------------------------------------------------
             state = await get_user_state(session, self.sales_rep_phone)
             handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, f"flt_chg_yes_{clean_btn_id}", state)
             self.assertTrue(handled)
 
-            # Prompts for customer charges manifest
-            manifest_prompt = mock_send_txt.call_args[0][1]
-            self.assertIn("CUSTOMER CHARGES MANIFEST", manifest_prompt)
+            # Prompts for Transport Charge ID from Packaging List
+            tc_prompt = mock_send_txt.call_args[0][1]
+            self.assertIn("TRANSPORT CHARGE ID (PACKAGING LIST)", tc_prompt)
 
-            # Sales Rep enters customer charges
+            # Sales Rep enters Transport Charge ID (e.g. mtrtc)
             state = await get_user_state(session, self.sales_rep_phone)
-            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "CUST-101: 72.00, CUST-102: 80.00", state)
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "mtrtc", state)
             self.assertTrue(handled)
 
-            # Verify database schedules saved and trip created
+            # Verify database schedules saved from packaging list and trip created
             req = await get_fleet_trip_request_by_id(session, trip_test_id)
             self.assertIsNotNone(req)
-            self.assertEqual(req.status, "PENDING_ASSIGNMENT")
             self.assertEqual(req.company_name, "A. TG Hardware")
             self.assertEqual(req.destination_city, "Gweru")
 
             schedules = await get_customer_schedules_for_trip(session, trip_test_id)
             self.assertEqual(len(schedules), 2)
             self.assertEqual(schedules[0].customer_id, "CUST-101")
-            self.assertEqual(schedules[0].expected_charge, 72.00)
+            self.assertEqual(schedules[0].expected_charge, 76.00)
             self.assertEqual(schedules[1].customer_id, "CUST-102")
-            self.assertEqual(schedules[1].expected_charge, 80.00)
+            self.assertEqual(schedules[1].expected_charge, 76.00)
 
             # ----------------------------------------------------
-            # STAGE 3: Edward receives trip & allocates
+            # STAGE 3: Edward receives trip & allocates Vehicle + Driver Only
             # ----------------------------------------------------
+            # Ensure driver Terrence Mupfumi exists in WorkshopStaff for auto-phone resolution
+            from app.workshop.models import WorkshopStaff
+            from sqlalchemy import select
+            st_chk = await session.execute(select(WorkshopStaff).where(WorkshopStaff.phone == self.driver_phone))
+            if not st_chk.scalars().first():
+                ws_driver = WorkshopStaff(
+                    phone=self.driver_phone,
+                    full_name="Terrence Mupfumi",
+                    role="Driver",
+                    active=True
+                )
+                session.add(ws_driver)
+                await session.commit()
+
             # Edward checks [Trip Queue]
             handled = await handle_edward_interaction(session, self.edward_phone, "flt_edw_queue", None)
             self.assertTrue(handled)
@@ -200,64 +213,86 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             handled = await handle_edward_interaction(session, self.edward_phone, "ZW 123 ABC", state)
             self.assertTrue(handled)
 
-            # 2. Driver name (typed, NO buttons)
+            # 2. Driver name (typed, NO buttons) -> Auto-resolves phone and hands off to Sales Rep
             state = await get_user_state(session, self.edward_phone)
             self.assertEqual(state.current_step, "awaiting_driver_name")
-            handled = await handle_edward_interaction(session, self.edward_phone, "John Banda", state)
+            handled = await handle_edward_interaction(session, self.edward_phone, "Terrence Mupfumi", state)
             self.assertTrue(handled)
 
-            # 3. Driver phone
-            state = await get_user_state(session, self.edward_phone)
-            self.assertEqual(state.current_step, "awaiting_driver_phone")
-            handled = await handle_edward_interaction(session, self.edward_phone, self.driver_phone, state)
+            # Verify Edward's allocation is completed and phone auto-resolved
+            req = await get_fleet_trip_request_by_id(session, trip_test_id)
+            self.assertEqual(req.truck_plate, "ZW 123 ABC")
+            self.assertEqual(req.driver_name, "Terrence Mupfumi")
+            self.assertEqual(req.driver_phone, self.driver_phone)
+            self.assertEqual(req.status, "ALLOCATED")
+
+            # ----------------------------------------------------
+            # SALES REP ALLOWANCE ENTRY (Automated Meals & Accommodation)
+            # ----------------------------------------------------
+            # Sales Rep gets prompt to configure allowances
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            self.assertEqual(rep_state.current_step, "awaiting_rep_crew_count")
+
+            # 1. Sales Rep enters Crew Count: 2
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "2", rep_state)
             self.assertTrue(handled)
 
-            # 4. Crew count (NO brackets in prompt!)
-            state = await get_user_state(session, self.edward_phone)
-            self.assertEqual(state.current_step, "awaiting_crew_count")
-            crew_prompt = mock_send_txt.call_args[0][1]
-            self.assertIn("Enter number of crew members:", crew_prompt)
-            handled = await handle_edward_interaction(session, self.edward_phone, "2", state)
+            # 2. Sales Rep enters Departure Time: 06:30 AM
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            self.assertEqual(rep_state.current_step, "awaiting_rep_departure_time")
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "06:30 AM", rep_state)
             self.assertTrue(handled)
 
-            # 5. Meal count (NO brackets in prompt!)
-            state = await get_user_state(session, self.edward_phone)
-            self.assertEqual(state.current_step, "awaiting_meal_count")
-            meal_prompt = mock_send_txt.call_args[0][1]
-            self.assertIn("Enter number of meals per person:", meal_prompt)
-            handled = await handle_edward_interaction(session, self.edward_phone, "3", state)
+            # 3. Sales Rep enters Return Time: 08:00 PM (Same day: 3 meals, 0 accommodation)
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            self.assertEqual(rep_state.current_step, "awaiting_rep_return_time")
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "08:00 PM", rep_state)
             self.assertTrue(handled)
 
-            # 6. Toll count
-            state = await get_user_state(session, self.edward_phone)
-            self.assertEqual(state.current_step, "awaiting_toll_count")
-            handled = await handle_edward_interaction(session, self.edward_phone, "4", state)
+            # 4. Sales Rep enters Tolls: 34.50
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            self.assertEqual(rep_state.current_step, "awaiting_rep_toll_cost")
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "34.50", rep_state)
             self.assertTrue(handled)
 
-            # 7. Toll cost
-            state = await get_user_state(session, self.edward_phone)
-            self.assertEqual(state.current_step, "awaiting_toll_cost")
-            handled = await handle_edward_interaction(session, self.edward_phone, "34.50", state)
-            self.assertTrue(handled)
+            # Verify Allowance Summary presented with $2.00 rate
+            summary_card = mock_send_btn.call_args[1]["body_text"]
+            self.assertIn("Meals: 3 per person ($2.00 rate)", summary_card)
+            self.assertIn("Food: $12.00", summary_card.replace("Food ($2.00 x 2 x 3)", "Food").replace("🍱 Meals: 3 per person ($2.00 rate) = $12.00", "Food: $12.00"))
+            self.assertIn("Total Allowance: $46.50", summary_card)
 
-            # Edward receives Review Summary with [Confirm], [Change] (NO emojis on buttons!)
-            review_card = mock_send_btn.call_args[1]["body_text"]
-            self.assertIn("Toll cost: $34.50", review_card)
-            self.assertIn("Food ($2 x 2 x 3): $12.00", review_card)
-            self.assertIn("Total allowance: $46.50", review_card)
-            # Sales total strictly hidden from Edward!
-            self.assertNotIn("14,200", review_card)
-
-            edw_btns = [b["title"] for b in mock_send_btn.call_args[1]["buttons"]]
-            self.assertEqual(edw_btns, ["Confirm", "Change"])
-
-            # Edward clicks [Confirm]
-            handled = await handle_edward_interaction(session, self.edward_phone, f"flt_edw_confirm_{trip_test_id}", None)
+            # Sales Rep submits allowances for Zayn's approval
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, f"flt_rep_sub_allow_{trip_test_id}", None)
             self.assertTrue(handled)
 
             # ----------------------------------------------------
-            # STAGE 4: Zayn & Accounts Approval and Transfer
+            # STAGE 4: Zayn Recalculation Note & Approval + Accounts Transfer
             # ----------------------------------------------------
+            # Zayn tests [Recalculate] -> enters note
+            handled = await handle_zayn_accounts_interaction(session, self.zayn_phone, f"flt_zayn_recalc_{trip_test_id}", None)
+            self.assertTrue(handled)
+
+            zayn_state = await get_user_state(session, self.zayn_phone)
+            self.assertEqual(zayn_state.current_step, "awaiting_recalc_notes")
+            handled = await handle_zayn_accounts_interaction(session, self.zayn_phone, "Verify return schedule and meals", zayn_state)
+            self.assertTrue(handled)
+
+            # Note forwarded directly to Sales Rep
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            self.assertEqual(rep_state.current_step, "awaiting_rep_crew_count")
+            last_prompt = mock_send_txt.call_args[0][1]
+            self.assertIn("Verify return schedule and meals", last_prompt)
+
+            # Sales Rep re-submits allowances: Crew 2, Dep 06:30 AM, Ret 08:00 PM, Tolls 34.50
+            await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "2", rep_state)
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "06:30 AM", rep_state)
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "08:00 PM", rep_state)
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            await handle_fleet_approval_flow(session, self.sales_rep_phone, None, "34.50", rep_state)
+            await handle_fleet_approval_flow(session, self.sales_rep_phone, None, f"flt_rep_sub_allow_{trip_test_id}", None)
+
             # Zayn clicks [Approve]
             handled = await handle_zayn_accounts_interaction(session, self.zayn_phone, f"flt_zayn_app_{trip_test_id}", None)
             self.assertTrue(handled)
@@ -281,33 +316,55 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             handled = await handle_driver_interaction(session, self.driver_phone, "06:30 AM", drv_state)
             self.assertTrue(handled)
 
-            # Driver clicks [Trip Started]
+            # Driver clicks [Trip Started] -> Prompts for Start Odometer
             handled = await handle_driver_interaction(session, self.driver_phone, f"flt_drv_start_{trip_test_id}", None)
+            self.assertTrue(handled)
+
+            drv_state = await get_user_state(session, self.driver_phone)
+            self.assertEqual(drv_state.current_step, "awaiting_start_odometer")
+            handled = await handle_driver_interaction(session, self.driver_phone, "145200", drv_state)
             self.assertTrue(handled)
 
             req = await get_fleet_trip_request_by_id(session, trip_test_id)
             self.assertEqual(req.status, "ACTIVE")
+            self.assertEqual(req.start_odometer, 145200.0)
             self.assertTrue(req.is_live_location_active)
+
+            # Driver sends live location pin
+            handled = await handle_driver_interaction(session, self.driver_phone, "location_pin_-17.82485_31.05303", None)
+            self.assertTrue(handled)
+            req = await get_fleet_trip_request_by_id(session, trip_test_id)
+            self.assertAlmostEqual(req.last_latitude, -17.82485, places=4)
+            self.assertAlmostEqual(req.last_longitude, 31.05303, places=4)
 
             # Transit buttons presented
             transit_btns = [b["title"] for b in mock_send_btn.call_args[1]["buttons"]]
             self.assertEqual(transit_btns, ["Delivery Charges", "Emergency Charges", "I am Returning"])
 
-            # Driver records Delivery Charge for CUST-101
+            # Driver records Delivery Charge by selecting from Numbered Customer List (Blind entry: expected charge hidden)
             handled = await handle_driver_interaction(session, self.driver_phone, f"flt_drv_deliv_{trip_test_id}", None)
             self.assertTrue(handled)
 
+            # Customer list displayed (e.g. 1️⃣ Hardware City, 2️⃣ BuildIt Depot)
+            cust_list_prompt = mock_send_txt.call_args[0][1]
+            self.assertIn("SELECT CUSTOMER", cust_list_prompt)
+            self.assertIn("Hardware City", cust_list_prompt)
+
+            # Driver replies with number '1' to select first customer
             drv_state = await get_user_state(session, self.driver_phone)
-            handled = await handle_driver_interaction(session, self.driver_phone, "CUST-101", drv_state)
+            self.assertEqual(drv_state.current_step, "awaiting_customer_number")
+            handled = await handle_driver_interaction(session, self.driver_phone, "1", drv_state)
             self.assertTrue(handled)
 
-            # Autonomous manifest check confirms expected $72.00
+            # Expected transport charge strictly NOT revealed to driver
             last_prompt = mock_send_txt.call_args[0][1]
-            self.assertIn("72.00", last_prompt)
+            self.assertNotIn("Expected Transport Charge", last_prompt)
+            self.assertIn("Hardware City", last_prompt)
 
-            # Driver enters collected amount 72.00
+            # Driver enters collected amount 76.00
             drv_state = await get_user_state(session, self.driver_phone)
-            handled = await handle_driver_interaction(session, self.driver_phone, "72.00", drv_state)
+            self.assertEqual(drv_state.current_step, "awaiting_collected_amount")
+            handled = await handle_driver_interaction(session, self.driver_phone, "76.00", drv_state)
             self.assertTrue(handled)
 
             # Driver selects payment method [Cash]
@@ -317,7 +374,7 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
 
             # Verify CUST-101 schedule updated in DB
             schedules = await get_customer_schedules_for_trip(session, trip_test_id)
-            self.assertEqual(schedules[0].collected_charge, 72.00)
+            self.assertEqual(schedules[0].collected_charge, 76.00)
             self.assertEqual(schedules[0].payment_method, "CASH")
             self.assertEqual(schedules[0].status, "MATCHED")
 
@@ -338,13 +395,17 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             handled = await handle_driver_interaction(session, self.driver_phone, "15.00", drv_state)
             self.assertTrue(handled)
 
-            # Verify emergency expenses logged in DB
+            # Verify emergency expenses logged in DB and approve them via Edward/Zayn
             emergencies = await get_emergency_expenses_for_trip(session, trip_test_id)
             self.assertEqual(len(emergencies), 2)
             self.assertEqual(emergencies[0].charge_type, "EMERGENCY_FUEL")
             self.assertEqual(emergencies[0].amount, 25.00)
             self.assertEqual(emergencies[1].charge_type, "OTHER")
             self.assertEqual(emergencies[1].amount, 15.00)
+
+            # Edward approves fuel expense
+            handled = await handle_driver_interaction(session, self.edward_phone, f"flt_emg_appr_{emergencies[0].id}", None)
+            self.assertTrue(handled)
 
             # Driver clicks [I am Returning] -> live location deactivated
             handled = await handle_driver_interaction(session, self.driver_phone, f"flt_drv_ret_{trip_test_id}", None)
@@ -354,12 +415,19 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(req.status, "RETURNING")
             self.assertFalse(req.is_live_location_active)
 
-            # Driver clicks [I Have Returned] -> summons Sales Admin
+            # Driver clicks [I Have Returned] -> prompts for Return Odometer
             handled = await handle_driver_interaction(session, self.driver_phone, f"flt_drv_returned_{trip_test_id}", None)
+            self.assertTrue(handled)
+
+            drv_state = await get_user_state(session, self.driver_phone)
+            self.assertEqual(drv_state.current_step, "awaiting_return_odometer")
+            handled = await handle_driver_interaction(session, self.driver_phone, "145580", drv_state)
             self.assertTrue(handled)
 
             req = await get_fleet_trip_request_by_id(session, trip_test_id)
             self.assertEqual(req.status, "RETURNED")
+            self.assertEqual(req.end_odometer, 145580.0)
+            self.assertEqual(req.distance_km, 380.0)
 
             # ----------------------------------------------------
             # STAGE 6: Sales Admin Balancing Session

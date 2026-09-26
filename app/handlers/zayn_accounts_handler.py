@@ -38,10 +38,12 @@ async def notify_zayn_allowance_approval(session: AsyncSession, trip_id: str):
         f"Company: {trip.company_name}\n"
         f"Trip: {trip.trip_id} | Route: {trip.route or trip.destination_city}\n"
         f"Driver: {trip.driver_name} | Truck: {trip.truck_plate}\n"
-        f"Crew: {trip.crew_count} people | Meals: {trip.meal_count} | Tolls: {trip.toll_gates_count}\n"
+        f"Crew: {trip.crew_count} people | Meals: {trip.meal_count}\n"
+        f"Schedule: Dep {trip.departure_time or 'N/A'} ➔ Ret {trip.return_time or 'N/A'}\n"
         "────────────────────\n"
-        f"Toll cost: ${trip.toll_cost:,.2f}\n"
-        f"Food ($2 x {trip.crew_count} x {trip.meal_count}): ${trip.food_allowance:,.2f}\n"
+        f"Food ($2.00 x {trip.crew_count} x {trip.meal_count}): ${trip.food_allowance:,.2f}\n"
+        f"Accommodation ({trip.night_count or 0} nights): ${trip.accommodation_allowance or 0.0:,.2f}\n"
+        f"Tolls: ${trip.toll_cost:,.2f}\n"
         "────────────────────\n"
         f"Total allowance: ${trip.total_allowance:,.2f}\n"
         "Please approve or recalculate:"
@@ -157,8 +159,8 @@ async def handle_zayn_accounts_interaction(
         prompt = (
             f"📝 *RECALCULATE ALLOWANCE: {trip_id}*\n"
             "────────────────────\n"
-            "Please enter recalculation instructions/notes for Edward:\n"
-            "_(e.g. Reduce tolls to 2 or check meal count)_"
+            "Please enter recalculation instructions/notes for the Sales Rep:\n"
+            "_(e.g. Reduce tolls to 20 or check meal count)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
@@ -177,33 +179,18 @@ async def handle_zayn_accounts_interaction(
         notes = text_strip
         if trip:
             trip.allowance_status = "RECALCULATE"
-            trip.status = "PENDING_ASSIGNMENT"
+            trip.recalculate_note = notes
             await session.commit()
 
         await clear_user_state(session, clean_p)
         await meta_api.send_text_message(
             clean_p,
-            f"✅ Recalculation request logged for Trip {trip_id}. Edward has been notified."
+            f"✅ Recalculation request logged for Trip {trip_id}. Sales Rep has been notified."
         )
 
-        # Alert Edward
-        edw_phone = clean_phone(settings.edward_phone)
-        edw_alert = (
-            f"⚠️ *ALLOWANCE RECALCULATION NEEDED: {trip_id}*\n"
-            "────────────────────\n"
-            f"Notes from Zayn:\n\"{notes}\"\n"
-            "────────────────────\n"
-            "Please update the allocation details for this trip:"
-        )
-        buttons = [
-            {"id": f"flt_edw_alloc_{trip_id}", "title": "Allocate Trip"}
-        ]
-        await meta_api.send_button_message(
-            to_phone=edw_phone,
-            body_text=edw_alert,
-            buttons=buttons,
-            header_text="RECALCULATION"
-        )
+        # Alert Sales Rep directly with Zayn's note to reconfigure schedule & allowances
+        from app.handlers.fleet_approval_handler import notify_sales_rep_allowance_entry
+        await notify_sales_rep_allowance_entry(session, trip_id, zayn_note=notes)
         return True
 
     # 4. Accounts clicks [Transfer Done]

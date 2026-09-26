@@ -29,6 +29,55 @@ def is_edward(phone: str) -> bool:
     return cp in {edw, master, fleet_admin}
 
 
+async def resolve_driver_phone(session: AsyncSession, driver_name: str) -> Optional[str]:
+    """Auto-resolves a driver's WhatsApp phone number from WorkshopStaff or Employee registry."""
+    clean_name = (driver_name or "").strip()
+    if not clean_name:
+        return None
+
+    # 1. Match WorkshopStaff
+    try:
+        from app.workshop.models import WorkshopStaff
+        stmt = select(WorkshopStaff).where(
+            WorkshopStaff.active == True,
+            WorkshopStaff.full_name.ilike(f"%{clean_name}%")
+        )
+        res = await session.execute(stmt)
+        staff = res.scalars().first()
+        if staff and staff.phone:
+            return clean_phone(staff.phone)
+
+        # Match tokens (e.g. first name or surname)
+        tokens = [t for t in clean_name.split() if len(t) >= 3]
+        for tok in tokens:
+            stmt_tok = select(WorkshopStaff).where(
+                WorkshopStaff.active == True,
+                WorkshopStaff.full_name.ilike(f"%{tok}%")
+            )
+            res_tok = await session.execute(stmt_tok)
+            staff_tok = res_tok.scalars().first()
+            if staff_tok and staff_tok.phone:
+                return clean_phone(staff_tok.phone)
+    except Exception as e:
+        logger.warning(f"Error resolving driver phone from WorkshopStaff: {e}")
+
+    # 2. Match Employee
+    try:
+        from app.database import Employee
+        stmt_emp = select(Employee).where(
+            Employee.active == True,
+            Employee.full_name.ilike(f"%{clean_name}%")
+        )
+        res_emp = await session.execute(stmt_emp)
+        emp = res_emp.scalars().first()
+        if emp and emp.phone:
+            return clean_phone(emp.phone)
+    except Exception as e:
+        logger.warning(f"Error resolving driver phone from Employee: {e}")
+
+    return None
+
+
 async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
     """
     Sends trip allocation notification to Edward.
@@ -262,19 +311,36 @@ async def handle_edward_interaction(
             await meta_api.send_text_message(clean_p, prompt)
             return True
 
-        # Step 2: Driver Name entered
+        # Step 2: Driver Name entered -> Auto-resolve phone & hand off to Sales Rep
         if state.current_step == "awaiting_driver_name":
             driver_name = text_strip.title()
-            data["driver_name"] = driver_name
-            await set_user_state(session, clean_p, "awaiting_driver_phone", data, flow_name="fleet_edward")
-            prompt = (
-                f"📱 *DRIVER PHONE: {trip_id}*\n"
-                f"Driver: {driver_name}\n"
+            truck_plate = data.get("truck_plate", "")
+            driver_phone = await resolve_driver_phone(session, driver_name)
+
+            if trip:
+                trip.truck_plate = truck_plate
+                trip.driver_name = driver_name
+                trip.driver_phone = driver_phone
+                trip.status = "ALLOCATED"
+                await session.commit()
+
+            await clear_user_state(session, clean_p)
+
+            ph_display = f" (+{driver_phone})" if driver_phone else ""
+            sales_name = trip.salesperson_name if trip else "Sales"
+            ack = (
+                f"✅ *DISPATCH ALLOCATED: {trip_id}*\n"
                 "────────────────────\n"
-                "Please type the driver's WhatsApp phone number:\n"
-                "_(e.g. 263771234567)_"
+                f"Truck: {truck_plate}\n"
+                f"Driver: {driver_name}{ph_display}\n"
+                "────────────────────\n"
+                f"Handoff sent to Sales Rep ({sales_name}) to enter schedule & allowances!"
             )
-            await meta_api.send_text_message(clean_p, prompt)
+            await meta_api.send_text_message(clean_p, ack)
+
+            # Handoff immediately to Sales Rep for crew, departure, return, and allowance calculation
+            from app.handlers.fleet_approval_handler import notify_sales_rep_allowance_entry
+            await notify_sales_rep_allowance_entry(session, trip_id)
             return True
 
         # Step 3: Driver Phone entered

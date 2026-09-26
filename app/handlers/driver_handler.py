@@ -9,10 +9,13 @@ from app.config import settings
 from app.database import (
     FleetTripRequest,
     FleetCustomerSchedule,
+    FleetEmergencyExpense,
     get_fleet_trip_request_by_id,
     get_active_trip_for_driver,
     record_driver_delivery_payment,
-    record_emergency_expense
+    record_emergency_expense,
+    get_emergency_expense_by_id,
+    set_emergency_expense_status
 )
 from app.state_manager import set_user_state, clear_user_state, get_user_state, normalize_phone_number
 from app.meta_api import meta_api
@@ -96,7 +99,143 @@ async def handle_driver_interaction(
     text_strip = message_text.strip()
     text_lower = text_strip.lower()
 
-    # 1. Driver clicks [Trip Started]
+    # 0. Emergency Expense Approval by Edward / Zayn / Master Admin
+    if text_lower.startswith(("flt_emg_appr_", "flt_emg_rej_")):
+        is_approve = text_lower.startswith("flt_emg_appr_")
+        exp_id_str = text_strip.replace("flt_emg_appr_", "").replace("flt_emg_rej_", "").strip()
+        try:
+            exp_id = int(exp_id_str)
+        except ValueError:
+            exp_id = 0
+
+        exp = await get_emergency_expense_by_id(session, exp_id)
+        if not exp:
+            await meta_api.send_text_message(clean_p, f"⚠️ Emergency expense #{exp_id} not found.")
+            return True
+
+        new_status = "APPROVED" if is_approve else "REJECTED"
+        approver_name = "Edward / Zayn"
+        if clean_p == clean_phone(settings.edward_phone):
+            approver_name = "Edward (Logistics)"
+        elif clean_p == clean_phone(settings.zayn_phone):
+            approver_name = "Zayn (Accounts)"
+        elif clean_p == clean_phone(settings.master_admin_phone):
+            approver_name = "Master Admin"
+
+        await set_emergency_expense_status(session, exp_id, new_status, approver_name)
+
+        # Acknowledge Approver
+        status_icon = "✅" if is_approve else "❌"
+        ack_approver = (
+            f"{status_icon} *EMERGENCY EXPENSE {new_status}*\n"
+            "────────────────────\n"
+            f"Trip: *{exp.trip_id}*\n"
+            f"Type: *{exp.charge_type}*\n"
+            f"Amount: *${exp.amount:,.2f}*\n"
+            f"Decision logged by {approver_name}."
+        )
+        await meta_api.send_text_message(clean_p, ack_approver)
+
+        # Notify Driver
+        drv_phone = clean_phone(exp.driver_phone)
+        if is_approve:
+            drv_msg = (
+                f"✅ *EMERGENCY EXPENSE APPROVED*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}*\n"
+                f"Type: *{exp.charge_type}*\n"
+                f"Approved Amount: *${exp.amount:,.2f}*\n"
+                f"Approved by: *{approver_name}*\n"
+                "────────────────────\n"
+                "You may proceed with the expenditure. Please retain receipt/evidence for final balancing."
+            )
+        else:
+            drv_msg = (
+                f"❌ *EMERGENCY EXPENSE REJECTED*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}*\n"
+                f"Amount: *${exp.amount:,.2f}*\n"
+                f"Declined by: *{approver_name}*\n"
+                "────────────────────\n"
+                "Please contact Logistics for assistance."
+            )
+        await meta_api.send_text_message(drv_phone, drv_msg)
+        return True
+
+    # 0.5 Driver sends live WhatsApp location pin
+    if text_lower.startswith("location_pin_"):
+        raw_coords = text_strip[len("location_pin_"):].strip()
+        parts = raw_coords.split("_")
+        lat, lng = 0.0, 0.0
+        if len(parts) >= 2:
+            try:
+                lat = float(parts[0])
+                lng = float(parts[1])
+            except ValueError:
+                pass
+
+        data = (state.current_data or {}) if state else {}
+        trip_id = data.get("trip_id")
+        trip = None
+        if trip_id:
+            trip = await get_fleet_trip_request_by_id(session, trip_id)
+        if not trip:
+            trip = await get_active_trip_for_driver(session, clean_p)
+
+        if trip:
+            trip.last_latitude = lat
+            trip.last_longitude = lng
+            trip.last_location_time = datetime.datetime.utcnow()
+            await session.commit()
+
+            # Driver Ack
+            driver_ack = (
+                f"📍 *LOCATION LOGGED: {trip.trip_id}*\n"
+                "────────────────────\n"
+                f"Truck: *{trip.truck_plate or 'Fleet'}*\n"
+                f"GPS: *{lat:.5f}, {lng:.5f}*\n"
+                "────────────────────\n"
+                "✅ Live position recorded and shared with Sales Rep."
+            )
+            await meta_api.send_text_message(clean_p, driver_ack)
+
+            # Sales Rep Alert
+            if trip.salesperson_phone:
+                rep_phone = clean_phone(trip.salesperson_phone)
+                name_str = f"Truck {trip.truck_plate or 'Fleet'} ({trip.driver_name or 'Driver'})"
+                addr_str = f"Trip {trip.trip_id} - {trip.route or 'Delivery Route'}"
+                # 1. Native WhatsApp location pin
+                await meta_api.send_location_message(
+                    to_phone=rep_phone,
+                    latitude=lat,
+                    longitude=lng,
+                    name=name_str,
+                    address=addr_str
+                )
+                # 2. Rich tracking card
+                rep_card = (
+                    f"📍 *LIVE DRIVER LOCATION UPDATE*\n"
+                    "────────────────────\n"
+                    f"🚛 *Trip:* {trip.trip_id}\n"
+                    f"👤 *Driver:* {trip.driver_name or 'Driver'}\n"
+                    f"🚚 *Truck:* {trip.truck_plate or 'N/A'}\n"
+                    f"🛣️ *Route:* {trip.route or 'In Transit'}\n"
+                    f"📍 *Coordinates:* `{lat:.5f}, {lng:.5f}`\n"
+                    "────────────────────\n"
+                    f"🗺️ *Google Maps Link:*\n"
+                    f"https://www.google.com/maps?q={lat},{lng}\n\n"
+                    "Tap the map pin above or the link to view real-time location."
+                )
+                await meta_api.send_text_message(rep_phone, rep_card)
+
+            if trip.status == "ACTIVE":
+                await send_driver_transit_menu(session, clean_p, trip.trip_id)
+            return True
+        else:
+            await meta_api.send_text_message(clean_p, "📍 Location pin received. No active transit trip found for this vehicle.")
+            return True
+
+    # 1. Driver clicks [Trip Started] -> Prompt for Start Odometer reading
     if text_lower.startswith("flt_drv_start_"):
         trip_id = text_strip.replace("flt_drv_start_", "").strip()
         trip = await get_fleet_trip_request_by_id(session, trip_id)
@@ -104,47 +243,84 @@ async def handle_driver_interaction(
             await meta_api.send_text_message(clean_p, f"⚠️ Trip {trip_id} not found.")
             return True
 
-        trip.status = "ACTIVE"
-        trip.is_live_location_active = True
-        trip.departed_at = datetime.datetime.utcnow()
-        await session.commit()
-
-        # Notify perspective Sales Rep
-        if trip.salesperson_phone:
-            rep_phone = clean_phone(trip.salesperson_phone)
-            rep_alert = (
-                f"🚛 *TRIP STARTED: {trip.trip_id}*\n"
-                "────────────────────\n"
-                f"Driver: {trip.driver_name}\n"
-                f"Truck: {trip.truck_plate}\n"
-                f"Departure Time: {trip.departure_time or 'Just now'}\n"
-                "────────────────────\n"
-                "Live location stream is now active."
-            )
-            await meta_api.send_text_message(rep_phone, rep_alert)
-
-        # Present the 3 transit buttons
-        await send_driver_transit_menu(session, clean_p, trip.trip_id)
-        return True
-
-    # 2. Driver clicks [Delivery Charges]
-    if text_lower.startswith("flt_drv_deliv_"):
-        trip_id = text_strip.replace("flt_drv_deliv_", "").strip()
         await set_user_state(
             session,
             clean_p,
-            current_step="awaiting_customer_id",
+            current_step="awaiting_start_odometer",
             current_data={"trip_id": trip_id},
             flow_name="fleet_driver"
         )
         prompt = (
-            f"📦 *RECORD DELIVERY CHARGE: {trip_id}*\n"
+            f"🚚 *TRIP DEPARTURE: {trip_id}*\n"
             "────────────────────\n"
-            "Please type the Customer ID:\n"
-            "_(e.g. CUST-101 or 101)_"
+            "Please enter the vehicle's *Starting Odometer* reading (in KM):\n"
+            "_(e.g. 145200)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
+
+    # 2. Driver clicks [Delivery Charges] -> Present Numbered Customer List
+    if text_lower.startswith("flt_drv_deliv_"):
+        trip_id = text_strip.replace("flt_drv_deliv_", "").strip()
+
+        # Query customer schedules for this trip
+        stmt = (
+            select(FleetCustomerSchedule)
+            .where(FleetCustomerSchedule.trip_id == trip_id)
+            .order_by(FleetCustomerSchedule.id.asc())
+        )
+        res = await session.execute(stmt)
+        schedules = list(res.scalars().all())
+
+        if schedules:
+            customers_map = {}
+            lines = []
+            number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+            for idx, sched in enumerate(schedules, start=1):
+                num_key = str(idx)
+                customers_map[num_key] = sched.customer_id
+                emoji = number_emojis[idx - 1] if idx <= 10 else f"{idx}."
+                status_icon = "✅ " if sched.status in {"MATCHED", "PAID"} else ""
+                disp_name = sched.reference_note or sched.customer_id
+                if sched.reference_note and sched.reference_note != sched.customer_id:
+                    disp_name = f"{sched.reference_note} ({sched.customer_id})"
+                lines.append(f"{emoji} {status_icon}*{disp_name}*")
+
+            cust_list_str = "\n".join(lines)
+            prompt = (
+                f"📦 *SELECT CUSTOMER: {trip_id}*\n"
+                "────────────────────\n"
+                "Please reply with the customer number:\n\n"
+                f"{cust_list_str}\n"
+                "────────────────────\n"
+                "Reply with 1, 2, 3... to select customer."
+            )
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_customer_number",
+                current_data={"trip_id": trip_id, "customers_map": customers_map},
+                flow_name="fleet_driver"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
+        else:
+            # Fallback if no schedule manifest registered
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_customer_id",
+                current_data={"trip_id": trip_id},
+                flow_name="fleet_driver"
+            )
+            prompt = (
+                f"📦 *RECORD DELIVERY CHARGE: {trip_id}*\n"
+                "────────────────────\n"
+                "Please type the Customer ID or Name:\n"
+                "_(e.g. CUST-101 or 101)_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
 
     # 3. Driver clicks [Emergency Charges]
     if text_lower.startswith("flt_drv_emerg_"):
@@ -272,27 +448,28 @@ async def handle_driver_interaction(
         await send_driver_returning_menu(session, clean_p, trip_id)
         return True
 
-    # 8. Driver clicks [I Have Returned]
+    # 8. Driver clicks [I Have Returned] -> Prompt for final Return Odometer reading
     if text_lower.startswith("flt_drv_returned_"):
         trip_id = text_strip.replace("flt_drv_returned_", "").strip()
         trip = await get_fleet_trip_request_by_id(session, trip_id)
-        if trip:
-            trip.status = "RETURNED"
-            trip.returned_at = datetime.datetime.utcnow()
-            await session.commit()
+        if not trip:
+            await meta_api.send_text_message(clean_p, f"⚠️ Trip {trip_id} not found.")
+            return True
 
-        await clear_user_state(session, clean_p)
-        ack = (
-            f"🏢 *RETURN LOGGED: {trip_id}*\n"
-            "────────────────────\n"
-            "Welcome back! Your return has been recorded.\n"
-            "Please proceed to the Sales Admin for physical balancing session."
+        await set_user_state(
+            session,
+            clean_p,
+            current_step="awaiting_return_odometer",
+            current_data={"trip_id": trip_id},
+            flow_name="fleet_driver"
         )
-        await meta_api.send_text_message(clean_p, ack)
-
-        # Summon the Company's assigned Sales Admin for Stage 6
-        from app.handlers.sales_admin_handler import notify_sales_admin_balancing_session
-        await notify_sales_admin_balancing_session(session, trip_id)
+        prompt = (
+            f"🏁 *DEPOT ARRIVAL: {trip_id}*\n"
+            "────────────────────\n"
+            "Please enter the vehicle's final *Return Odometer* reading (in KM):\n"
+            "_(e.g. 145580)_"
+        )
+        await meta_api.send_text_message(clean_p, prompt)
         return True
 
     # 9. Active state handling for Driver
@@ -301,14 +478,96 @@ async def handle_driver_interaction(
         trip_id = data.get("trip_id", "")
 
         if text_lower in {"cancel", "exit", "back", "menu", "reset"}:
-            if state.current_step == "awaiting_departure_time":
+            if state.current_step in {"awaiting_departure_time", "awaiting_start_odometer"}:
                 await clear_user_state(session, clean_p)
-                await meta_api.send_text_message(clean_p, "Departure entry cancelled. You can reply when ready.")
+                await meta_api.send_text_message(clean_p, "Action cancelled. You can reply when ready.")
                 return True
             else:
                 await send_driver_transit_menu(session, clean_p, trip_id)
                 return True
 
+        # Awaiting Start Odometer reading
+        if state.current_step == "awaiting_start_odometer":
+            clean_val = re.sub(r"[^\d.]", "", text_strip)
+            try:
+                odo_val = float(clean_val)
+                if odo_val <= 0:
+                    raise ValueError()
+            except ValueError:
+                await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid starting odometer reading in KM (e.g. 145200):")
+                return True
+
+            trip = await get_fleet_trip_request_by_id(session, trip_id)
+            if trip:
+                trip.start_odometer = odo_val
+                trip.status = "ACTIVE"
+                trip.is_live_location_active = True
+                trip.departed_at = datetime.datetime.utcnow()
+                await session.commit()
+
+                # Alert perspective Sales Rep
+                if trip.salesperson_phone:
+                    rep_phone = clean_phone(trip.salesperson_phone)
+                    rep_alert = (
+                        f"🚛 *TRIP STARTED: {trip.trip_id}*\n"
+                        "────────────────────\n"
+                        f"Driver: *{trip.driver_name}*\n"
+                        f"Truck: *{trip.truck_plate}*\n"
+                        f"Start Odometer: *{odo_val:,.0f} KM*\n"
+                        f"Departure Time: *{trip.departure_time or 'Just now'}*\n"
+                        "────────────────────\n"
+                        "Live location stream is now active."
+                    )
+                    await meta_api.send_text_message(rep_phone, rep_alert)
+
+            ack = (
+                f"✅ *TRIP STARTED: {trip_id}*\n"
+                "────────────────────\n"
+                f"Start Odometer: *{odo_val:,.0f} KM*\n"
+                "Drive safely! Live location tracking is active."
+            )
+            await meta_api.send_text_message(clean_p, ack)
+            await send_driver_transit_menu(session, clean_p, trip_id)
+            return True
+
+        # Awaiting Return Odometer reading
+        if state.current_step == "awaiting_return_odometer":
+            clean_val = re.sub(r"[^\d.]", "", text_strip)
+            try:
+                end_odo = float(clean_val)
+                if end_odo <= 0:
+                    raise ValueError()
+            except ValueError:
+                await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid return odometer reading in KM (e.g. 145580):")
+                return True
+
+            trip = await get_fleet_trip_request_by_id(session, trip_id)
+            dist_km = 0.0
+            if trip:
+                start_odo = trip.start_odometer or 0.0
+                dist_km = max(0.0, end_odo - start_odo) if start_odo > 0 else 0.0
+                trip.end_odometer = end_odo
+                trip.distance_km = dist_km
+                trip.status = "RETURNED"
+                trip.returned_at = datetime.datetime.utcnow()
+                await session.commit()
+
+            await clear_user_state(session, clean_p)
+            ack = (
+                f"🏢 *RETURN LOGGED: {trip_id}*\n"
+                "────────────────────\n"
+                f"Start Odometer: *{trip.start_odometer or 0:,.0f} KM*\n"
+                f"Return Odometer: *{end_odo:,.0f} KM*\n"
+                f"Total Distance Covered: *{dist_km:,.0f} KM*\n"
+                "────────────────────\n"
+                "Welcome back! Please proceed to the Sales Admin for physical balancing session."
+            )
+            await meta_api.send_text_message(clean_p, ack)
+
+            # Summon the Company's assigned Sales Admin for Stage 6
+            from app.handlers.sales_admin_handler import notify_sales_admin_balancing_session
+            await notify_sales_admin_balancing_session(session, trip_id)
+            return True
 
         # Awaiting departure time
         if state.current_step == "awaiting_departure_time":
@@ -335,7 +594,47 @@ async def handle_driver_interaction(
             )
             return True
 
-        # Awaiting Customer ID
+        # Awaiting Customer Number Selection (Driver replies 1, 2, 3...)
+        if state.current_step == "awaiting_customer_number":
+            customers_map = data.get("customers_map", {})
+            choice = text_strip.strip()
+            selected_cust_id = customers_map.get(choice)
+            if not selected_cust_id:
+                # Also allow direct customer code/name lookup
+                for k, v in customers_map.items():
+                    if choice.upper() == v.upper() or choice.upper() in v.upper():
+                        selected_cust_id = v
+                        break
+
+            if not selected_cust_id:
+                await meta_api.send_text_message(
+                    clean_p,
+                    f"⚠️ Please reply with a valid customer number (1 to {len(customers_map)}) or type the Customer ID:"
+                )
+                return True
+
+            data["customer_id"] = selected_cust_id
+            # Lookup customer record
+            stmt = select(FleetCustomerSchedule).where(
+                FleetCustomerSchedule.trip_id == trip_id,
+                FleetCustomerSchedule.customer_id == selected_cust_id
+            )
+            res = await session.execute(stmt)
+            sched = res.scalars().first()
+            data["expected_charge"] = sched.expected_charge if sched else 0.0
+
+            disp_name = sched.reference_note or selected_cust_id if sched else selected_cust_id
+            await set_user_state(session, clean_p, "awaiting_collected_amount", data, flow_name="fleet_driver")
+            prompt = (
+                f"📦 *CUSTOMER: {disp_name}*\n"
+                "────────────────────\n"
+                "Please enter the amount collected in USD:\n"
+                "_(e.g. 45.00 or 0 if unpaid)_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
+
+        # Awaiting Customer ID (Blind Entry: NEVER reveal expected charge to driver)
         if state.current_step == "awaiting_customer_id":
             cust_id = text_strip.upper()
             data["customer_id"] = cust_id
@@ -347,16 +646,13 @@ async def handle_driver_interaction(
             )
             res = await session.execute(stmt)
             sched = res.scalars().first()
-
-            exp_str = f"${sched.expected_charge:,.2f}" if sched else "Not registered"
             data["expected_charge"] = sched.expected_charge if sched else 0.0
 
             await set_user_state(session, clean_p, "awaiting_collected_amount", data, flow_name="fleet_driver")
             prompt = (
                 f"📦 *CUSTOMER: {cust_id}*\n"
-                f"Expected Transport Charge: *{exp_str}*\n"
                 "────────────────────\n"
-                "Enter amount collected in USD:\n"
+                "Please enter the amount collected in USD:\n"
                 "_(e.g. 45.00 or 0 if unpaid)_"
             )
             await meta_api.send_text_message(clean_p, prompt)
@@ -397,7 +693,7 @@ async def handle_driver_interaction(
             )
             return True
 
-        # Awaiting Emergency Fuel Amount
+        # Awaiting Emergency Fuel Amount -> Route for Approval by Edward or Zayn
         if state.current_step == "awaiting_fuel_amount":
             if "video" in text_strip.lower():
                 await meta_api.send_text_message(
@@ -415,18 +711,50 @@ async def handle_driver_interaction(
                 await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid positive number for fuel cost (e.g. 25.00):")
                 return True
 
-            await record_emergency_expense(
+            exp = await record_emergency_expense(
                 session=session,
                 trip_id=trip_id,
                 driver_phone=clean_p,
                 charge_type="EMERGENCY_FUEL",
                 amount=fuel_amt,
                 description="Emergency Diesel/Petrol refuel",
-                has_video=True
+                has_video=True,
+                status="PENDING"
             )
+
+            # Send authorization request to Edward & Zayn (or Master Admin in solo mode)
+            from app.handlers.fleet_approval_handler import get_solo_test_mode
+            is_solo = get_solo_test_mode()
+            approvers = [clean_phone(settings.master_admin_phone)] if is_solo else [
+                clean_phone(settings.edward_phone),
+                clean_phone(settings.zayn_phone)
+            ]
+
+            emg_alert = (
+                f"⛽ *EMERGENCY FUEL REQUEST*\n"
+                "────────────────────\n"
+                f"Trip: *{trip_id}*\n"
+                f"Driver: `{clean_p}`\n"
+                f"Expense: *Diesel/Petrol*\n"
+                f"Requested: *${fuel_amt:,.2f}*\n"
+                "────────────────────\n"
+                "Please approve or decline this driver expense:"
+            )
+            buttons = [
+                {"id": f"flt_emg_appr_{exp.id}", "title": "Approve Expense"},
+                {"id": f"flt_emg_rej_{exp.id}", "title": "Reject Expense"}
+            ]
+            for ap_phone in set(approvers):
+                await meta_api.send_button_message(
+                    to_phone=ap_phone,
+                    body_text=emg_alert,
+                    buttons=buttons,
+                    header_text="EMERGENCY REQUEST"
+                )
+
             await meta_api.send_text_message(
                 clean_p,
-                f"⛽ *EMERGENCY FUEL LOGGED*\n────────────────────\nAmount: ${fuel_amt:,.2f}\nLogged for balancing."
+                f"⏳ *EMERGENCY FUEL SUBMITTED*\n────────────────────\nAmount: *${fuel_amt:,.2f}*\nApproval request dispatched to Edward & Zayn.\nYou will be notified immediately when approved."
             )
             await send_driver_transit_menu(session, clean_p, trip_id)
             return True
@@ -446,7 +774,7 @@ async def handle_driver_interaction(
             await meta_api.send_text_message(clean_p, prompt)
             return True
 
-        # Awaiting Other Emergency Amount
+        # Awaiting Other Emergency Amount -> Route for Approval by Edward or Zayn
         if state.current_step == "awaiting_other_amount":
             clean_val = re.sub(r"[^\d.]", "", text_strip)
             try:
@@ -458,17 +786,49 @@ async def handle_driver_interaction(
                 return True
 
             desc = data.get("other_desc", "Emergency expense")
-            await record_emergency_expense(
+            exp = await record_emergency_expense(
                 session=session,
                 trip_id=trip_id,
                 driver_phone=clean_p,
                 charge_type="OTHER",
                 amount=other_amt,
-                description=desc
+                description=desc,
+                status="PENDING"
             )
+
+            # Send authorization request to Edward & Zayn (or Master Admin in solo mode)
+            from app.handlers.fleet_approval_handler import get_solo_test_mode
+            is_solo = get_solo_test_mode()
+            approvers = [clean_phone(settings.master_admin_phone)] if is_solo else [
+                clean_phone(settings.edward_phone),
+                clean_phone(settings.zayn_phone)
+            ]
+
+            emg_alert = (
+                f"🔧 *EMERGENCY EXPENSE REQUEST*\n"
+                "────────────────────\n"
+                f"Trip: *{trip_id}*\n"
+                f"Driver: `{clean_p}`\n"
+                f"Issue: *{desc}*\n"
+                f"Requested: *${other_amt:,.2f}*\n"
+                "────────────────────\n"
+                "Please approve or decline this driver expense:"
+            )
+            buttons = [
+                {"id": f"flt_emg_appr_{exp.id}", "title": "Approve Expense"},
+                {"id": f"flt_emg_rej_{exp.id}", "title": "Reject Expense"}
+            ]
+            for ap_phone in set(approvers):
+                await meta_api.send_button_message(
+                    to_phone=ap_phone,
+                    body_text=emg_alert,
+                    buttons=buttons,
+                    header_text="EMERGENCY REQUEST"
+                )
+
             await meta_api.send_text_message(
                 clean_p,
-                f"🔧 *EMERGENCY EXPENSE LOGGED*\n────────────────────\nIssue: {desc}\nAmount: ${other_amt:,.2f}\nLogged for balancing."
+                f"⏳ *EMERGENCY EXPENSE SUBMITTED*\n────────────────────\nIssue: {desc}\nAmount: *${other_amt:,.2f}*\nApproval request dispatched to Edward & Zayn.\nYou will be notified immediately when approved."
             )
             await send_driver_transit_menu(session, clean_p, trip_id)
             return True
