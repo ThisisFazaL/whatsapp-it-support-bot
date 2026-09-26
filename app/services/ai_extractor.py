@@ -211,3 +211,77 @@ def get_missing_fields(data: Dict[str, Any]) -> list:
     if not data.get("required_quantity") and not data.get("monthly_demand"):
         missing.append("quantity")
     return missing
+
+
+async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
+    """
+    Extracts vehicle odometer reading from a photo of the dashboard instrument cluster
+    using Gemini multimodal vision.
+    Returns float (e.g. 145280.0) or None if undetectable.
+    Does not save images to disk or database.
+    """
+    if not image_bytes:
+        return None
+
+    import base64
+    import httpx
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        logger.warning("No GEMINI_API_KEY or GOOGLE_API_KEY found for odometer vision extraction.")
+        return None
+
+    try:
+        b64_img = base64.b64encode(image_bytes).decode("utf-8")
+
+        prompt = (
+            "You are an expert vehicle fleet inspection AI. "
+            "Analyze this photo of a vehicle's dashboard / instrument cluster and extract the total odometer mileage reading. "
+            "Instructions:\n"
+            "1. Locate the digital or mechanical odometer display (typically 5 to 7 digits, e.g. 145280 km or 89312).\n"
+            "2. DO NOT confuse the odometer with Trip A / Trip B meters (which have decimals like 14.5 or small numbers), "
+            "speedometer (0-200 km/h), tachometer (RPM x 1000), clock time (e.g. 14:30), temperature (e.g. 24°C), or fuel range.\n"
+            "3. Return valid JSON ONLY with the exact key 'odometer' containing the numeric value (integer or float), "
+            "or null if no odometer is visible or readable.\n"
+            "Example: {\"odometer\": 145280.0}"
+        )
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": b64_img
+                        }
+                    }
+                ]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.1
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, json=payload)
+            if res.status_code == 200:
+                resp_data = res.json()
+                candidates = resp_data.get("candidates", [])
+                if candidates:
+                    raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    parsed = json.loads(raw_text)
+                    val = parsed.get("odometer")
+                    if val is not None:
+                        val_float = float(val)
+                        if val_float > 0:
+                            logger.info(f"Successfully extracted odometer from image: {val_float}")
+                            return val_float
+            else:
+                logger.warning(f"Gemini Vision API error ({res.status_code}): {res.text}")
+    except Exception as e:
+        logger.error(f"Error during odometer extraction from image: {e}", exc_info=True)
+
+    return None

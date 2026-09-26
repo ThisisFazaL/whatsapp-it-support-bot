@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+from typing import Optional
 import httpx
 from app.config import settings
 
@@ -100,6 +101,45 @@ class MetaWhatsAppAPI:
                     return None
         except Exception as e:
             logger.error(f"Exception during Meta Media Upload: {e}", exc_info=True)
+            return None
+
+    async def download_media_bytes(self, media_id: str) -> Optional[bytes]:
+        """
+        Retrieves media URL from Meta Graph API and downloads the raw image bytes into memory.
+        Does NOT save to disk or database to prevent storage bloat.
+        """
+        if not media_id:
+            return None
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}"
+        }
+        url = f"https://graph.facebook.com/{self.version}/{media_id}"
+        client = self.get_client()
+
+        try:
+            logger.info(f"Retrieving media metadata for ID '{media_id}' from Meta API...")
+            res = await client.get(url, headers=headers)
+            if res.status_code != 200:
+                logger.error(f"Failed to fetch media metadata for {media_id}: ({res.status_code}) {res.text}")
+                return None
+
+            meta_data = res.json()
+            download_url = meta_data.get("url")
+            if not download_url:
+                logger.error(f"No download URL in Meta media response: {meta_data}")
+                return None
+
+            # Download the actual image file bytes with Bearer auth
+            dl_res = await client.get(download_url, headers=headers)
+            if dl_res.status_code == 200:
+                logger.info(f"Successfully downloaded media {media_id} ({len(dl_res.content)} bytes) into memory.")
+                return dl_res.content
+            else:
+                logger.error(f"Failed to download media content from {download_url}: {dl_res.status_code}")
+                return None
+        except Exception as e:
+            logger.error(f"Exception during Meta media download: {e}", exc_info=True)
             return None
 
     async def send_text_message(self, to_phone: str, text: str, fallback_template: str = None, template_params: list = None) -> dict:

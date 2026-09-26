@@ -19,6 +19,7 @@ from app.database import (
 )
 from app.state_manager import set_user_state, clear_user_state, get_user_state, normalize_phone_number
 from app.meta_api import meta_api
+from app.services.ai_extractor import extract_odometer_from_image
 
 logger = logging.getLogger("driver_handler")
 
@@ -89,7 +90,8 @@ async def handle_driver_interaction(
     session: AsyncSession,
     phone: str,
     message_text: str,
-    state: Optional[Any]
+    state: Optional[Any],
+    image_id: Optional[str] = None
 ) -> bool:
     """
     Handles all interactions for Driver (Stage 5).
@@ -253,8 +255,8 @@ async def handle_driver_interaction(
         prompt = (
             f"🚚 *TRIP DEPARTURE: {trip_id}*\n"
             "────────────────────\n"
-            "Please enter the vehicle's *Starting Odometer* reading (in KM):\n"
-            "_(e.g. 145200)_"
+            "Please enter the vehicle's *Starting Odometer* reading (in KM), or send a 📸 *photo* of the dashboard cluster:\n"
+            "_(e.g. 145200 or take a photo)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
@@ -466,8 +468,109 @@ async def handle_driver_interaction(
         prompt = (
             f"🏁 *DEPOT ARRIVAL: {trip_id}*\n"
             "────────────────────\n"
-            "Please enter the vehicle's final *Return Odometer* reading (in KM):\n"
-            "_(e.g. 145580)_"
+            "Please enter the vehicle's final *Return Odometer* reading (in KM), or send a 📸 *photo* of the dashboard cluster:\n"
+            "_(e.g. 145580 or take a photo)_"
+        )
+        await meta_api.send_text_message(clean_p, prompt)
+        return True
+
+    # 8.5 Odometer Confirmation from Image Detection
+    if text_lower.startswith("flt_odo_ok_start_"):
+        raw_payload = text_strip[len("flt_odo_ok_start_"):].strip()
+        parts = raw_payload.split("_")
+        trip_id = parts[0]
+        odo_val_str = parts[1] if len(parts) > 1 else ""
+        try:
+            odo_val = float(odo_val_str)
+        except ValueError:
+            odo_val = 0.0
+
+        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        if trip and odo_val > 0:
+            trip.start_odometer = odo_val
+            trip.status = "ACTIVE"
+            trip.is_live_location_active = True
+            trip.departed_at = datetime.datetime.utcnow()
+            await session.commit()
+
+            if trip.salesperson_phone:
+                rep_phone = clean_phone(trip.salesperson_phone)
+                rep_alert = (
+                    f"🚛 *TRIP STARTED: {trip.trip_id}*\n"
+                    "────────────────────\n"
+                    f"Driver: *{trip.driver_name}*\n"
+                    f"Truck: *{trip.truck_plate}*\n"
+                    f"Start Odometer: *{odo_val:,.0f} KM* (Verified 📸)\n"
+                    f"Departure Time: *{trip.departure_time or 'Just now'}*\n"
+                    "────────────────────\n"
+                    "Live location stream is now active."
+                )
+                await meta_api.send_text_message(rep_phone, rep_alert)
+
+        ack = (
+            f"✅ *TRIP STARTED: {trip_id}*\n"
+            "────────────────────\n"
+            f"Start Odometer: *{odo_val:,.0f} KM*\n"
+            "Drive safely! Live location tracking is active."
+        )
+        await meta_api.send_text_message(clean_p, ack)
+        await send_driver_transit_menu(session, clean_p, trip_id)
+        return True
+
+    if text_lower.startswith("flt_odo_ok_end_"):
+        raw_payload = text_strip[len("flt_odo_ok_end_"):].strip()
+        parts = raw_payload.split("_")
+        trip_id = parts[0]
+        odo_val_str = parts[1] if len(parts) > 1 else ""
+        try:
+            end_odo = float(odo_val_str)
+        except ValueError:
+            end_odo = 0.0
+
+        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        dist_km = 0.0
+        if trip and end_odo > 0:
+            start_odo = trip.start_odometer or 0.0
+            dist_km = max(0.0, end_odo - start_odo) if start_odo > 0 else 0.0
+            trip.end_odometer = end_odo
+            trip.distance_km = dist_km
+            trip.status = "RETURNED"
+            trip.returned_at = datetime.datetime.utcnow()
+            await session.commit()
+
+        await clear_user_state(session, clean_p)
+        start_disp = trip.start_odometer or 0 if trip else 0
+        ack = (
+            f"🏢 *RETURN LOGGED: {trip_id}*\n"
+            "────────────────────\n"
+            f"Start Odometer: *{start_disp:,.0f} KM*\n"
+            f"Return Odometer: *{end_odo:,.0f} KM* (Verified 📸)\n"
+            f"Total Distance Covered: *{dist_km:,.0f} KM*\n"
+            "────────────────────\n"
+            "Welcome back! Please proceed to the Sales Admin for physical balancing session."
+        )
+        await meta_api.send_text_message(clean_p, ack)
+
+        from app.handlers.sales_admin_handler import notify_sales_admin_balancing_session
+        await notify_sales_admin_balancing_session(session, trip_id)
+        return True
+
+    if text_lower.startswith(("flt_odo_edit_start_", "flt_odo_edit_end_")):
+        is_start = text_lower.startswith("flt_odo_edit_start_")
+        trip_id = text_strip.replace("flt_odo_edit_start_", "").replace("flt_odo_edit_end_", "").strip()
+        target_step = "awaiting_start_odometer" if is_start else "awaiting_return_odometer"
+        await set_user_state(
+            session,
+            clean_p,
+            current_step=target_step,
+            current_data={"trip_id": trip_id},
+            flow_name="fleet_driver"
+        )
+        prompt = (
+            f"✏️ *MANUAL ODOMETER ENTRY: {trip_id}*\n"
+            "────────────────────\n"
+            f"Please enter the vehicle's *{'Starting' if is_start else 'Return'} Odometer* reading (in KM):\n"
+            "_(e.g. 145200)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
@@ -488,6 +591,37 @@ async def handle_driver_interaction(
 
         # Awaiting Start Odometer reading
         if state.current_step == "awaiting_start_odometer":
+            if image_id:
+                img_bytes = await meta_api.download_media_bytes(image_id)
+                detected_odo = await extract_odometer_from_image(img_bytes) if img_bytes else None
+                if detected_odo and detected_odo > 0:
+                    odo_int_str = f"{int(detected_odo)}"
+                    prompt = (
+                        f"📸 *ODOMETER DETECTED: {detected_odo:,.0f} KM*\n"
+                        "────────────────────\n"
+                        f"We detected *{detected_odo:,.0f} KM* from your dashboard photo.\n\n"
+                        "Tap below to confirm, or reply with the correct numbers if different:"
+                    )
+                    buttons = [
+                        {"id": f"flt_odo_ok_start_{trip_id}_{odo_int_str}", "title": "✅ Confirm Reading"},
+                        {"id": f"flt_odo_edit_start_{trip_id}", "title": "✏️ Enter Manually"}
+                    ]
+                    await meta_api.send_button_message(
+                        to_phone=clean_p,
+                        body_text=prompt,
+                        buttons=buttons,
+                        header_text="ODOMETER VERIFICATION"
+                    )
+                    return True
+                else:
+                    await meta_api.send_text_message(
+                        clean_p,
+                        "⚠️ *Could not read odometer from photo*\n\n"
+                        "We couldn't clearly detect the odometer reading. "
+                        "Please reply with the numbers manually (e.g. *145200*) or send a clearer photo."
+                    )
+                    return True
+
             clean_val = re.sub(r"[^\d.]", "", text_strip)
             try:
                 odo_val = float(clean_val)
@@ -532,6 +666,37 @@ async def handle_driver_interaction(
 
         # Awaiting Return Odometer reading
         if state.current_step == "awaiting_return_odometer":
+            if image_id:
+                img_bytes = await meta_api.download_media_bytes(image_id)
+                detected_odo = await extract_odometer_from_image(img_bytes) if img_bytes else None
+                if detected_odo and detected_odo > 0:
+                    odo_int_str = f"{int(detected_odo)}"
+                    prompt = (
+                        f"📸 *ODOMETER DETECTED: {detected_odo:,.0f} KM*\n"
+                        "────────────────────\n"
+                        f"We detected *{detected_odo:,.0f} KM* from your dashboard photo.\n\n"
+                        "Tap below to confirm, or reply with the correct numbers if different:"
+                    )
+                    buttons = [
+                        {"id": f"flt_odo_ok_end_{trip_id}_{odo_int_str}", "title": "✅ Confirm Reading"},
+                        {"id": f"flt_odo_edit_end_{trip_id}", "title": "✏️ Enter Manually"}
+                    ]
+                    await meta_api.send_button_message(
+                        to_phone=clean_p,
+                        body_text=prompt,
+                        buttons=buttons,
+                        header_text="ODOMETER VERIFICATION"
+                    )
+                    return True
+                else:
+                    await meta_api.send_text_message(
+                        clean_p,
+                        "⚠️ *Could not read odometer from photo*\n\n"
+                        "We couldn't clearly detect the odometer reading. "
+                        "Please reply with the numbers manually (e.g. *145580*) or send a clearer photo."
+                    )
+                    return True
+
             clean_val = re.sub(r"[^\d.]", "", text_strip)
             try:
                 end_odo = float(clean_val)

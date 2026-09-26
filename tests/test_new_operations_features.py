@@ -202,6 +202,89 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cust_b.collected_charge, 60.0)
             self.assertEqual(cust_b.status, "MATCHED")
 
+    @patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock)
+    @patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock)
+    @patch("app.meta_api.meta_api.download_media_bytes", new_callable=AsyncMock)
+    @patch("app.handlers.driver_handler.extract_odometer_from_image", new_callable=AsyncMock)
+    async def test_odometer_image_extraction_and_confirmation(
+        self, mock_extract, mock_dl, mock_send_btn, mock_send_txt
+    ):
+        """Tests dashboard photo odometer extraction and driver 1-tap confirmation."""
+        mock_dl.return_value = b"fake_jpeg_cluster_bytes"
+        mock_extract.return_value = 145280.0
+
+        async with async_session_factory() as session:
+            trip_id = "TRIP-ODO-001"
+            from app.database import create_or_update_fleet_trip_request
+            await create_or_update_fleet_trip_request(
+                session, trip_id, "A. TG Hardware", self.sales_rep_phone, "Masvingo", "Sales", None, "Masvingo", 10000.0, 150.0
+            )
+
+            # 1. Driver clicks Start Trip -> bot sets state awaiting_start_odometer
+            handled = await handle_driver_interaction(session, self.driver_phone, f"flt_drv_start_{trip_id}", None)
+            self.assertTrue(handled)
+            prompt = mock_send_txt.call_args[0][1]
+            self.assertIn("Starting Odometer", prompt)
+            self.assertIn("photo", prompt)
+
+            state = await get_user_state(session, self.driver_phone)
+            self.assertEqual(state.current_step, "awaiting_start_odometer")
+
+            # 2. Driver sends photo of dashboard (msg_type='image', image_id='img_odo_999')
+            handled = await handle_driver_interaction(
+                session, self.driver_phone, "Photo attachment", state, image_id="img_odo_999"
+            )
+            self.assertTrue(handled)
+            mock_dl.assert_called_with("img_odo_999")
+            mock_extract.assert_called_with(b"fake_jpeg_cluster_bytes")
+
+            # Verification button message displayed to driver
+            btn_card = mock_send_btn.call_args[1]["body_text"]
+            self.assertIn("ODOMETER DETECTED: 145,280 KM", btn_card)
+            btns = mock_send_btn.call_args[1]["buttons"]
+            self.assertEqual(len(btns), 2)
+            self.assertEqual(btns[0]["id"], f"flt_odo_ok_start_{trip_id}_145280")
+            self.assertEqual(btns[0]["title"], "✅ Confirm Reading")
+
+            # 3. Driver taps [✅ Confirm Reading]
+            handled = await handle_driver_interaction(
+                session, self.driver_phone, f"flt_odo_ok_start_{trip_id}_145280", state
+            )
+            self.assertTrue(handled)
+
+            # Verify trip is now ACTIVE with start_odometer = 145280.0
+            trip = await get_fleet_trip_request_by_id(session, trip_id)
+            self.assertEqual(trip.status, "ACTIVE")
+            self.assertEqual(trip.start_odometer, 145280.0)
+            self.assertTrue(trip.is_live_location_active)
+
+            # 4. Driver arrives back at depot and sends return photo
+            mock_extract.return_value = 145580.0
+            await set_user_state(
+                session, self.driver_phone, "awaiting_return_odometer", {"trip_id": trip_id}, flow_name="fleet_driver"
+            )
+            ret_state = await get_user_state(session, self.driver_phone)
+            handled = await handle_driver_interaction(
+                session, self.driver_phone, "Photo attachment", ret_state, image_id="img_odo_final"
+            )
+            self.assertTrue(handled)
+
+            ret_btn_card = mock_send_btn.call_args[1]["body_text"]
+            self.assertIn("ODOMETER DETECTED: 145,580 KM", ret_btn_card)
+
+            # Driver taps [✅ Confirm Reading] for return odometer
+            handled = await handle_driver_interaction(
+                session, self.driver_phone, f"flt_odo_ok_end_{trip_id}_145580", ret_state
+            )
+            self.assertTrue(handled)
+
+            # Verify trip is RETURNED with end_odometer and distance_km = 300.0
+            trip_ret = await get_fleet_trip_request_by_id(session, trip_id)
+            self.assertEqual(trip_ret.status, "RETURNED")
+            self.assertEqual(trip_ret.end_odometer, 145580.0)
+            self.assertEqual(trip_ret.distance_km, 300.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

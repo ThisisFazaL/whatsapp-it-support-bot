@@ -47,7 +47,8 @@ async def dispatch_fleet_message(
     session: AsyncSession,
     phone: str,
     message_text: str,
-    state: Optional[Any]
+    state: Optional[Any],
+    image_id: Optional[str] = None
 ) -> bool:
     """
     Modular dispatcher for all Fleet Operations Subsystem actions.
@@ -78,8 +79,8 @@ async def dispatch_fleet_message(
             return True
 
     # 3. Driver Transit Actions
-    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "location_pin_")) or fn == "fleet_driver":
-        handled = await handle_driver_interaction(session, clean_p, message_text, state)
+    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "flt_odo_", "location_pin_")) or fn == "fleet_driver":
+        handled = await handle_driver_interaction(session, clean_p, message_text, state, image_id=image_id)
         if handled:
             return True
 

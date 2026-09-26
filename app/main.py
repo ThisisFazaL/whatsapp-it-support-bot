@@ -869,7 +869,7 @@ async def process_webhook_payload(body: dict):
 
             # Step 0.55: Fleet Operations Subsystem Dispatcher
             if is_fleet_op:
-                if await dispatch_fleet_message(db, sender_phone, message_text, state):
+                if await dispatch_fleet_message(db, sender_phone, message_text, state, image_id=image_id):
                     return
 
             # Check if user is actively in a ticket creation flow or requirement flow
