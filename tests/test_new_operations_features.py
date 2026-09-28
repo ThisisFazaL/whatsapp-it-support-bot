@@ -256,7 +256,6 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
             trip = await get_fleet_trip_request_by_id(session, trip_id)
             self.assertEqual(trip.status, "ACTIVE")
             self.assertEqual(trip.start_odometer, 145280.0)
-            self.assertTrue(trip.is_live_location_active)
 
             # 4. Driver arrives back at depot and sends return photo
             mock_extract.return_value = 145580.0
@@ -332,7 +331,7 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertIn(trip_id, driver_notice)
             self.assertIn("$108.00", driver_notice)
 
-            # 4. Driver enters starting odometer -> instructed to share WhatsApp live location
+            # 4. Driver enters starting odometer -> cleanly acknowledged without location leakage
             mock_send_txt.reset_mock()
             await set_user_state(session, self.driver_phone, "awaiting_start_odometer", {"trip_id": trip_id}, flow_name="fleet_driver")
             drv_state = await get_user_state(session, self.driver_phone)
@@ -340,17 +339,17 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(handled)
 
             start_ack = mock_send_txt.call_args_list[-1][0][1]
-            self.assertIn("SHARE LIVE LOCATION", start_ack)
+            self.assertIn("TRIP STARTED", start_ack)
+            self.assertNotIn("SHARE LIVE LOCATION", start_ack)
 
-            # 5. Driver sends location pin -> Sales Rep receives location message with Trip ID
+            # 5. Security protocol: Location pin over WhatsApp triggers security protocol (anti-hijacking)
             mock_send_txt.reset_mock()
             handled = await handle_driver_interaction(session, self.driver_phone, "location_pin_-17.82485_31.05303", drv_state)
             self.assertTrue(handled)
 
-            rep_loc_card = mock_send_txt.call_args_list[-1][0][1]
-            self.assertIn(f"LIVE DRIVER LOCATION: {trip_id}", rep_loc_card)
-            self.assertIn("AEV 9999", rep_loc_card)
-            self.assertIn("Terrence Mupfumi", rep_loc_card)
+            sec_msg = mock_send_txt.call_args_list[-1][0][1]
+            self.assertIn("SECURITY PROTOCOL", sec_msg)
+            self.assertIn("anti-hijacking", sec_msg)
 
 
 if __name__ == "__main__":

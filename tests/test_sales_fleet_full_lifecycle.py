@@ -328,14 +328,12 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             req = await get_fleet_trip_request_by_id(session, trip_test_id)
             self.assertEqual(req.status, "ACTIVE")
             self.assertEqual(req.start_odometer, 145200.0)
-            self.assertTrue(req.is_live_location_active)
 
-            # Driver sends live location pin
+            # Security protocol: Live location broadcast is disabled (anti-hijacking)
             handled = await handle_driver_interaction(session, self.driver_phone, "location_pin_-17.82485_31.05303", None)
             self.assertTrue(handled)
-            req = await get_fleet_trip_request_by_id(session, trip_test_id)
-            self.assertAlmostEqual(req.last_latitude, -17.82485, places=4)
-            self.assertAlmostEqual(req.last_longitude, 31.05303, places=4)
+            sec_ack = mock_send_txt.call_args[0][1]
+            self.assertIn("SECURITY PROTOCOL", sec_ack)
 
             # Transit buttons presented
             transit_btns = [b["title"] for b in mock_send_btn.call_args[1]["buttons"]]
