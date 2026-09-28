@@ -30,7 +30,7 @@ def clean_phone(phone: Optional[str]) -> str:
 
 
 async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: str):
-    """Presents the 3 live transit buttons to Driver (NO emojis, <= 20 chars)."""
+    """Presents the live transit buttons to Driver (omits Delivery Charges if transport charge is $0)."""
     header = "TRIP IN TRANSIT"
     body = (
         f"🚛 *TRIP IN TRANSIT: {trip_id}*\n"
@@ -38,11 +38,23 @@ async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: s
         "Trip is in progress.\n"
         "Please select an option below:"
     )
-    buttons = [
-        {"id": f"flt_drv_deliv_{trip_id}", "title": "Delivery Charges"},
-        {"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"},
-        {"id": f"flt_drv_ret_{trip_id}", "title": "I am Returning"}
-    ]
+
+    # Check whether there are delivery charges to collect
+    stmt = select(FleetCustomerSchedule).where(FleetCustomerSchedule.trip_id == trip_id)
+    res = await session.execute(stmt)
+    schedules = list(res.scalars().all())
+    total_expected = sum(s.expected_charge for s in schedules)
+    if total_expected <= 0.001:
+        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        if trip and trip.transport_charge:
+            total_expected = float(trip.transport_charge)
+
+    buttons = []
+    if total_expected > 0.001:
+        buttons.append({"id": f"flt_drv_deliv_{trip_id}", "title": "Delivery Charges"})
+    buttons.append({"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"})
+    buttons.append({"id": f"flt_drv_ret_{trip_id}", "title": "I am Returning"})
+
     await set_user_state(
         session,
         phone,
@@ -83,6 +95,20 @@ async def send_driver_returning_menu(session: AsyncSession, phone: str, trip_id:
         buttons=buttons,
         header_text=header
     )
+
+
+async def return_to_appropriate_driver_menu(session: AsyncSession, phone: str, trip_id: str):
+    """
+    Returns the driver to the correct menu based on trip state:
+    If trip is already returning (status == 'RETURNING' or returning_at is set),
+    presents send_driver_returning_menu ('I Have Returned').
+    Otherwise, presents send_driver_transit_menu ('I am Returning').
+    """
+    trip = await get_fleet_trip_request_by_id(session, trip_id)
+    if trip and (trip.status == "RETURNING" or trip.returning_at is not None):
+        await send_driver_returning_menu(session, phone, trip_id)
+    else:
+        await send_driver_transit_menu(session, phone, trip_id)
 
 
 async def handle_driver_interaction(
@@ -211,6 +237,22 @@ async def handle_driver_interaction(
         res = await session.execute(stmt)
         schedules = list(res.scalars().all())
 
+        total_expected = sum(s.expected_charge for s in schedules)
+        if total_expected <= 0.001:
+            trip = await get_fleet_trip_request_by_id(session, trip_id)
+            if trip and trip.transport_charge:
+                total_expected = float(trip.transport_charge)
+
+        if total_expected <= 0.001:
+            await meta_api.send_text_message(
+                clean_p,
+                f"ℹ️ *NO DELIVERY CHARGES: {trip_id}*\n"
+                "────────────────────\n"
+                "There are no delivery or transport charges to collect for this trip."
+            )
+            await return_to_appropriate_driver_menu(session, clean_p, trip_id)
+            return True
+
         if schedules:
             customers_map = {}
             lines = []
@@ -295,8 +337,11 @@ async def handle_driver_interaction(
         prompt = (
             f"⛽ *EMERGENCY FUEL: {trip_id}*\n"
             "────────────────────\n"
-            "📹 *Requirement:* Please take a 10-second video of the fuel pump reading and vehicle fuel gauge.\n\n"
-            "Enter the total amount spent on fuel in USD:\n"
+            "📹 *Video Verification Protocol:*\n"
+            "• Record a video showing the *fuel pump meter* and *truck fuel gauge*.\n"
+            "• Speak the current *date and time* in the background.\n"
+            "⚠️ *Do NOT send this video to WhatsApp.* Keep it on your phone to show during physical balancing!\n\n"
+            "Now please type the total amount spent on fuel in USD:\n"
             "_(e.g. 25.00)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
@@ -360,7 +405,7 @@ async def handle_driver_interaction(
             "Schedule updated successfully!"
         )
         await meta_api.send_text_message(clean_p, ack)
-        await send_driver_transit_menu(session, clean_p, trip_id)
+        await return_to_appropriate_driver_menu(session, clean_p, trip_id)
         return True
 
     # 7. Driver clicks [I am Returning]
@@ -520,7 +565,7 @@ async def handle_driver_interaction(
                 await meta_api.send_text_message(clean_p, "Action cancelled. You can reply when ready.")
                 return True
             else:
-                await send_driver_transit_menu(session, clean_p, trip_id)
+                await return_to_appropriate_driver_menu(session, clean_p, trip_id)
                 return True
 
         # Awaiting Start Odometer reading
@@ -793,10 +838,12 @@ async def handle_driver_interaction(
 
         # Awaiting Emergency Fuel Amount -> Route for Approval by Edward or Zayn
         if state.current_step == "awaiting_fuel_amount":
-            if "video" in text_strip.lower():
+            if image_id or "video" in text_strip.lower():
                 await meta_api.send_text_message(
                     clean_p,
-                    "📹 *Fuel pump video received!*\n\nNow please type the total amount spent on fuel in USD:\n_(e.g. 25.00)_"
+                    "⚠️ *Please do NOT send the video here.*\n"
+                    "Keep the video saved on your phone to present to the Sales Admin during physical balancing.\n\n"
+                    "Please reply with the *USD fuel amount* only (e.g. 25.00):"
                 )
                 return True
 
@@ -854,7 +901,7 @@ async def handle_driver_interaction(
                 clean_p,
                 f"⏳ *EMERGENCY FUEL SUBMITTED*\n────────────────────\nAmount: *${fuel_amt:,.2f}*\nApproval request dispatched to Edward & Zayn.\nYou will be notified immediately when approved."
             )
-            await send_driver_transit_menu(session, clean_p, trip_id)
+            await return_to_appropriate_driver_menu(session, clean_p, trip_id)
             return True
 
         # Awaiting Other Emergency Description
@@ -928,7 +975,7 @@ async def handle_driver_interaction(
                 clean_p,
                 f"⏳ *EMERGENCY EXPENSE SUBMITTED*\n────────────────────\nIssue: {desc}\nAmount: *${other_amt:,.2f}*\nApproval request dispatched to Edward & Zayn.\nYou will be notified immediately when approved."
             )
-            await send_driver_transit_menu(session, clean_p, trip_id)
+            await return_to_appropriate_driver_menu(session, clean_p, trip_id)
             return True
 
     return False

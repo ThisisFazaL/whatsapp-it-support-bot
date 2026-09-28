@@ -335,9 +335,23 @@ class FavlogixAPIService:
                 if not resolved_city:
                     resolved_city = "Local"
 
+                customers_list = []
+                for idx, o in enumerate(orders_data, start=1):
+                    c_name = o.get("customerName") or o.get("customer") or o.get("name") or f"Customer {idx}"
+                    c_id = o.get("orderId") or o.get("orderKey") or f"CUST-{idx}"
+                    o_val = float(o.get("totalAmount") or o.get("total") or o.get("amount") or 0.0)
+                    order_key = o.get("orderId") or o.get("orderKey") or o.get("orderNumber") or ""
+                    customers_list.append({
+                        "customer_name": c_name,
+                        "customer_id": c_id,
+                        "order_id": order_key,
+                        "order_total": round(o_val, 2),
+                        "to_collect": 0.0
+                    })
+
                 logger.info(
                     f"fio.favlogix.com: Trip '{actual_trip_id}' found with {total_orders} orders, "
-                    f"total amount: ${total_amount:,.2f}, destination: {resolved_city} (Orders: {order_ids})"
+                    f"total amount: ${total_amount:,.2f}, destination: {resolved_city} (Customers: {[c['customer_name'] for c in customers_list]})"
                 )
 
                 return {
@@ -347,7 +361,8 @@ class FavlogixAPIService:
                     "route": "",
                     "status": "CALCULATED",
                     "order_count": total_orders,
-                    "orders": order_ids
+                    "orders": order_ids,
+                    "customers": customers_list
                 }
 
         # ----------------------------------------------------
@@ -399,6 +414,19 @@ class FavlogixAPIService:
             total_amount = sum(float(item.get("total", 0.0)) for item in items)
             order_ids = [it.get("sales_order_id") for it in items if it.get("sales_order_id")]
 
+            customers_list = []
+            for idx, it in enumerate(items, start=1):
+                c_name = it.get("customer_name") or it.get("customer") or it.get("name") or f"Customer {idx}"
+                c_id = it.get("sales_order_id") or it.get("id") or f"CUST-{idx}"
+                o_val = float(it.get("total", 0.0))
+                customers_list.append({
+                    "customer_name": c_name,
+                    "customer_id": c_id,
+                    "order_id": it.get("sales_order_id") or "",
+                    "order_total": round(o_val, 2),
+                    "to_collect": 0.0
+                })
+
             return {
                 "trip_id": clean_trip,
                 "total_amount": round(total_amount, 2),
@@ -406,7 +434,8 @@ class FavlogixAPIService:
                 "route": "",
                 "status": "CALCULATED",
                 "order_count": len(items),
-                "orders": order_ids
+                "orders": order_ids,
+                "customers": customers_list
             }
 
     async def list_active_trips(self, limit: int = 100) -> List[Dict[str, Any]]:

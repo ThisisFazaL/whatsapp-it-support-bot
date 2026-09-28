@@ -480,7 +480,8 @@ async def handle_existing_trip_response(
                 "clean_btn_id": clean_btn_id,
                 "cur_pending": cur_pending,
                 "dest": existing.destination_city,
-                "sales_val": existing.trip_sales_value
+                "sales_val": existing.trip_sales_value,
+                "customers": (existing.raw_data or {}).get("customers", []) if isinstance(existing.raw_data, dict) else []
             },
             flow_name="fleet_approval"
         )
@@ -598,18 +599,30 @@ async def finalize_stage2_dispatch(
     tc_id = data.get("tc_id", "")
     total_collected = float(data.get("total_collected", transport_charge))
     customers = data.get("customers", [])
+    if not customers and rec_chk and isinstance(rec_chk.raw_data, dict):
+        customers = rec_chk.raw_data.get("customers", [])
+
     custom_schedules = data.get("custom_schedules", [])
 
     schedules = []
     if custom_schedules:
         schedules = custom_schedules
     elif customers:
+        total_tc = transport_charge
         for c in customers:
+            c_name = c.get("customer_name") or c.get("customer_id") or "Customer"
+            c_id = c.get("customer_id") or c.get("order_id") or c_name
+            c_to_collect = float(c.get("to_collect", 0.0))
             schedules.append({
-                "customer_id": c.get("customer_id") or c.get("customer_name") or "GENERAL",
-                "reference_note": c.get("customer_name") or c.get("customer_id"),
-                "expected_charge": float(c.get("to_collect", 0.0))
+                "customer_id": c_id,
+                "reference_note": c_name,
+                "expected_charge": c_to_collect
             })
+        if total_tc > 0 and sum(s["expected_charge"] for s in schedules) == 0:
+            split_amt = round(total_tc / len(schedules), 2)
+            rem = round(total_tc - (split_amt * (len(schedules) - 1)), 2)
+            for i, s in enumerate(schedules):
+                s["expected_charge"] = split_amt if i < len(schedules) - 1 else rem
     else:
         schedules.append({
             "customer_id": "GENERAL",
@@ -1375,7 +1388,8 @@ async def handle_fleet_approval_flow(
                     "dest": rec_chk.destination_city,
                     "route": rec_chk.route or rec_chk.destination_city,
                     "sales_val": rec_chk.trip_sales_value,
-                    "transport_charge": req_charge
+                    "transport_charge": req_charge,
+                    "customers": (rec_chk.raw_data or {}).get("customers", []) if isinstance(rec_chk.raw_data, dict) else []
                 })
 
         # No need to ask amount because we know full charge is paid!
@@ -1421,7 +1435,8 @@ async def handle_fleet_approval_flow(
                     "dest": rec_chk.destination_city,
                     "route": rec_chk.route or rec_chk.destination_city,
                     "sales_val": rec_chk.trip_sales_value,
-                    "transport_charge": req_charge
+                    "transport_charge": req_charge,
+                    "customers": (rec_chk.raw_data or {}).get("customers", []) if isinstance(rec_chk.raw_data, dict) else []
                 })
 
         await set_user_state(
@@ -1519,7 +1534,8 @@ async def handle_fleet_approval_flow(
                     "dest": rec_chk.destination_city,
                     "route": rec_chk.route or rec_chk.destination_city,
                     "sales_val": rec_chk.trip_sales_value,
-                    "transport_charge": req_charge
+                    "transport_charge": req_charge,
+                    "customers": (rec_chk.raw_data or {}).get("customers", []) if isinstance(rec_chk.raw_data, dict) else []
                 })
 
         # No need to ask amount; full transport charge added to pending ledger
@@ -1821,7 +1837,8 @@ async def handle_fleet_approval_flow(
                     "route": route,
                     "sales_val": sales_val,
                     "transport_charge": 0.0,
-                    "required_charge": 0.0
+                    "required_charge": 0.0,
+                    "customers": result.get("customers", [])
                 },
                 flow_name="fleet_approval"
             )
@@ -1881,7 +1898,8 @@ async def handle_fleet_approval_flow(
                     "route": route,
                     "sales_val": sales_val,
                     "transport_charge": transport_charge,
-                    "required_charge": transport_charge
+                    "required_charge": transport_charge,
+                    "customers": result.get("customers", [])
                 },
                 flow_name="fleet_approval"
             )

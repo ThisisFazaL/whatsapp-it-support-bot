@@ -99,6 +99,8 @@ class TripVerificationService:
         # 3. Calculate minimum sales and 4% transport charge
         amount = raw_trip_data.get("total_amount", 0.0)
         destination = raw_trip_data.get("destination_city", "Bulawayo")
+        customers = raw_trip_data.get("customers", [])
+        order_count = raw_trip_data.get("order_count", len(customers))
 
         try:
             pricing = calculate_trip_approval(actual_sales=amount, destination=destination)
@@ -111,7 +113,9 @@ class TripVerificationService:
                 "required_minimum": pricing["required_minimum"],
                 "shortfall": pricing["shortfall"],
                 "transport_charge": pricing["transport_charge"],
-                "approved": pricing["approved"]
+                "approved": pricing["approved"],
+                "customers": customers,
+                "order_count": order_count
             }
         except CityNotFoundError:
             # Fallback to general city rule
@@ -125,7 +129,9 @@ class TripVerificationService:
                 "required_minimum": fallback_pricing["required_minimum"],
                 "shortfall": fallback_pricing["shortfall"],
                 "transport_charge": fallback_pricing["transport_charge"],
-                "approved": fallback_pricing["approved"]
+                "approved": fallback_pricing["approved"],
+                "customers": customers,
+                "order_count": order_count
             }
 
     async def verify_transport_charge_id(self, tc_id: str, required_amount: float = 0.0) -> Dict[str, Any]:

@@ -46,15 +46,23 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
 
     sched_lines = []
     for s in schedules:
+        disp_name = s.reference_note or s.customer_id
+        if s.reference_note and s.reference_note != s.customer_id:
+            disp_name = f"{s.reference_note} ({s.customer_id})"
         sched_lines.append(
-            f"• {s.customer_id}: Exp ${s.expected_charge:,.2f} | Col ${s.collected_charge:,.2f} ({s.payment_method}) [{s.status}]"
+            f"• {disp_name}: Exp ${s.expected_charge:,.2f} | Col ${s.collected_charge:,.2f} ({s.payment_method}) [{s.status}]"
         )
     sched_text = "\n".join(sched_lines) if sched_lines else "• No customer schedule records."
 
     emg_lines = []
+    has_fuel_emg = False
     for e in emergencies:
+        if e.charge_type == "EMERGENCY_FUEL":
+            has_fuel_emg = True
         emg_lines.append(f"• {e.charge_type}: ${e.amount:,.2f} ({e.description or ''})")
     emg_text = "\n".join(emg_lines) if emg_lines else "• None"
+    if has_fuel_emg:
+        emg_text += "\n💡 _Driver to present recorded video of fuel pump & fuel gauge on phone._"
 
     from app.handlers.fleet_approval_handler import get_solo_test_mode
     is_solo = get_solo_test_mode()
