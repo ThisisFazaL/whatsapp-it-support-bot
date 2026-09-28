@@ -280,7 +280,7 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             # Note forwarded directly to Sales Rep
             rep_state = await get_user_state(session, self.sales_rep_phone)
             self.assertEqual(rep_state.current_step, "awaiting_rep_crew_count")
-            last_prompt = mock_send_txt.call_args[0][1]
+            last_prompt = mock_send_btn.call_args[1]["body_text"]
             self.assertIn("Verify return schedule and meals", last_prompt)
 
             # Sales Rep re-submits allowances: Crew 2, Dep 06:30 AM, Ret 08:00 PM, Tolls 34.50

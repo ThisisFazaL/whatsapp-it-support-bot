@@ -144,6 +144,29 @@ async def handle_zayn_accounts_interaction(
 
         # Notify Accounts
         await notify_accounts_allowance_transfer(session, trip_id)
+
+        # Notify Driver to collect money from Accounts team
+        if trip.driver_phone:
+            drv_p = clean_phone(trip.driver_phone)
+            from app.handlers.fleet_approval_handler import get_solo_test_mode
+            is_solo = get_solo_test_mode()
+            recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {drv_p}
+            drv_msg = (
+                f"💵 *ALLOWANCE APPROVED: {trip.trip_id}*\n"
+                "────────────────────\n"
+                f"Driver: *{trip.driver_name}*\n"
+                f"Truck: *{trip.truck_plate}*\n"
+                f"Total Allowance: *${trip.total_allowance:,.2f}*\n"
+                f"(Food: ${trip.food_allowance:,.2f} | Accomm: ${trip.accommodation_allowance:,.2f} | Tolls: ${trip.toll_cost:,.2f})\n"
+                "────────────────────\n"
+                "✅ Approved by Zayn (Accounts).\n"
+                "Please collect your travel allowance from the Accounts team before departing."
+            )
+            for r in recipients:
+                if r:
+                    await meta_api.send_text_message(r, drv_msg)
+            logger.info(f"Delivered allowance collection notice for {trip_id} to driver ({recipients})")
+
         return True
 
     # 2. Zayn clicks [Recalculate]

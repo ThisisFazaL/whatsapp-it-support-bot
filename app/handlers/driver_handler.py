@@ -204,8 +204,8 @@ async def handle_driver_interaction(
             # Sales Rep Alert
             if trip.salesperson_phone:
                 rep_phone = clean_phone(trip.salesperson_phone)
-                name_str = f"Truck {trip.truck_plate or 'Fleet'} ({trip.driver_name or 'Driver'})"
-                addr_str = f"Trip {trip.trip_id} - {trip.route or 'Delivery Route'}"
+                name_str = f"TRIP {trip.trip_id} | Truck {trip.truck_plate or 'Fleet'}"
+                addr_str = f"Driver: {trip.driver_name or 'Driver'} | Route: {trip.route or 'Delivery Route'}"
                 # 1. Native WhatsApp location pin
                 await meta_api.send_location_message(
                     to_phone=rep_phone,
@@ -216,11 +216,11 @@ async def handle_driver_interaction(
                 )
                 # 2. Rich tracking card
                 rep_card = (
-                    f"📍 *LIVE DRIVER LOCATION UPDATE*\n"
+                    f"📍 *LIVE DRIVER LOCATION: {trip.trip_id}*\n"
                     "────────────────────\n"
-                    f"🚛 *Trip:* {trip.trip_id}\n"
-                    f"👤 *Driver:* {trip.driver_name or 'Driver'}\n"
+                    f"🚛 *Trip ID:* {trip.trip_id}\n"
                     f"🚚 *Truck:* {trip.truck_plate or 'N/A'}\n"
+                    f"👤 *Driver:* {trip.driver_name or 'Driver'}\n"
                     f"🛣️ *Route:* {trip.route or 'In Transit'}\n"
                     f"📍 *Coordinates:* `{lat:.5f}, {lng:.5f}`\n"
                     "────────────────────\n"
@@ -511,7 +511,9 @@ async def handle_driver_interaction(
             f"✅ *TRIP STARTED: {trip_id}*\n"
             "────────────────────\n"
             f"Start Odometer: *{odo_val:,.0f} KM*\n"
-            "Drive safely! Live location tracking is active."
+            "Drive safely! Live location tracking is active.\n\n"
+            "📍 *NEXT STEP: SHARE LIVE LOCATION*\n"
+            "Please tap 📎 (Attachment) ➔ *Location* ➔ *Share Live Location* (or Send Your Current Location) so the Sales Rep can track this trip."
         )
         await meta_api.send_text_message(clean_p, ack)
         await send_driver_transit_menu(session, clean_p, trip_id)
@@ -658,7 +660,9 @@ async def handle_driver_interaction(
                 f"✅ *TRIP STARTED: {trip_id}*\n"
                 "────────────────────\n"
                 f"Start Odometer: *{odo_val:,.0f} KM*\n"
-                "Drive safely! Live location tracking is active."
+                "Drive safely! Live location tracking is active.\n\n"
+                "📍 *NEXT STEP: SHARE LIVE LOCATION*\n"
+                "Please tap 📎 (Attachment) ➔ *Location* ➔ *Share Live Location* (or Send Your Current Location) so the Sales Rep can track this trip."
             )
             await meta_api.send_text_message(clean_p, ack)
             await send_driver_transit_menu(session, clean_p, trip_id)

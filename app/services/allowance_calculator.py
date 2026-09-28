@@ -51,31 +51,51 @@ def parse_trip_schedule(departure_str: str, return_str: str) -> Tuple[int, int, 
     dep_lower = (departure_str or "").lower()
     ret_lower = (return_str or "").lower()
 
-    # Determine nights count
+    # Determine nights count & return time
     nights = 0
-    # Explicit nights check e.g. '2 nights', '1 night', 'overnight'
-    m_night = re.search(r"(\d+)\s*night", ret_lower + " " + dep_lower)
-    if m_night:
-        nights = int(m_night.group(1))
-    elif "tomorrow" in ret_lower or "next day" in ret_lower or "+1" in ret_lower:
-        nights = 1
-    elif any(d in ret_lower for d in ["2 days", "two days"]):
-        nights = 1
-    elif any(d in ret_lower for d in ["3 days", "three days"]):
-        nights = 2
+
+    # 1. Natural duration expressions (e.g. '2 days 4 hours', '3 days 3 hours', '1 day 5 hours', '12 hours')
+    m_days = re.search(r"(\d+)\s*day", ret_lower)
+    m_hours = re.search(r"(\d+)\s*hour", ret_lower)
+
+    if m_days or m_hours:
+        num_days = int(m_days.group(1)) if m_days else 0
+        num_hours = int(m_hours.group(1)) if m_hours else 0
+
+        if num_days > 0:
+            nights = num_days
+            if num_hours > 0:
+                ret_mins = (dep_mins + num_hours * 60) % 1440
+            else:
+                ret_mins = 18 * 60  # Default 06:00 PM on return day
+        else:
+            # Same-day trip specified in hours (e.g. '8 hours', '12 hours')
+            nights = 0
+            ret_mins = min(1439, dep_mins + num_hours * 60)
     else:
-        # Check if dates specified (e.g. 26/09 vs 27/09)
-        date_pattern = r"(\d{1,2})[/\.-](\d{1,2})"
-        dep_dates = re.findall(date_pattern, dep_lower)
-        ret_dates = re.findall(date_pattern, ret_lower)
-        if dep_dates and ret_dates:
-            try:
-                d1 = int(dep_dates[0][0])
-                d2 = int(ret_dates[0][0])
-                if d2 > d1:
-                    nights = d2 - d1
-            except Exception:
-                pass
+        # 2. Explicit nights check e.g. '2 nights', '1 night', 'overnight'
+        m_night = re.search(r"(\d+)\s*night", ret_lower + " " + dep_lower)
+        if m_night:
+            nights = int(m_night.group(1))
+        elif "tomorrow" in ret_lower or "next day" in ret_lower or "+1" in ret_lower:
+            nights = 1
+        elif any(d in ret_lower for d in ["2 days", "two days"]):
+            nights = 1
+        elif any(d in ret_lower for d in ["3 days", "three days"]):
+            nights = 2
+        else:
+            # Check if dates specified (e.g. 26/09 vs 27/09)
+            date_pattern = r"(\d{1,2})[/\.-](\d{1,2})"
+            dep_dates = re.findall(date_pattern, dep_lower)
+            ret_dates = re.findall(date_pattern, ret_lower)
+            if dep_dates and ret_dates:
+                try:
+                    d1 = int(dep_dates[0][0])
+                    d2 = int(ret_dates[0][0])
+                    if d2 > d1:
+                        nights = d2 - d1
+                except Exception:
+                    pass
 
     return dep_mins, ret_mins, max(0, nights)
 

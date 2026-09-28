@@ -284,7 +284,76 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(trip_ret.end_odometer, 145580.0)
             self.assertEqual(trip_ret.distance_km, 300.0)
 
+    @patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock)
+    @patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock)
+    @patch("app.meta_api.meta_api.send_location_message", new_callable=AsyncMock)
+    async def test_sales_rep_configure_button_and_driver_allowance_notice(
+        self, mock_send_loc, mock_send_btn, mock_send_txt
+    ):
+        """Tests that Sales Rep uses [Configure Trip] button for isolated trip setup, Driver receives allowance notice, and location includes Trip ID."""
+        async with async_session_factory() as session:
+            trip_id = "TRIP-CFG-001"
+            from app.database import create_or_update_fleet_trip_request
+            await create_or_update_fleet_trip_request(
+                session, trip_id, "A. TG Hardware", self.sales_rep_phone, "Bulawayo", "Sales", None, "Bulawayo", 10000.0, 150.0
+            )
+            req = await get_fleet_trip_request_by_id(session, trip_id)
+            req.truck_plate = "AEV 9999"
+            req.driver_name = "Terrence Mupfumi"
+            req.driver_phone = self.driver_phone
+            req.total_allowance = 108.0
+            req.food_allowance = 28.0
+            req.accommodation_allowance = 60.0
+            req.toll_cost = 20.0
+            await session.commit()
+
+            # 1. Sales Rep receives prompt with [Configure Trip] button
+            await notify_sales_rep_allowance_entry(session, trip_id)
+            btn_args = mock_send_btn.call_args[1]
+            self.assertIn("TRIP READY FOR ALLOWANCES", btn_args["body_text"])
+            self.assertEqual(btn_args["buttons"][0]["id"], f"flt_rep_cfg_{trip_id}")
+
+            # 2. Sales Rep clicks [Configure Trip] -> binds state to TRIP-CFG-001
+            handled = await handle_fleet_approval_flow(session, self.sales_rep_phone, None, f"flt_rep_cfg_{trip_id}", None)
+            self.assertTrue(handled)
+            rep_state = await get_user_state(session, self.sales_rep_phone)
+            self.assertEqual(rep_state.current_step, "awaiting_rep_crew_count")
+            self.assertEqual(rep_state.current_data["trip_id"], trip_id)
+
+            # 3. Zayn approves allowance -> Driver receives notice to collect money from Accounts
+            mock_send_txt.reset_mock()
+            handled = await handle_zayn_accounts_interaction(session, self.zayn_phone, f"flt_zayn_app_{trip_id}", None)
+            self.assertTrue(handled)
+
+            # Check that driver received collection notice
+            sent_texts = [call[0][1] for call in mock_send_txt.call_args_list]
+            driver_notice = next((t for t in sent_texts if "ALLOWANCE APPROVED" in t and "collect your travel allowance" in t), None)
+            self.assertIsNotNone(driver_notice)
+            self.assertIn(trip_id, driver_notice)
+            self.assertIn("$108.00", driver_notice)
+
+            # 4. Driver enters starting odometer -> instructed to share WhatsApp live location
+            mock_send_txt.reset_mock()
+            await set_user_state(session, self.driver_phone, "awaiting_start_odometer", {"trip_id": trip_id}, flow_name="fleet_driver")
+            drv_state = await get_user_state(session, self.driver_phone)
+            handled = await handle_driver_interaction(session, self.driver_phone, "145200", drv_state)
+            self.assertTrue(handled)
+
+            start_ack = mock_send_txt.call_args_list[-1][0][1]
+            self.assertIn("SHARE LIVE LOCATION", start_ack)
+
+            # 5. Driver sends location pin -> Sales Rep receives location message with Trip ID
+            mock_send_txt.reset_mock()
+            handled = await handle_driver_interaction(session, self.driver_phone, "location_pin_-17.82485_31.05303", drv_state)
+            self.assertTrue(handled)
+
+            rep_loc_card = mock_send_txt.call_args_list[-1][0][1]
+            self.assertIn(f"LIVE DRIVER LOCATION: {trip_id}", rep_loc_card)
+            self.assertIn("AEV 9999", rep_loc_card)
+            self.assertIn("Terrence Mupfumi", rep_loc_card)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

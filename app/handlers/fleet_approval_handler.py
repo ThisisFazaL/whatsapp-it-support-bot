@@ -653,7 +653,7 @@ async def notify_sales_rep_allowance_entry(session: AsyncSession, trip_id: str, 
     tag = "🎭 *[SOLO TEST: SIMULATING SALES REP]*\n" if is_solo else ""
     note_block = f"⚠️ *Note from Zayn:* \"{zayn_note}\"\n────────────────────\n" if zayn_note else ""
     prompt = (
-        f"{tag}📋 *TRIP ALLOWANCE CONFIGURATION: {trip.trip_id}*\n"
+        f"{tag}📋 *TRIP READY FOR ALLOWANCES: {trip.trip_id}*\n"
         "────────────────────\n"
         f"Company: {trip.company_name}\n"
         f"Route: {trip.route or trip.destination_city}\n"
@@ -661,8 +661,7 @@ async def notify_sales_rep_allowance_entry(session: AsyncSession, trip_id: str, 
         f"Driver: {trip.driver_name}\n"
         "────────────────────\n"
         f"{note_block}"
-        "Please enter the *number of crew members* (including driver):\n"
-        "_(type number, e.g. 2)_"
+        "Tap below to configure schedule & crew for this trip:"
     )
 
     state_data = {"trip_id": trip.trip_id}
@@ -671,10 +670,18 @@ async def notify_sales_rep_allowance_entry(session: AsyncSession, trip_id: str, 
     if is_solo and master_p != rep_phone:
         await set_user_state(session, master_p, "awaiting_rep_crew_count", state_data, flow_name="fleet_rep_allowance")
 
+    buttons = [
+        {"id": f"flt_rep_cfg_{trip.trip_id}", "title": "Configure Trip"}
+    ]
     recipients = {master_p} if is_solo else {rep_phone}
     for r in recipients:
         if r:
-            await meta_api.send_text_message(r, prompt)
+            await meta_api.send_button_message(
+                to_phone=r,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="TRIP ALLOWANCES"
+            )
     logger.info(f"Delivered Sales Rep allowance configuration prompt for {trip_id} to {recipients}")
 
 
@@ -691,6 +698,29 @@ async def handle_sales_rep_allowance_interaction(
     clean_p = clean_phone(phone)
     text_strip = message_text.strip()
     text_lower = text_strip.lower()
+
+    # 0. Sales Rep taps [Configure Trip] from trip prompt
+    if text_lower.startswith("flt_rep_cfg_"):
+        trip_id = text_strip.replace("flt_rep_cfg_", "").strip()
+        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        if not trip:
+            await meta_api.send_text_message(clean_p, f"⚠️ Trip {trip_id} not found.")
+            return True
+
+        state_data = {"trip_id": trip_id}
+        await set_user_state(session, clean_p, "awaiting_rep_crew_count", state_data, flow_name="fleet_rep_allowance")
+
+        prompt = (
+            f"⚙️ *CONFIGURING TRIP: {trip_id}*\n"
+            "────────────────────\n"
+            f"Truck: *{trip.truck_plate}* | Driver: *{trip.driver_name}*\n"
+            f"Route: *{trip.route or trip.destination_city}*\n"
+            "────────────────────\n"
+            "Please enter the *number of crew members* (including driver):\n"
+            "_(e.g. 2)_"
+        )
+        await meta_api.send_text_message(clean_p, prompt)
+        return True
 
     # 1. Sales Rep submits allowances: [Submit Allowance]
     if text_lower.startswith("flt_rep_sub_allow_") or (
@@ -762,8 +792,8 @@ async def handle_sales_rep_allowance_interaction(
                 f"⏳ *RETURN SCHEDULE: {trip_id}*\n"
                 "────────────────────\n"
                 f"Departure: {text_strip}\n"
-                "Please enter the estimated *return time* / duration:\n"
-                "_(e.g. 08:00 PM, tomorrow 2:00 PM, 2 days, or 1 night)_"
+                "Please enter the estimated *return time* or *duration*:\n"
+                "_(e.g. '2 days 4 hours', '3 days 3 hours', 'tomorrow 08:00 PM', or '12 hours')_"
             )
             await meta_api.send_text_message(clean_p, prompt)
             return True
