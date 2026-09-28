@@ -1163,40 +1163,10 @@ async def test_ai_key():
 @app.post("/api/debug/test-odometer-image")
 async def debug_test_odometer_image(request: Request):
     """Debug endpoint to test odometer extraction directly on an uploaded image."""
-    import base64
-    import httpx
+    from app.services.ai_extractor import extract_odometer_from_image
     body = await request.body()
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        return {"error": "No API key configured"}
-    
-    b64_img = base64.b64encode(body).decode("utf-8")
-    mime_type = "image/png" if body.startswith(b"\x89PNG") else "image/jpeg"
-    
-    prompt = (
-        "Look at this car dashboard instrument cluster photo. Locate the digital odometer or mileage numbers on the screen. "
-        "What number is displayed on the odometer screen? Reply with JSON: {\"odometer\": <number>}"
-    )
-    
-    results = {}
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        for model in ["gemini-3.8-flash", "gemini-flash-latest"]:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            payload = {
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": mime_type, "data": b64_img}}
-                    ]
-                }],
-                "generationConfig": {"response_mime_type": "application/json"}
-            }
-            res = await client.post(url, json=payload)
-            results[model] = {
-                "status_code": res.status_code,
-                "text": res.text
-            }
-    return results
+    res = await extract_odometer_from_image(body)
+    return {"extracted_odometer": res}
 
 
 @app.get("/tickets")
