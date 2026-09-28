@@ -18,12 +18,12 @@ class Settings(BaseSettings):
 
 
     # Fleet Subsystem Roles & Operational Phones
-    zayn_phone: str = "263713866223"
-    edward_phone: str = "263715025982"
-    sales_admin_tg_phone: str = "263718352518"  # Tagoneswa Hardware Sales Admin (Sujit fallback)
-    sales_admin_lg_phone: str = "263718352518"  # LG Plast Sales Admin
-    sales_admin_kreckle_phone: str = "263718352518"  # Kreckle Sales Admin
-    accounts_phones: list = ["263718352518", "919265368695"]
+    zayn_phone: str = "263713866223"  # Zayn (+263 71 386 6223) Logistics Manager
+    edward_phone: str = "263715025982"  # Edward (+263 71 502 5982) Logistics Supervisor
+    sales_admin_tg_phone: str = "263780216289"  # Everjoy Tias (Tagoneswa Hardware Sales Admin)
+    sales_admin_lg_phone: str = "263787381215"  # Onelly Madziro (LG Plast Sales Admin)
+    sales_admin_kreckle_phone: str = "263783498457"  # Christine Chiweshe (Kreckle Sales Admin)
+    accounts_phones: list = ["263780100288", "919265368695"]  # Vigilance Bangezhano (Accounts) & Fazal Saiyed
     logistics_manager_phone: str = "263713866223"  # Zayn (+263 71 386 6223) Logistics Manager
 
     # Favlogix Direct Background API Configuration (Option 1 - Headless)
