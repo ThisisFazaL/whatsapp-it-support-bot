@@ -23,7 +23,7 @@ def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) ->
     """Fast check whether an incoming message belongs to the fleet operations subsystem."""
     txt = (message_text or "").strip().lower()
 
-    if txt.startswith(("flt_", "location_pin_")):
+    if txt.startswith(("flt_", "location_pin_", "btn_dispatch_", "btn_add_trans_", "btn_short_")):
         return True
 
     if state and state.flow_name:
@@ -58,6 +58,22 @@ async def dispatch_fleet_message(
     clean_p = clean_phone(phone)
     txt = (message_text or "").strip().lower()
     fn = state.flow_name.lower() if state and state.flow_name else ""
+
+    # 0. Fleet Approval & Dispatch Actions (Stage 1 / Stage 2)
+    if txt.startswith((
+        "flt_disp_", "btn_dispatch_", "btn_accept_fleet_",
+        "flt_add_trans_", "btn_add_trans_",
+        "flt_sf_", "btn_short_",
+        "flt_chg_"
+    )):
+        from app.handlers.fleet_approval_handler import handle_fleet_approval_flow
+        from app.database import Employee
+        from sqlalchemy import select
+        emp_res = await session.execute(select(Employee).where(Employee.phone == clean_p))
+        emp = emp_res.scalars().first()
+        handled = await handle_fleet_approval_flow(session, clean_p, emp, message_text, state)
+        if handled:
+            return True
 
     # 1. Edward & Logistics Allocations
     if txt.startswith("flt_edw_") or fn == "fleet_edward" or (is_edward(clean_p) and txt in {"trip queue", "queue"}):

@@ -22,6 +22,9 @@ def clean_phone(phone: Optional[str]) -> str:
 
 
 def is_edward(phone: str) -> bool:
+    from app.handlers.fleet_approval_handler import get_solo_test_mode
+    if get_solo_test_mode():
+        return True
     cp = clean_phone(phone)
     edw = clean_phone(settings.edward_phone)
     master = clean_phone(settings.master_admin_phone)
@@ -108,10 +111,14 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
         {"id": "flt_edw_queue", "title": "Trip Queue"}
     ]
 
-    # In solo mode, deliver exclusively to Master Admin
-    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {edw_phone}
+    # In solo mode, deliver to Master Admin and the testing Sales Rep
+    tester_phones = {clean_phone(settings.master_admin_phone)}
+    if trip.salesperson_phone:
+        tester_phones.add(clean_phone(trip.salesperson_phone))
+
+    recipients = tester_phones if is_solo else {edw_phone}
     if not is_solo and getattr(settings, "test_user_role", "").upper() == "EDWARD":
-        recipients.add(clean_phone(settings.master_admin_phone))
+        recipients.update(tester_phones)
 
 
     for r in recipients:

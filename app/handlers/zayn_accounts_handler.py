@@ -53,9 +53,13 @@ async def notify_zayn_allowance_approval(session: AsyncSession, trip_id: str):
         {"id": f"flt_zayn_recalc_{trip.trip_id}", "title": "Recalculate"}
     ]
 
-    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {clean_phone(settings.zayn_phone)}
+    tester_phones = {clean_phone(settings.master_admin_phone)}
+    if trip.salesperson_phone:
+        tester_phones.add(clean_phone(trip.salesperson_phone))
+
+    recipients = tester_phones if is_solo else {clean_phone(settings.zayn_phone)}
     if not is_solo and getattr(settings, "test_user_role", "").upper() == "ZAYN":
-        recipients.add(clean_phone(settings.master_admin_phone))
+        recipients.update(tester_phones)
 
 
     for r in recipients:
@@ -95,7 +99,11 @@ async def notify_accounts_allowance_transfer(session: AsyncSession, trip_id: str
         {"id": f"flt_acc_done_{trip.trip_id}", "title": "Transfer Done"}
     ]
 
-    account_phones = [clean_phone(settings.master_admin_phone)] if is_solo else [clean_phone(p) for p in settings.accounts_phones if clean_phone(p)]
+    tester_phones = [clean_phone(settings.master_admin_phone)]
+    if trip.salesperson_phone and clean_phone(trip.salesperson_phone) not in tester_phones:
+        tester_phones.append(clean_phone(trip.salesperson_phone))
+
+    account_phones = tester_phones if is_solo else [clean_phone(p) for p in settings.accounts_phones if clean_phone(p)]
 
     for ap in account_phones:
         await meta_api.send_button_message(
@@ -239,7 +247,19 @@ async def handle_zayn_accounts_interaction(
         # Notify Driver for departure time
         from app.handlers.fleet_approval_handler import get_solo_test_mode
         is_solo = get_solo_test_mode()
-        drv_p = clean_phone(settings.master_admin_phone if is_solo else (trip.driver_phone or settings.master_admin_phone))
+        drv_targets = set()
+        if is_solo:
+            drv_targets.add(clean_phone(settings.master_admin_phone))
+            if trip.salesperson_phone:
+                drv_targets.add(clean_phone(trip.salesperson_phone))
+            if trip.driver_phone:
+                drv_targets.add(clean_phone(trip.driver_phone))
+        else:
+            if trip.driver_phone:
+                drv_targets.add(clean_phone(trip.driver_phone))
+            else:
+                drv_targets.add(clean_phone(settings.master_admin_phone))
+
         tag = "🎭 *[SOLO TEST: SIMULATING DRIVER]*\n" if is_solo else ""
         drv_prompt = (
             f"{tag}💵 *ALLOWANCE TRANSFERRED: {trip.trip_id}*\n"
@@ -250,25 +270,16 @@ async def handle_zayn_accounts_interaction(
             "Please enter your scheduled departure time:\n"
             "_(e.g. 06:30 AM or 07:00 AM)_"
         )
-        # Always set user state for actual driver_phone
-        if trip.driver_phone:
-            await set_user_state(
-                session,
-                clean_phone(trip.driver_phone),
-                current_step="awaiting_departure_time",
-                current_data={"trip_id": trip.trip_id},
-                flow_name="fleet_driver"
-            )
-        # In solo mode, also set user state for master admin phone so single tester can reply directly
-        if is_solo and drv_p != clean_phone(trip.driver_phone):
-            await set_user_state(
-                session,
-                drv_p,
-                current_step="awaiting_departure_time",
-                current_data={"trip_id": trip.trip_id},
-                flow_name="fleet_driver"
-            )
-        await meta_api.send_text_message(drv_p, drv_prompt)
+        for dp in drv_targets:
+            if dp:
+                await set_user_state(
+                    session,
+                    dp,
+                    current_step="awaiting_departure_time",
+                    current_data={"trip_id": trip.trip_id},
+                    flow_name="fleet_driver"
+                )
+                await meta_api.send_text_message(dp, drv_prompt)
         return True
 
     return False

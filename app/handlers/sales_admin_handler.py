@@ -83,9 +83,13 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
         {"id": f"flt_adm_unbal_{trip.trip_id}", "title": "Not Balancing"}
     ]
 
-    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {admin_phone}
+    tester_phones = {clean_phone(settings.master_admin_phone)}
+    if trip.salesperson_phone:
+        tester_phones.add(clean_phone(trip.salesperson_phone))
+
+    recipients = tester_phones if is_solo else {admin_phone}
     if not is_solo and getattr(settings, "test_user_role", "").upper() == "SALES_ADMIN":
-        recipients.add(clean_phone(settings.master_admin_phone))
+        recipients.update(tester_phones)
 
 
     for r in recipients:

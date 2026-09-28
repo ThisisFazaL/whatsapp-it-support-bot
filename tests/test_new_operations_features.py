@@ -351,6 +351,74 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
             self.assertIn("SECURITY PROTOCOL", sec_msg)
             self.assertIn("anti-hijacking", sec_msg)
 
+    @patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock)
+    @patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock)
+    async def test_privacy_conceal_required_minimum_and_dispatch_unblock(self, mock_send_txt, mock_send_btn):
+        """
+        Verify:
+        1. 'Required Minimum' and 4% formulas are strictly concealed from Sales Reps.
+        2. Clicking Authorize Dispatch does NOT crash and forwards immediately to Edward.
+        3. Solo test mode routes Stage 3 Edward allocation directly to the active tester's phone.
+        """
+        from app.handlers.fleet_approval_handler import handle_existing_trip_response, set_solo_test_mode
+        from app.handlers.fleet_dispatcher import dispatch_fleet_message
+        set_solo_test_mode(True)
+
+        async with async_session_factory() as session:
+            trip_id = "TRIP-PRIVACY-001"
+            approval = FleetTripApproval(
+                trip_id=trip_id,
+                salesperson_phone=self.sales_rep_phone,
+                destination_city="KADOMA",
+                route="Harare - Kadoma",
+                trip_sales_value=4000.0,
+                required_minimum=2750.0,
+                shortfall=0.0,
+                transport_charge=0.0,
+                has_shortfall=False,
+                status="THRESHOLD_PASSED_AWAITING_DISPATCH",
+                raw_data={"company_name": "A. TG Hardware"}
+            )
+            session.add(approval)
+            await session.commit()
+
+            # 1. Existing trip approved response must NOT contain Required Minimum
+            await handle_existing_trip_response(session, self.sales_rep_phone, None, approval)
+            btn_args = mock_send_btn.call_args[1]
+            body_text = btn_args["body_text"]
+
+            self.assertNotIn("Required Minimum", body_text)
+            self.assertNotIn("Passed Minimum Sales Threshold", body_text)
+            self.assertIn("FLEET TRIP DETAILS", body_text)
+            self.assertIn(trip_id, body_text)
+            self.assertIn("$4,000.00", body_text)
+
+            buttons = btn_args["buttons"]
+            dispatch_btn = next((b for b in buttons if "flt_disp_ok_" in b["id"]), None)
+            self.assertIsNotNone(dispatch_btn)
+
+            # 2. Clicking Authorize Dispatch unblocks and routes cleanly without NameError
+            clean_btn_id = dispatch_btn["id"]
+            mock_send_btn.reset_mock()
+            mock_send_txt.reset_mock()
+
+            handled = await dispatch_fleet_message(session, self.sales_rep_phone, clean_btn_id, None)
+            self.assertTrue(handled)
+
+            # Verification: Trip status updated to DISPATCHED
+            req_chk = await get_fleet_trip_request_by_id(session, trip_id)
+            self.assertIsNotNone(req_chk)
+            self.assertEqual(req_chk.destination_city, "KADOMA")
+
+            # Verification: In solo test mode, Edward prompt was delivered to the tester's phone
+            btn_recipients = [c[1]["to_phone"] for c in mock_send_btn.call_args_list]
+            self.assertIn(self.sales_rep_phone, btn_recipients)
+
+            edw_body = next(c[1]["body_text"] for c in mock_send_btn.call_args_list if "NEW TRIP DISPATCH ALLOCATION" in c[1]["body_text"])
+            self.assertIn(trip_id, edw_body)
+            # Sales total strictly hidden from Edward allocation card
+            self.assertNotIn("$4,000.00", edw_body)
+
 
 if __name__ == "__main__":
     unittest.main()

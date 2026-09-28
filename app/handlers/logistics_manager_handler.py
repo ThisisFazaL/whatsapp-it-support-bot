@@ -71,9 +71,13 @@ async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: 
             {"id": f"flt_mgr_close_{trip.trip_id}", "title": "Close Trip"}
         ]
 
-    recipients = {clean_phone(settings.master_admin_phone)} if is_solo else {mgr_phone}
+    tester_phones = {clean_phone(settings.master_admin_phone)}
+    if trip.salesperson_phone:
+        tester_phones.add(clean_phone(trip.salesperson_phone))
+
+    recipients = tester_phones if is_solo else {mgr_phone}
     if not is_solo and getattr(settings, "test_user_role", "").upper() == "LOGISTICS_MANAGER":
-        recipients.add(clean_phone(settings.master_admin_phone))
+        recipients.update(tester_phones)
 
 
     for r in recipients:
@@ -157,15 +161,20 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
     is_solo = get_solo_test_mode()
     if is_solo:
         admin_p = clean_phone(settings.master_admin_phone)
-        await meta_api.send_text_message(
-            admin_p,
-            f"🎭 *[SOLO TEST: OPERATIONAL BROADCAST (SALES TOTAL CONCEALED)]*\n{operational_msg}"
-        )
-        await meta_api.send_text_message(
-            admin_p,
-            f"🎭 *[SOLO TEST: EXECUTIVE AUDIT COPY (CONFIDENTIAL SALES INCLUDED)]*\n{exec_msg}"
-        )
-        logger.info(f"Delivered both solo test closure broadcasts for {trip_id} to Master Admin")
+        tester_phones = {admin_p}
+        if trip.salesperson_phone:
+            tester_phones.add(clean_phone(trip.salesperson_phone))
+        for tp in tester_phones:
+            if tp:
+                await meta_api.send_text_message(
+                    tp,
+                    f"🎭 *[SOLO TEST: OPERATIONAL BROADCAST (SALES TOTAL CONCEALED)]*\n{operational_msg}"
+                )
+                await meta_api.send_text_message(
+                    tp,
+                    f"🎭 *[SOLO TEST: EXECUTIVE AUDIT COPY (CONFIDENTIAL SALES INCLUDED)]*\n{exec_msg}"
+                )
+        logger.info(f"Delivered both solo test closure broadcasts for {trip_id} to {tester_phones}")
         return
 
     for rec_phone in operational_recipients:
