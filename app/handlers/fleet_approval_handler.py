@@ -1120,9 +1120,13 @@ async def handle_fleet_approval_flow(
         return True
 
     # 6. Standard Dispatch Button (For trips passing minimum sales threshold)
-    if text_lower.startswith(("flt_disp_ok_", "btn_accept_fleet_", "btn_dispatch_")):
+    if text_lower.startswith(("flt_disp_ok_", "btn_accept_fleet_", "btn_dispatch_")) or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"1", "1️⃣", "authorize dispatch", "dispatch", "authorize"}
+    ):
         trip_id = text_strip.replace("flt_disp_ok_", "").replace("btn_accept_fleet_", "").replace("btn_dispatch_", "").strip()
         data = (state.current_data or {}) if state else {}
+        if not data.get("trip_id") or not trip_id:
+            trip_id = data.get("trip_id", trip_id)
         if not data.get("trip_id"):
             data["trip_id"] = trip_id
         clean_btn_id = data.get("clean_btn_id", trip_id)
@@ -1131,21 +1135,26 @@ async def handle_fleet_approval_flow(
         data["pending_amount"] = 0.0
         data["transport_charge"] = 0.0
 
-        await set_user_state(session, phone, "awaiting_favlogix_charged", data, flow_name="fleet_approval")
-        prompt = (
-            f"✅ *TRIP VERIFICATION PASSED: {trip_id}*\n"
-            "────────────────────\n"
-            "Please charge all customers in Favlogix and select YES when done:"
-        )
-        buttons = [
-            {"id": f"flt_chg_yes_{clean_btn_id}", "title": "YES"},
-            {"id": f"flt_chg_no_{clean_btn_id}", "title": "NO"}
-        ]
-        await meta_api.send_button_message(to_phone=phone, body_text=prompt, buttons=buttons, header_text="FAVLOGIX CHARGES")
-        return True
+        # Update FleetTripApproval record to DISPATCHED
+        rec_chk = (await session.execute(
+            select(FleetTripApproval).where(
+                or_(
+                    FleetTripApproval.trip_id == trip_id,
+                    FleetTripApproval.trip_id.ilike(f"%{clean_btn_id}%")
+                )
+            ).order_by(FleetTripApproval.id.desc())
+        )).scalars().first()
+        if rec_chk:
+            rec_chk.status = "DISPATCHED"
+            rec_chk.dispatch_option = "APPROVED_THRESHOLD"
+            await session.commit()
+
+        # When minimum criteria passed and sales rep hasn't selected add transport ($0 transport charge),
+        # skip Favlogix charging prompt entirely and immediately dispatch to Edward!
+        return await complete_trip_dispatch_and_alert_logistics(session, phone, employee, data)
 
     # 6.5. Add Transport Charge Button (When shortfall is not there, sales can add transport charge to reduce pending balance)
-    if text_lower.startswith("btn_add_trans_") or (
+    if text_lower.startswith(("btn_add_trans_", "flt_add_trans_")) or (
         state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"add transport", "transport charge", "reduce pending", "add charge", "2", "2️⃣"}
     ):
         trip_id = ""
