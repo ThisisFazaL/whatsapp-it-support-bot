@@ -23,7 +23,7 @@ class MetaWhatsAppAPI:
         """Returns reusable persistent httpx client with connection pooling and keep-alive."""
         if self._client is None or self._client.is_closed:
             limits = httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=60.0)
-            self._client = httpx.AsyncClient(timeout=15.0, limits=limits)
+            self._client = httpx.AsyncClient(timeout=15.0, limits=limits, follow_redirects=True)
         return self._client
 
     async def close(self):
@@ -112,7 +112,8 @@ class MetaWhatsAppAPI:
             return None
 
         headers = {
-            "Authorization": f"Bearer {self.access_token}"
+            "Authorization": f"Bearer {self.access_token}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         url = f"https://graph.facebook.com/{self.version}/{media_id}"
         client = self.get_client()
@@ -130,13 +131,13 @@ class MetaWhatsAppAPI:
                 logger.error(f"No download URL in Meta media response: {meta_data}")
                 return None
 
-            # Download the actual image file bytes with Bearer auth
-            dl_res = await client.get(download_url, headers=headers)
+            # Download the actual image file bytes with Bearer auth and follow redirects
+            dl_res = await client.get(download_url, headers=headers, follow_redirects=True)
             if dl_res.status_code == 200:
                 logger.info(f"Successfully downloaded media {media_id} ({len(dl_res.content)} bytes) into memory.")
                 return dl_res.content
             else:
-                logger.error(f"Failed to download media content from {download_url}: {dl_res.status_code}")
+                logger.error(f"Failed to download media content from {download_url}: ({dl_res.status_code}) {dl_res.text[:200]}")
                 return None
         except Exception as e:
             logger.error(f"Exception during Meta media download: {e}", exc_info=True)
