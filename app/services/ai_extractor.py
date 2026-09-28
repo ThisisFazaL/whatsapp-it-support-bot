@@ -273,14 +273,36 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
                     resp_data = res.json()
                     candidates = resp_data.get("candidates", [])
                     if candidates:
-                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        parsed = json.loads(raw_text)
-                        val = parsed.get("odometer")
+                        # Robust JSON and number extraction
+                        parsed = {}
+                        try:
+                            parsed = json.loads(raw_text)
+                        except Exception:
+                            json_match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
+                            if json_match:
+                                try:
+                                    parsed = json.loads(json_match.group(0))
+                                except Exception:
+                                    pass
+
+                        val = parsed.get("odometer") or parsed.get("mileage") or parsed.get("reading") or parsed.get("km")
+                        if val is None and parsed:
+                            for v in parsed.values():
+                                if v is not None:
+                                    val = v
+                                    break
+
                         if val is not None:
-                            val_float = float(val)
-                            if val_float > 0:
-                                logger.info(f"Successfully extracted odometer using {model_name}: {val_float}")
-                                return val_float
+                            clean_str = re.sub(r"[^\d.]", "", str(val))
+                            if clean_str:
+                                try:
+                                    val_float = float(clean_str)
+                                    if val_float > 0:
+                                        logger.info(f"Successfully extracted odometer using {model_name}: {val_float}")
+                                        return val_float
+                                except ValueError:
+                                    pass
+                        logger.info(f"Model {model_name} response could not be parsed as odometer: {raw_text[:200]}")
                 else:
                     logger.warning(f"Model {model_name} returned {res.status_code}: {res.text[:200]}")
     except Exception as e:
