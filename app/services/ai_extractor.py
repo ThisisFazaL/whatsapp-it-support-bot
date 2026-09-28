@@ -246,7 +246,7 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
             "Example: {\"odometer\": 57612}"
         )
 
-        models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-pro"]
+        models_to_try = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro"]
         payload = {
             "contents": [{
                 "parts": [

@@ -1180,7 +1180,7 @@ async def debug_test_odometer_image(request: Request):
     
     results = {}
     async with httpx.AsyncClient(timeout=20.0) as client:
-        for model in ["gemini-2.5-flash", "gemini-flash-latest"]:
+        for model in ["gemini-3.8-flash", "gemini-flash-latest"]:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             payload = {
                 "contents": [{
