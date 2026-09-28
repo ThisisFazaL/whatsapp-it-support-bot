@@ -174,7 +174,7 @@ async def extract_requirement_entities(text: str) -> Dict[str, Any]:
                 f"- competitor_supplier: string or null\n"
                 f"- current_market_price: float or null\n"
             )
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"response_mime_type": "application/json"}
@@ -236,17 +236,17 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
 
         prompt = (
             "You are an expert vehicle fleet inspection AI. "
-            "Analyze this photo of a vehicle's dashboard / instrument cluster and extract the total odometer mileage reading. "
+            "Analyze this photo of a vehicle's dashboard / instrument cluster and extract the vehicle mileage odometer reading. "
             "Instructions:\n"
-            "1. Locate the digital or mechanical odometer display (typically 5 to 7 digits, e.g. 145280 km or 89312).\n"
-            "2. DO NOT confuse the odometer with Trip A / Trip B meters (which have decimals like 14.5 or small numbers), "
-            "speedometer (0-200 km/h), tachometer (RPM x 1000), clock time (e.g. 14:30), temperature (e.g. 24°C), or fuel range.\n"
-            "3. Return valid JSON ONLY with the exact key 'odometer' containing the numeric value (integer or float), "
+            "1. Locate the digital LCD screen or mechanical odometer display showing the mileage digits (e.g. 057612, 145280, 89312).\n"
+            "2. If a digital display shows a 5 to 7 digit mileage counter (e.g. 057612), extract it as the odometer even if 'HOLD TO RESET' or similar text is printed next to or on the screen.\n"
+            "3. DO NOT confuse the odometer with small decimal numbers (e.g. 14.5), speedometer dial numbers (0 to 160), tachometer/RPM, clock (e.g. 14:30), temperature, or battery voltage.\n"
+            "4. Return valid JSON ONLY with the exact key 'odometer' containing the numeric value (integer or float), "
             "or null if no odometer is visible or readable.\n"
-            "Example: {\"odometer\": 145280.0}"
+            "Example: {\"odometer\": 57612}"
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-pro"]
         payload = {
             "contents": [{
                 "parts": [
@@ -266,21 +266,23 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
         }
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post(url, json=payload)
-            if res.status_code == 200:
-                resp_data = res.json()
-                candidates = resp_data.get("candidates", [])
-                if candidates:
-                    raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                    parsed = json.loads(raw_text)
-                    val = parsed.get("odometer")
-                    if val is not None:
-                        val_float = float(val)
-                        if val_float > 0:
-                            logger.info(f"Successfully extracted odometer from image: {val_float}")
-                            return val_float
-            else:
-                logger.warning(f"Gemini Vision API error ({res.status_code}): {res.text}")
+            for model_name in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                res = await client.post(url, json=payload)
+                if res.status_code == 200:
+                    resp_data = res.json()
+                    candidates = resp_data.get("candidates", [])
+                    if candidates:
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        parsed = json.loads(raw_text)
+                        val = parsed.get("odometer")
+                        if val is not None:
+                            val_float = float(val)
+                            if val_float > 0:
+                                logger.info(f"Successfully extracted odometer using {model_name}: {val_float}")
+                                return val_float
+                else:
+                    logger.warning(f"Model {model_name} returned {res.status_code}: {res.text[:200]}")
     except Exception as e:
         logger.error(f"Error during odometer extraction from image: {e}", exc_info=True)
 
