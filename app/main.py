@@ -1142,20 +1142,24 @@ async def test_ai_key():
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return {"error": "No API key configured"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": "Reply in JSON with exact format: {\"test\": \"ok\"}"}]}],
-        "generationConfig": {"response_mime_type": "application/json"}
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.post(url, json=payload)
+            res = await client.get(url)
+            if res.status_code == 200:
+                data = res.json()
+                model_names = [m.get("name") for m in data.get("models", [])]
+                return {
+                    "status_code": 200,
+                    "available_models": model_names
+                }
             return {
                 "status_code": res.status_code,
-                "response_body": res.json() if res.status_code == 200 else res.text
+                "error": res.text
             }
     except Exception as e:
         return {"error": str(e)}
+
 
 
 @app.get("/tickets")
