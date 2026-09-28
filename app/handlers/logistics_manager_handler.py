@@ -116,7 +116,7 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
     total_emergencies = summary.get("total_emergencies", 0.0)
     total_allowance = summary.get("total_allowance", 0.0)
 
-    # Confidential broadcast notice (No Sales Total!)
+    # Confidential broadcast notice for operational staff (no financial figures: no transport collected, no emergencies, no allowances!)
     operational_msg = (
         "🏁 *TRIP CLOSED*\n"
         "────────────────────\n"
@@ -124,11 +124,7 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
         f"🚛 *Trip:* `{trip.trip_id}` | *Route:* {trip.route or trip.destination_city}\n"
         f"👤 *Driver:* {trip.driver_name} | *Truck:* {trip.truck_plate}\n"
         "────────────────────\n"
-        f"💰 *Transport Collected:* ${total_collected:,.2f}\n"
-        f"💵 *Cash:* ${cash_collected:,.2f} | 💳 *Bank:* ${bank_collected:,.2f}\n"
-        f"⚠️ *Emergency Expenses:* ${total_emergencies:,.2f}\n"
-        f"🍱 *Allowance Reconciled:* ${total_allowance:,.2f}\n"
-        f"⚖️ *Balancing Status:* Settled ({trip.reimbursement_status})\n"
+        "⚖️ *Balancing Status:* Completed & Settled\n"
         "────────────────────\n"
         "✅ Trip operations successfully closed."
     )
@@ -184,7 +180,12 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
             except Exception as e:
                 logger.warning(f"Could not deliver closed broadcast to {rec_phone}: {e}")
 
-    admin_phones = {clean_phone(settings.fleet_admin_phone), clean_phone(settings.master_admin_phone)}
+    admin_phones = {
+        clean_phone(settings.fleet_admin_phone),
+        clean_phone(settings.master_admin_phone),
+        clean_phone(settings.zayn_phone),
+        clean_phone(settings.logistics_manager_phone)
+    }
     for ap in admin_phones:
         if ap:
             try:

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     sales_admin_lg_phone: str = "263718352518"  # LG Plast Sales Admin
     sales_admin_kreckle_phone: str = "263718352518"  # Kreckle Sales Admin
     accounts_phones: list = ["263718352518", "919265368695"]
-    logistics_manager_phone: str = "263718352518"
+    logistics_manager_phone: str = "263713866223"  # Zayn (+263 71 386 6223) Logistics Manager
 
     # Favlogix Direct Background API Configuration (Option 1 - Headless)
     favlogix_api_enabled: bool = True

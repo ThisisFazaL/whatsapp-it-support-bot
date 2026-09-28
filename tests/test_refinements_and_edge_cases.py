@@ -338,6 +338,63 @@ class TestRefinementsAndEdgeCases(unittest.IsolatedAsyncioTestCase):
                 # Verify video note
                 self.assertIn("Driver to present recorded video of fuel pump & fuel gauge on phone", card_body)
 
+    async def test_operational_closing_broadcast_excludes_financials(self):
+        """Test that operational closing message for all excludes transport, emergencies, and allowances."""
+        from app.handlers.logistics_manager_handler import broadcast_confidential_trip_closed
+        async with async_session_factory() as session:
+            trip = await create_or_update_fleet_trip_request(
+                session=session,
+                trip_id=self.trip_id,
+                company_name="A. TG Hardware",
+                salesperson_phone=self.sales_rep_phone,
+                destination_city="Norton",
+                transport_charge=80.0
+            )
+            trip.driver_phone = self.driver_phone
+            trip.driver_name = "Terrence Mupfumi"
+            trip.truck_plate = "AGY-101"
+            trip.status = "BALANCED"
+            trip.reimbursement_status = "NONE"
+            await session.commit()
+
+            # Add emergency expense and schedule
+            exp = FleetEmergencyExpense(
+                trip_id=self.trip_id,
+                driver_phone=self.driver_phone,
+                charge_type="EMERGENCY_FUEL",
+                amount=45.0,
+                description="Diesel",
+                has_video_evidence=True,
+                status="APPROVED"
+            )
+            session.add(exp)
+            await session.commit()
+
+            with patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock) as mock_txt:
+                await broadcast_confidential_trip_closed(session, self.trip_id)
+                self.assertTrue(mock_txt.called)
+
+                # Find the operational message sent to operational staff / tester
+                operational_msgs = [
+                    call[0][1] for call in mock_txt.call_args_list
+                    if "TRIP CLOSED" in call[0][1] and "EXECUTIVE AUDIT" not in call[0][1]
+                ]
+                self.assertTrue(len(operational_msgs) > 0)
+                for op_msg in operational_msgs:
+                    # Must contain basic identifiers
+                    self.assertIn("TRIP CLOSED", op_msg)
+                    self.assertIn(self.trip_id, op_msg)
+                    self.assertIn("Terrence Mupfumi", op_msg)
+                    self.assertIn("AGY-101", op_msg)
+                    self.assertIn("Balancing Status", op_msg)
+
+                    # MUST NOT contain financial figures
+                    self.assertNotIn("Transport Collected", op_msg)
+                    self.assertNotIn("Emergency Expenses", op_msg)
+                    self.assertNotIn("Allowance Reconciled", op_msg)
+                    self.assertNotIn("Cash:", op_msg)
+                    self.assertNotIn("Bank:", op_msg)
+
 
 if __name__ == "__main__":
     unittest.main()
