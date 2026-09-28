@@ -1127,6 +1127,15 @@ async def get_recent_webhooks(limit: int = 20, db: AsyncSession = Depends(get_db
         for l in logs
     ]
 
+@app.get("/api/debug/ai-status")
+async def debug_ai_status():
+    """Checks whether Gemini AI Vision key is configured on this instance."""
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    return {
+        "gemini_api_key_configured": bool(api_key),
+        "key_prefix": (api_key[:6] + "...") if api_key else None
+    }
+
 @app.get("/tickets")
 async def list_recent_tickets(db: AsyncSession = Depends(get_db)):
     """API Endpoint to list recent tickets for monitoring."""
