@@ -1157,6 +1157,9 @@ async def test_ai_key():
                 "status_code": res.status_code,
                 "error": res.text
             }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.post("/api/debug/test-odometer-image")
 async def debug_test_odometer_image(request: Request):
     """Debug endpoint to test odometer extraction directly on an uploaded image."""
