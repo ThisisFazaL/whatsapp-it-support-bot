@@ -1169,6 +1169,53 @@ async def debug_test_odometer_image(request: Request):
     return {"extracted_odometer": res}
 
 
+@app.post("/api/debug/test-vision-raw")
+async def debug_test_vision_raw(request: Request):
+    """Tests an uploaded image against various Gemini models and returns raw API responses."""
+    import base64
+    import httpx
+    body = await request.body()
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return {"error": "No API key"}
+
+    b64_img = base64.b64encode(body).decode("utf-8")
+    prompt = "Extract the vehicle odometer reading from this dashboard cluster photo. Return JSON: {\"odometer\": 58000}"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": b64_img
+                    }
+                }
+            ]
+        }]
+    }
+
+    test_models = [
+        "gemini-2.5-flash",
+        "gemini-flash-latest",
+        "gemini-2.5-pro",
+        "gemini-pro-latest",
+        "gemini-2.5-flash-image",
+        "gemini-3.5-flash"
+    ]
+    results = {}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for m in test_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key.strip()}"
+            try:
+                res = await client.post(url, json=payload)
+                results[m] = {"status": res.status_code, "response": res.json() if res.status_code == 200 else res.text[:300]}
+            except Exception as e:
+                results[m] = {"error": str(e)}
+
+    return results
+
+
 @app.get("/tickets")
 async def list_recent_tickets(db: AsyncSession = Depends(get_db)):
     """API Endpoint to list recent tickets for monitoring."""
