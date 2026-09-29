@@ -210,6 +210,32 @@ class MetaWhatsAppAPI:
             }
         }
 
+        # Deduplicate header_text if body_text already contains the title / heading at the top
+        # This prevents WhatsApp from rendering the title twice line-by-line.
+        effective_header = header_text
+        if effective_header and body_text:
+            first_body_line = ""
+            for line in body_text.strip().split("\n"):
+                s = line.strip()
+                if s and not s.startswith("🎭"):
+                    first_body_line = s
+                    break
+
+            if first_body_line:
+                norm_h = re.sub(r"[^\w\s]", "", effective_header).strip().lower()
+                norm_b = re.sub(r"[^\w\s]", "", first_body_line).strip().lower()
+                if norm_h and norm_b:
+                    if norm_h in norm_b or norm_b in norm_h:
+                        effective_header = None
+                    else:
+                        words_h = [w for w in norm_h.split() if len(w) >= 4]
+                        words_b = [w for w in norm_b.split() if len(w) >= 4]
+                        generic = {"with", "this", "that", "from", "your", "please", "select", "enter", "report"}
+                        words_h = [w for w in words_h if w not in generic]
+                        words_b = [w for w in words_b if w not in generic]
+                        if words_h and set(words_h) & set(words_b):
+                            effective_header = None
+
         if image_id:
             interactive_dict["header"] = {
                 "type": "image",
@@ -217,8 +243,8 @@ class MetaWhatsAppAPI:
                     "id": image_id
                 }
             }
-        elif header_text:
-            interactive_dict["header"] = {"type": "text", "text": header_text[:60]}
+        elif effective_header:
+            interactive_dict["header"] = {"type": "text", "text": effective_header[:60]}
 
         if footer_text:
             interactive_dict["footer"] = {"text": footer_text[:60]}
@@ -231,7 +257,7 @@ class MetaWhatsAppAPI:
             "interactive": interactive_dict
         }
 
-        logger.info(f"[OUTGOING INTERACTIVE BUTTONS -> {clean_phone}]\n{header_text or ''}\n{body_text}")
+        logger.info(f"[OUTGOING INTERACTIVE BUTTONS -> {clean_phone}]\n{effective_header or ''}\n{body_text}".strip())
         res = await self._post_with_retry(payload)
 
         # Check for 24-hour window restriction and fallback to Template Message if available
@@ -249,7 +275,7 @@ class MetaWhatsAppAPI:
         if "error" in res or res.get("error"):
             if image_id:
                 await self.send_image_message(clean_phone, image_id, caption=body_text)
-            fallback_msg = f"{header_text or ''}\n\n{body_text}\n\n{footer_text or ''}".strip()
+            fallback_msg = f"{effective_header or ''}\n\n{body_text}\n\n{footer_text or ''}".strip()
             return await self.send_text_message(clean_phone, fallback_msg, fallback_template=fallback_template, template_params=template_params)
             
         return res

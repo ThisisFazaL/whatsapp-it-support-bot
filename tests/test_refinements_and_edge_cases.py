@@ -270,7 +270,7 @@ class TestRefinementsAndEdgeCases(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(mock_btn.called)
                 driver_menu_buttons = None
                 for call in mock_btn.call_args_list:
-                    if call[1].get("header_text") == "RETURNING TO BASE":
+                    if call[1].get("header_text") == "RETURNING TO BASE" or "RETURNING TO BASE" in call[1].get("body_text", ""):
                         driver_menu_buttons = call[1].get("buttons")
 
                 self.assertIsNotNone(driver_menu_buttons, "Expected 'RETURNING TO BASE' menu to be sent to driver!")
