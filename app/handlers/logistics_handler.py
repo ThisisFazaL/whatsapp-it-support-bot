@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,53 +32,118 @@ def is_edward(phone: str) -> bool:
     return cp in {edw, master, fleet_admin}
 
 
-async def resolve_driver_phone(session: AsyncSession, driver_name: str) -> Optional[str]:
-    """Auto-resolves a driver's WhatsApp phone number from WorkshopStaff or Employee registry."""
-    clean_name = (driver_name or "").strip()
-    if not clean_name:
+async def resolve_truck_from_db(session: AsyncSession, query: str):
+    """
+    Resolves and verifies a truck from the workshop_trucks database table.
+    Supports plate number (e.g. 'AGZ 7331', 'agz7331'), truck fleet number ('7331'), or model.
+    """
+    search_query = (query or "").strip()
+    if not search_query:
         return None
 
-    # 1. Match WorkshopStaff
     try:
-        from app.workshop.models import WorkshopStaff
-        stmt = select(WorkshopStaff).where(
-            WorkshopStaff.active == True,
-            WorkshopStaff.full_name.ilike(f"%{clean_name}%")
-        )
+        from app.workshop.models import WorkshopTruck
+        clean_query = re.sub(r"[\s#-]", "", search_query).upper()
+        digits = re.findall(r"\d+", search_query)
+        digit_str = digits[0] if digits else clean_query
+
+        stmt = select(WorkshopTruck).where(WorkshopTruck.active == True)
         res = await session.execute(stmt)
-        staff = res.scalars().first()
-        if staff and staff.phone:
-            return clean_phone(staff.phone)
+        trucks = res.scalars().all()
 
-        # Match tokens (e.g. first name or surname)
-        tokens = [t for t in clean_name.split() if len(t) >= 3]
-        for tok in tokens:
-            stmt_tok = select(WorkshopStaff).where(
-                WorkshopStaff.active == True,
-                WorkshopStaff.full_name.ilike(f"%{tok}%")
-            )
-            res_tok = await session.execute(stmt_tok)
-            staff_tok = res_tok.scalars().first()
-            if staff_tok and staff_tok.phone:
-                return clean_phone(staff_tok.phone)
-    except Exception as e:
-        logger.warning(f"Error resolving driver phone from WorkshopStaff: {e}")
+        # 1. Exact normalized plate match (e.g. 'AGZ7331' == 'AGZ7331')
+        for t in trucks:
+            t_clean = re.sub(r"[\s#-]", "", t.plate_number).upper()
+            if t_clean == clean_query or search_query.upper() == t.plate_number.upper():
+                return t
 
-    # 2. Match Employee
-    try:
-        from app.database import Employee
-        stmt_emp = select(Employee).where(
-            Employee.active == True,
-            Employee.full_name.ilike(f"%{clean_name}%")
-        )
-        res_emp = await session.execute(stmt_emp)
-        emp = res_emp.scalars().first()
-        if emp and emp.phone:
-            return clean_phone(emp.phone)
+        # 2. Exact or substring truck_number match (e.g. '7331' matches '7331')
+        for t in trucks:
+            t_num = str(t.truck_number or "").strip()
+            if t_num and (t_num == digit_str or digit_str == t_num or digit_str in t_num):
+                return t
+
+        # 3. Substring in plate
+        for t in trucks:
+            t_clean = re.sub(r"[\s#-]", "", t.plate_number).upper()
+            if clean_query in t_clean or t_clean in clean_query:
+                return t
+
+        # 4. Model make match
+        for t in trucks:
+            if clean_query.lower() in (t.model_make or "").lower():
+                return t
     except Exception as e:
-        logger.warning(f"Error resolving driver phone from Employee: {e}")
+        logger.warning(f"Error resolving truck from WorkshopTruck: {e}")
 
     return None
+
+
+async def resolve_driver_from_db(session: AsyncSession, query: str) -> Optional[Tuple[str, str]]:
+    """
+    Resolves and verifies a commercial driver from WorkshopStaff or Employee registry.
+    Returns (official_full_name, clean_phone) if verified, else None.
+    """
+    clean_query = (query or "").strip()
+    if not clean_query:
+        return None
+
+    # 1. Match WorkshopStaff (drivers)
+    try:
+        from app.workshop.models import WorkshopStaff
+        stmt = select(WorkshopStaff).where(WorkshopStaff.active == True)
+        res = await session.execute(stmt)
+        all_staff = res.scalars().all()
+
+        # Exact match
+        for s in all_staff:
+            if s.full_name.lower() == clean_query.lower():
+                return s.full_name, clean_phone(s.phone)
+
+        # Substring match
+        for s in all_staff:
+            if clean_query.lower() in s.full_name.lower():
+                return s.full_name, clean_phone(s.phone)
+
+        # Token match (e.g. "Terrence" matches "Terrence Mupfumi" or "Kadungure" matches "Godknows Kadungure")
+        tokens = [tok.lower() for tok in clean_query.split() if len(tok) >= 3]
+        for s in all_staff:
+            s_tokens = s.full_name.lower().split()
+            if any(tok in s_tokens or any(tok in st for st in s_tokens) for tok in tokens):
+                return s.full_name, clean_phone(s.phone)
+    except Exception as e:
+        logger.warning(f"Error resolving driver from WorkshopStaff: {e}")
+
+    # 2. Match Employee table
+    try:
+        from app.database import Employee
+        stmt_emp = select(Employee).where(Employee.active == True)
+        res_emp = await session.execute(stmt_emp)
+        all_emps = res_emp.scalars().all()
+
+        for emp in all_emps:
+            if emp.full_name.lower() == clean_query.lower():
+                return emp.full_name, clean_phone(emp.phone)
+
+        for emp in all_emps:
+            if clean_query.lower() in emp.full_name.lower():
+                return emp.full_name, clean_phone(emp.phone)
+
+        tokens = [tok.lower() for tok in clean_query.split() if len(tok) >= 3]
+        for emp in all_emps:
+            emp_tokens = emp.full_name.lower().split()
+            if any(tok in emp_tokens or any(tok in et for et in emp_tokens) for tok in tokens):
+                return emp.full_name, clean_phone(emp.phone)
+    except Exception as e:
+        logger.warning(f"Error resolving driver from Employee: {e}")
+
+    return None
+
+
+async def resolve_driver_phone(session: AsyncSession, driver_name: str) -> Optional[str]:
+    """Auto-resolves a driver's WhatsApp phone number from WorkshopStaff or Employee registry."""
+    res = await resolve_driver_from_db(session, driver_name)
+    return res[1] if res else None
 
 
 async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
@@ -195,15 +260,14 @@ async def prompt_truck_plate(session: AsyncSession, phone: str, trip_id: str):
         current_data={"trip_id": trip_id},
         flow_name="fleet_edward"
     )
-    # Confidentiality: Sales total is hidden!
     prompt = (
         f"🚛 *ALLOCATE VEHICLE: {trip_id}*\n"
         "────────────────────\n"
         f"Company: {trip.company_name}\n"
         f"Route: {trip.route or trip.destination_city}\n"
         "────────────────────\n"
-        "Please type the truck registration number:\n"
-        "_(e.g. ZW 123 ABC or ABL 4589)_"
+        "Please enter the truck plate number or fleet number:\n"
+        "_(e.g. 7331 or AGZ 7331)_"
     )
     await meta_api.send_text_message(phone, prompt)
 
@@ -303,27 +367,72 @@ async def handle_edward_interaction(
                 )
                 return True
 
-        # Step 1: Truck Plate entered
+        # Step 1: Truck Plate entered & verified against database
         if state.current_step == "awaiting_truck_plate":
-            truck_plate = text_strip.upper()
-            data["truck_plate"] = truck_plate
-            await set_user_state(session, clean_p, "awaiting_driver_name", data, flow_name="fleet_edward")
-            prompt = (
-                f"👤 *DRIVER ALLOCATION: {trip_id}*\n"
-                f"Truck: {truck_plate}\n"
-                "────────────────────\n"
-                "Please type the driver's full name:\n"
-                "_(e.g. John Banda)_"
-            )
-            await meta_api.send_text_message(clean_p, prompt)
-            return True
+            from app.workshop.models import WorkshopTruck
+            truck_check = await session.execute(select(WorkshopTruck.truck_id).where(WorkshopTruck.active == True).limit(1))
+            has_trucks_in_db = bool(truck_check.scalars().first())
 
-        # Step 2: Driver Name entered -> Auto-resolve phone & hand off to Sales Rep
+            verified_truck = await resolve_truck_from_db(session, text_strip)
+            if verified_truck:
+                truck_plate = verified_truck.plate_number
+                data["truck_plate"] = truck_plate
+                data["truck_model"] = verified_truck.model_make
+                await set_user_state(session, clean_p, "awaiting_driver_name", data, flow_name="fleet_edward")
+                prompt = (
+                    f"👤 *DRIVER ALLOCATION: {trip_id}*\n"
+                    f"Truck: *{truck_plate}* ({verified_truck.model_make})\n"
+                    "────────────────────\n"
+                    "Please enter the commercial driver's name:\n"
+                    "_(e.g. Terrence Mupfumi or Godknows)_"
+                )
+                await meta_api.send_text_message(clean_p, prompt)
+                return True
+            elif has_trucks_in_db:
+                # Truck plate not found in database!
+                await meta_api.send_text_message(
+                    clean_p,
+                    f"⚠️ *Vehicle '{text_strip}' not found in fleet database.*\n\n"
+                    "Please enter a valid fleet truck number or plate (e.g. *7331* or *AGZ 7331*):"
+                )
+                return True
+            else:
+                # Fallback in mock unit test environments without seeded WorkshopTruck
+                truck_plate = text_strip.upper()
+                data["truck_plate"] = truck_plate
+                await set_user_state(session, clean_p, "awaiting_driver_name", data, flow_name="fleet_edward")
+                prompt = (
+                    f"👤 *DRIVER ALLOCATION: {trip_id}*\n"
+                    f"Truck: *{truck_plate}*\n"
+                    "────────────────────\n"
+                    "Please type the driver's full name:\n"
+                    "_(e.g. Terrence Mupfumi)_"
+                )
+                await meta_api.send_text_message(clean_p, prompt)
+                return True
+
+        # Step 2: Driver Name entered & verified against database -> Auto-resolve phone & hand off to Sales Rep
         if state.current_step == "awaiting_driver_name":
-            driver_name = text_strip.title()
-            truck_plate = data.get("truck_plate", "")
-            driver_phone = await resolve_driver_phone(session, driver_name)
+            from app.workshop.models import WorkshopStaff
+            staff_check = await session.execute(select(WorkshopStaff.staff_id).where(WorkshopStaff.active == True).limit(1))
+            has_staff_in_db = bool(staff_check.scalars().first())
 
+            driver_info = await resolve_driver_from_db(session, text_strip)
+            if driver_info:
+                driver_name, driver_phone = driver_info
+            elif has_staff_in_db:
+                # Driver not found in database!
+                await meta_api.send_text_message(
+                    clean_p,
+                    f"⚠️ *Driver '{text_strip}' not found in database.*\n\n"
+                    "Please enter the name of a registered commercial driver (e.g. *Terrence Mupfumi*, *Godknows Kadungure*, *Wilbert Makoma*):"
+                )
+                return True
+            else:
+                driver_name = text_strip.title()
+                driver_phone = await resolve_driver_phone(session, driver_name)
+
+            truck_plate = data.get("truck_plate", "")
             if trip:
                 trip.truck_plate = truck_plate
                 trip.driver_name = driver_name

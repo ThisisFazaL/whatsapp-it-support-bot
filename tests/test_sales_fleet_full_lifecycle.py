@@ -168,7 +168,7 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             # STAGE 3: Edward receives trip & allocates Vehicle + Driver Only
             # ----------------------------------------------------
             # Ensure driver Terrence Mupfumi exists in WorkshopStaff for auto-phone resolution
-            from app.workshop.models import WorkshopStaff
+            from app.workshop.models import WorkshopStaff, WorkshopTruck
             from sqlalchemy import select
             st_chk = await session.execute(select(WorkshopStaff).where(WorkshopStaff.phone == self.driver_phone))
             if not st_chk.scalars().first():
@@ -179,6 +179,18 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
                     active=True
                 )
                 session.add(ws_driver)
+                await session.commit()
+
+            # Ensure truck exists in WorkshopTruck for database validation
+            tr_chk = await session.execute(select(WorkshopTruck).where(WorkshopTruck.plate_number == "ZW 123 ABC"))
+            if not tr_chk.scalars().first():
+                ws_truck = WorkshopTruck(
+                    truck_number="123",
+                    plate_number="ZW 123 ABC",
+                    model_make="UD Quester 40T",
+                    active=True
+                )
+                session.add(ws_truck)
                 await session.commit()
 
             # Edward checks [Trip Queue]
@@ -198,12 +210,31 @@ class TestSalesFleetFullLifecycle(unittest.IsolatedAsyncioTestCase):
             last_prompt = mock_send_txt.call_args[0][1]
             self.assertNotIn("14,200", last_prompt)
 
+            # Test invalid truck rejection against database
+            handled = await handle_edward_interaction(session, self.edward_phone, "INVALID_TRUCK_999", state)
+            self.assertTrue(handled)
+            warn_msg = mock_send_txt.call_args[0][1]
+            self.assertIn("not found in fleet database", warn_msg)
+            state = await get_user_state(session, self.edward_phone)
+            self.assertEqual(state.current_step, "awaiting_truck_plate")
+
+            # Valid truck entered
             handled = await handle_edward_interaction(session, self.edward_phone, "ZW 123 ABC", state)
             self.assertTrue(handled)
 
             # 2. Driver name (typed, NO buttons) -> Auto-resolves phone and hands off to Sales Rep
             state = await get_user_state(session, self.edward_phone)
             self.assertEqual(state.current_step, "awaiting_driver_name")
+
+            # Test invalid driver rejection against database
+            handled = await handle_edward_interaction(session, self.edward_phone, "Unknown Driver 999", state)
+            self.assertTrue(handled)
+            warn_msg = mock_send_txt.call_args[0][1]
+            self.assertIn("not found in database", warn_msg)
+            state = await get_user_state(session, self.edward_phone)
+            self.assertEqual(state.current_step, "awaiting_driver_name")
+
+            # Valid driver entered
             handled = await handle_edward_interaction(session, self.edward_phone, "Terrence Mupfumi", state)
             self.assertTrue(handled)
 
