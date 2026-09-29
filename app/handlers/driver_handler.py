@@ -220,8 +220,8 @@ async def handle_driver_interaction(
         prompt = (
             f"🚚 *TRIP DEPARTURE: {trip_id}*\n"
             "────────────────────\n"
-            "Please enter the vehicle's *Starting Odometer* reading (in KM), or send a 📸 *photo* of the dashboard cluster:\n"
-            "_(e.g. 145200 or take a photo)_"
+            "📸 *Please take and send a photo of the vehicle's dashboard / Starting Odometer:*\n\n"
+            "_(Our AI will automatically verify your starting mileage from the photo.)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
@@ -390,8 +390,8 @@ async def handle_driver_interaction(
         prompt = (
             f"🏁 *DEPOT ARRIVAL: {trip_id}*\n"
             "────────────────────\n"
-            "Please enter the vehicle's final *Return Odometer* reading (in KM), or send a 📸 *photo* of the dashboard cluster:\n"
-            "_(e.g. 145580 or take a photo)_"
+            "📸 *Please take and send a photo of the vehicle's dashboard / Return Odometer:*\n\n"
+            "_(Our AI will automatically verify your final return mileage from the photo.)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
@@ -550,7 +550,10 @@ async def handle_driver_interaction(
                 if odo_val <= 0:
                     raise ValueError()
             except ValueError:
-                await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid starting odometer reading in KM (e.g. 145200):")
+                await meta_api.send_text_message(
+                    clean_p,
+                    "📸 Please send a photo of the vehicle's dashboard cluster, or reply with the odometer numbers manually (e.g. *145200*):"
+                )
                 return True
 
             trip = await get_fleet_trip_request_by_id(session, trip_id)
@@ -624,7 +627,10 @@ async def handle_driver_interaction(
                 if end_odo <= 0:
                     raise ValueError()
             except ValueError:
-                await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid return odometer reading in KM (e.g. 145580):")
+                await meta_api.send_text_message(
+                    clean_p,
+                    "📸 Please send a photo of the vehicle's dashboard cluster, or reply with the odometer numbers manually (e.g. *145580*):"
+                )
                 return True
 
             trip = await get_fleet_trip_request_by_id(session, trip_id)
