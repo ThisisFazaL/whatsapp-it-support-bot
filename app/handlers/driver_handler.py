@@ -96,6 +96,23 @@ async def return_to_appropriate_driver_menu(session: AsyncSession, phone: str, t
         await send_driver_transit_menu(session, phone, trip_id)
 
 
+async def notify_panashe_return_logged(trip_id: str, message_text: str):
+    """
+    Sends the RETURN LOGGED notification card to Logistics Assistant Panashe.
+    """
+    from app.handlers.fleet_approval_handler import get_solo_test_mode
+    is_solo = get_solo_test_mode()
+    recipients = [clean_phone(settings.master_admin_phone)] if is_solo else [
+        clean_phone(p) for p in getattr(settings, "panashe_phones", ["263777261203", "263785322640"]) if p
+    ]
+    for p in set(recipients):
+        try:
+            await meta_api.send_text_message(p, message_text)
+            logger.info(f"Delivered RETURN LOGGED notification for {trip_id} to Panashe ({p})")
+        except Exception as e:
+            logger.warning(f"Could not deliver RETURN LOGGED to Panashe ({p}): {e}")
+
+
 async def handle_driver_interaction(
     session: AsyncSession,
     phone: str,
@@ -454,6 +471,7 @@ async def handle_driver_interaction(
             "Welcome back! Please proceed to the Sales Admin for physical balancing session."
         )
         await meta_api.send_text_message(clean_p, ack)
+        await notify_panashe_return_logged(trip_id, ack)
 
         from app.handlers.sales_admin_handler import notify_sales_admin_balancing_session
         await notify_sales_admin_balancing_session(session, trip_id)
@@ -631,6 +649,7 @@ async def handle_driver_interaction(
                 "Welcome back! Please proceed to the Sales Admin for physical balancing session."
             )
             await meta_api.send_text_message(clean_p, ack)
+            await notify_panashe_return_logged(trip_id, ack)
 
             # Summon the Company's assigned Sales Admin for Stage 6
             from app.handlers.sales_admin_handler import notify_sales_admin_balancing_session

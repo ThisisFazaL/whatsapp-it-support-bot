@@ -940,6 +940,7 @@ KRECKLE_SALES_REPS = {
     "263780806954",  # Patience Ndlovu
     "263783103611",  # Mufaro Gambiza
     "263780573092",  # Ndiwande Samihembo Rosa
+    "263784566997",  # Kudzai Marevesa
 }
 
 
