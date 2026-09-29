@@ -280,6 +280,7 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
                     resp_data = res.json()
                     candidates = resp_data.get("candidates", [])
                     if candidates:
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                         # Robust JSON and number extraction
                         parsed = {}
                         try:
