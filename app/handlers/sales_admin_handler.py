@@ -20,14 +20,22 @@ def clean_phone(phone: Optional[str]) -> str:
 
 
 
-def get_sales_admin_phone_for_company(company_name: str) -> str:
+def get_sales_admin_phones_for_company(company_name: str) -> List[str]:
     c_lower = (company_name or "").lower()
     if "lg" in c_lower:
-        return clean_phone(settings.sales_admin_lg_phone)
+        phones = [clean_phone(settings.sales_admin_lg_phone)]
+        if getattr(settings, "sales_admin_lg_backup_phone", None):
+            phones.append(clean_phone(settings.sales_admin_lg_backup_phone))
+        return [p for p in phones if p]
     elif "kreckle" in c_lower:
-        return clean_phone(settings.sales_admin_kreckle_phone)
+        return [clean_phone(settings.sales_admin_kreckle_phone)]
     else:
-        return clean_phone(settings.sales_admin_tg_phone)
+        return [clean_phone(settings.sales_admin_tg_phone)]
+
+
+def get_sales_admin_phone_for_company(company_name: str) -> str:
+    phones = get_sales_admin_phones_for_company(company_name)
+    return phones[0] if phones else clean_phone(settings.sales_admin_tg_phone)
 
 
 async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: str):
@@ -40,7 +48,8 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
     if not trip:
         return
 
-    admin_phone = get_sales_admin_phone_for_company(trip.company_name)
+    admin_phones = get_sales_admin_phones_for_company(trip.company_name)
+    admin_phone = admin_phones[0] if admin_phones else clean_phone(settings.sales_admin_tg_phone)
     schedules = summary.get("schedules", [])
     emergencies = summary.get("emergencies", [])
 
@@ -95,7 +104,7 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
     if trip.salesperson_phone:
         tester_phones.add(clean_phone(trip.salesperson_phone))
 
-    recipients = tester_phones if is_solo else {admin_phone}
+    recipients = tester_phones if is_solo else set(admin_phones)
     if not is_solo and getattr(settings, "test_user_role", "").upper() == "SALES_ADMIN":
         recipients.update(tester_phones)
 
@@ -108,7 +117,7 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
                 buttons=buttons,
                 header_text=header
             )
-    logger.info(f"Delivered Stage 6 balancing card for {trip_id} to Sales Admin ({admin_phone})")
+    logger.info(f"Delivered Stage 6 balancing card for {trip_id} to Sales Admin ({admin_phones})")
 
 
 async def handle_sales_admin_interaction(
