@@ -1,4 +1,5 @@
 import os
+from typing import Optional, List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
@@ -52,6 +53,10 @@ class Settings(BaseSettings):
         "263718352518",  # Sujit
     ]
     
+    # Multimodal Vision Odometer Extraction (Anthropic Claude 3.5 Sonnet / Google Gemini)
+    anthropic_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+
     database_url: str = "sqlite+aiosqlite:///./itsupport.db"
 
     @field_validator("database_url", mode="before")

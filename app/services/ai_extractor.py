@@ -213,75 +213,162 @@ def get_missing_fields(data: Dict[str, Any]) -> list:
     return missing
 
 
-async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
+async def extract_odometer_with_claude(image_bytes: bytes, api_key: str) -> Optional[float]:
     """
-    Extracts vehicle odometer reading from a photo of the dashboard instrument cluster
-    using Gemini multimodal vision.
-    Returns float (e.g. 145280.0) or None if undetectable.
-    Does not save images to disk or database.
+    Extracts vehicle odometer reading using Anthropic Claude 3.5 Sonnet multimodal vision.
+    Industry benchmark for reading noisy, low-contrast 7-segment LCDs and mechanical counters.
     """
-    if not image_bytes:
-        return None
-
     import base64
     import httpx
 
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        logger.warning("No GEMINI_API_KEY or GOOGLE_API_KEY found for odometer vision extraction.")
-        return None
+    b64_img = base64.b64encode(image_bytes).decode("utf-8")
+    headers = {
+        "x-api-key": api_key.strip(),
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
 
-    try:
-        b64_img = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = (
+        "You are an expert vehicle fleet inspection AI. "
+        "Analyze this photo of a vehicle's dashboard / instrument cluster and extract the total vehicle mileage odometer reading.\n\n"
+        "Instructions:\n"
+        "1. Locate the digital LCD screen or mechanical rolling drum display showing the vehicle's total mileage (e.g. 057612, 145280, 89312, 58000).\n"
+        "2. If a digital screen shows a 5 to 7 digit mileage counter, extract it as the odometer even if 'HOLD TO RESET' or similar text is printed near the screen.\n"
+        "3. DO NOT confuse the odometer with trip distance (Trip A / Trip B, e.g. 14.5 or 120.3 km), speedometer dial numbers (0 to 160), tachometer/RPM, clock (e.g. 14:30), outside temperature, or battery voltage.\n"
+        "4. Return valid JSON ONLY with the exact key 'odometer' containing the integer or float numeric value, "
+        "or null if no odometer is visible or readable.\n"
+        "Example output: {\"odometer\": 58000}"
+    )
 
-        prompt = (
-            "You are an expert vehicle fleet inspection AI. "
-            "Analyze this photo of a vehicle's dashboard / instrument cluster and extract the vehicle mileage odometer reading. "
-            "Instructions:\n"
-            "1. Locate the digital LCD screen or mechanical odometer display showing the mileage digits (e.g. 057612, 145280, 89312).\n"
-            "2. If a digital display shows a 5 to 7 digit mileage counter (e.g. 057612), extract it as the odometer even if 'HOLD TO RESET' or similar text is printed next to or on the screen.\n"
-            "3. DO NOT confuse the odometer with small decimal numbers (e.g. 14.5), speedometer dial numbers (0 to 160), tachometer/RPM, clock (e.g. 14:30), temperature, or battery voltage.\n"
-            "4. Return valid JSON ONLY with the exact key 'odometer' containing the numeric value (integer or float), "
-            "or null if no odometer is visible or readable.\n"
-            "Example: {\"odometer\": 57612}"
-        )
+    models_to_try = [
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-haiku-20240307"
+    ]
 
-        models_to_try = [
-            "gemini-3.5-flash",
-            "gemini-3.6-flash",
-            "gemini-3.7-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3.8-flash"
-        ]
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        for model in models_to_try:
+            payload = {
+                "model": model,
+                "max_tokens": 150,
+                "temperature": 0.0,
+                "messages": [
                     {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": b64_img
-                        }
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": b64_img
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
                     }
                 ]
-            }],
-            "generationConfig": {
-                "response_mime_type": "application/json",
-                "temperature": 0.1
             }
-        }
+            try:
+                res = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
+                if res.status_code == 200:
+                    resp_data = res.json()
+                    content = resp_data.get("content", [])
+                    raw_text = "".join(part.get("text", "") for part in content if part.get("type") == "text")
+                    parsed = {}
+                    try:
+                        parsed = json.loads(raw_text)
+                    except Exception:
+                        json_match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
+                        if json_match:
+                            try:
+                                parsed = json.loads(json_match.group(0))
+                            except Exception:
+                                pass
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            for model_name in models_to_try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                    val = parsed.get("odometer") or parsed.get("mileage") or parsed.get("reading") or parsed.get("km")
+                    if val is None and parsed:
+                        for v in parsed.values():
+                            if v is not None:
+                                val = v
+                                break
+
+                    if val is not None:
+                        clean_str = re.sub(r"[^\d.]", "", str(val))
+                        if clean_str:
+                            try:
+                                val_float = float(clean_str)
+                                if val_float > 0:
+                                    logger.info(f"Successfully extracted odometer using Anthropic {model}: {val_float:,.0f} KM")
+                                    return val_float
+                            except ValueError:
+                                pass
+                    logger.info(f"Anthropic {model} response could not be parsed: {raw_text[:200]}")
+                else:
+                    logger.warning(f"Anthropic {model} returned HTTP {res.status_code}: {res.text[:200]}")
+            except Exception as e:
+                logger.warning(f"Error calling Anthropic {model}: {e}")
+
+    return None
+
+
+async def extract_odometer_with_gemini(image_bytes: bytes, api_key: str) -> Optional[float]:
+    """
+    Extracts odometer digits using Google Gemini multimodal vision.
+    Uses valid production model endpoints (gemini-1.5-pro, gemini-2.0-flash, gemini-1.5-flash).
+    """
+    import base64
+    import httpx
+
+    b64_img = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = (
+        "You are an expert vehicle fleet inspection AI. "
+        "Analyze this photo of a vehicle's dashboard / instrument cluster and extract the vehicle mileage odometer reading.\n\n"
+        "Instructions:\n"
+        "1. Locate the digital LCD screen or mechanical odometer display showing the mileage digits (e.g. 057612, 145280, 89312, 58000).\n"
+        "2. If a digital display shows a 5 to 7 digit mileage counter, extract it as the odometer even if 'HOLD TO RESET' or similar text is printed next to or on the screen.\n"
+        "3. DO NOT confuse the odometer with small decimal numbers (e.g. 14.5), speedometer dial numbers (0 to 160), tachometer/RPM, clock (e.g. 14:30), temperature, or battery voltage.\n"
+        "4. Return valid JSON ONLY with the exact key 'odometer' containing the numeric value (integer or float), "
+        "or null if no odometer is visible or readable.\n"
+        "Example: {\"odometer\": 58000}"
+    )
+
+    models_to_try = [
+        "gemini-1.5-pro",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    ]
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": b64_img
+                    }
+                }
+            ]
+        }],
+        "generationConfig": {
+            "response_mime_type": "application/json",
+            "temperature": 0.1
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+            try:
                 res = await client.post(url, json=payload)
                 if res.status_code == 200:
                     resp_data = res.json()
                     candidates = resp_data.get("candidates", [])
                     if candidates:
                         raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        # Robust JSON and number extraction
                         parsed = {}
                         try:
                             parsed = json.loads(raw_text)
@@ -306,14 +393,62 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
                                 try:
                                     val_float = float(clean_str)
                                     if val_float > 0:
-                                        logger.info(f"Successfully extracted odometer using {model_name}: {val_float}")
+                                        logger.info(f"Successfully extracted odometer using Gemini {model_name}: {val_float:,.0f} KM")
                                         return val_float
                                 except ValueError:
                                     pass
-                        logger.info(f"Model {model_name} response could not be parsed as odometer: {raw_text[:200]}")
+                        logger.info(f"Gemini {model_name} response could not be parsed: {raw_text[:200]}")
                 else:
-                    logger.warning(f"Model {model_name} returned {res.status_code}: {res.text[:200]}")
-    except Exception as e:
-        logger.error(f"Error during odometer extraction from image: {e}", exc_info=True)
+                    logger.warning(f"Gemini {model_name} returned HTTP {res.status_code}: {res.text[:200]}")
+            except Exception as e:
+                logger.warning(f"Error calling Gemini {model_name}: {e}")
 
     return None
+
+
+async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
+    """
+    Extracts vehicle odometer reading from a photo of the dashboard instrument cluster.
+    Primary engine: Anthropic Claude 3.5 Sonnet (benchmark accuracy on instrument LCDs).
+    Secondary engine: Google Gemini 1.5 Pro / 2.0 Flash.
+    Returns float (e.g. 145280.0) or None if undetectable.
+    Does not save images to disk or database.
+    """
+    if not image_bytes:
+        return None
+
+    from app.config import settings
+
+    # 1. Primary Engine: Claude 3.5 Sonnet
+    claude_key = (
+        getattr(settings, "anthropic_api_key", None)
+        or os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("CLAUDE_API_KEY")
+    )
+    if claude_key:
+        try:
+            val = await extract_odometer_with_claude(image_bytes, claude_key)
+            if val and val > 0:
+                return val
+        except Exception as e:
+            logger.error(f"Error in Claude odometer extraction: {e}", exc_info=True)
+
+    # 2. Secondary Engine: Gemini 1.5 Pro / 2.0 Flash
+    gemini_key = (
+        getattr(settings, "gemini_api_key", None)
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
+    if gemini_key:
+        try:
+            val = await extract_odometer_with_gemini(image_bytes, gemini_key)
+            if val and val > 0:
+                return val
+        except Exception as e:
+            logger.error(f"Error in Gemini odometer extraction: {e}", exc_info=True)
+
+    if not claude_key and not gemini_key:
+        logger.warning("Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is configured for odometer extraction.")
+
+    return None
+
