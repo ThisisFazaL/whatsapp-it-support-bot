@@ -148,59 +148,22 @@ class TestNewOperationsFeatures(unittest.IsolatedAsyncioTestCase):
     @patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock)
     @patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock)
     async def test_driver_numbered_customer_selection(self, mock_send_btn, mock_send_txt):
-        """Tests that driver selecting delivery charges gets a numbered list and replying 2 selects Customer 2."""
+        """Tests that delivery charges collection by driver is disabled and prompts informational notice."""
         async with async_session_factory() as session:
             trip_id = "TRIP-SELECT-002"
-            from app.database import create_or_update_fleet_trip_request, save_customer_schedules_batch
+            from app.database import create_or_update_fleet_trip_request
             await create_or_update_fleet_trip_request(
                 session, trip_id, "A. TG Hardware", self.sales_rep_phone, "Gweru", "Sales", None, "Gweru", 10000.0, 150.0
             )
-            # Create 3 customers
-            schedules = [
-                {"customer_id": "CUST-A", "reference_note": "Alpha Hardware", "expected_charge": 50.0},
-                {"customer_id": "CUST-B", "reference_note": "Beta Depot", "expected_charge": 60.0},
-                {"customer_id": "CUST-C", "reference_note": "Gamma Timber", "expected_charge": 40.0}
-            ]
-            await save_customer_schedules_batch(session, trip_id, schedules)
 
             # Driver clicks Delivery Charges
             handled = await handle_driver_interaction(session, self.driver_phone, f"flt_drv_deliv_{trip_id}", None)
             self.assertTrue(handled)
 
-            # Verify prompt lists all 3 customers numbered
+            # Verify prompt explains delivery charges are disabled/removed
             prompt = mock_send_txt.call_args[0][1]
-            self.assertIn("1️⃣ *Alpha Hardware (CUST-A)*", prompt)
-            self.assertIn("2️⃣ *Beta Depot (CUST-B)*", prompt)
-            self.assertIn("3️⃣ *Gamma Timber (CUST-C)*", prompt)
-
-            # Driver replies '2' to select Beta Depot
-            state = await get_user_state(session, self.driver_phone)
-            self.assertEqual(state.current_step, "awaiting_customer_number")
-            handled = await handle_driver_interaction(session, self.driver_phone, "2", state)
-            self.assertTrue(handled)
-
-            # Verify customer Beta Depot selected and expected charge is hidden
-            next_prompt = mock_send_txt.call_args[0][1]
-            self.assertIn("Beta Depot", next_prompt)
-            self.assertNotIn("60.00", next_prompt)  # Blind entry!
-            self.assertNotIn("Expected", next_prompt)
-
-            # Driver enters collected amount: 60.00
-            state = await get_user_state(session, self.driver_phone)
-            self.assertEqual(state.current_step, "awaiting_collected_amount")
-            handled = await handle_driver_interaction(session, self.driver_phone, "60.00", state)
-            self.assertTrue(handled)
-
-            # Driver selects payment method CASH
-            state = await get_user_state(session, self.driver_phone)
-            handled = await handle_driver_interaction(session, self.driver_phone, f"flt_pay_cash_{trip_id}", state)
-            self.assertTrue(handled)
-
-            # Verify CUST-B is updated and MATCHED
-            custs = await get_customer_schedules_for_trip(session, trip_id)
-            cust_b = next(c for c in custs if c.customer_id == "CUST-B")
-            self.assertEqual(cust_b.collected_charge, 60.0)
-            self.assertEqual(cust_b.status, "MATCHED")
+            self.assertIn("DELIVERY CHARGES REMOVED", prompt)
+            self.assertIn("disabled", prompt.lower())
 
     @patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock)
     @patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock)

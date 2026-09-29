@@ -30,7 +30,7 @@ def clean_phone(phone: Optional[str]) -> str:
 
 
 async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: str):
-    """Presents the live transit buttons to Driver (omits Delivery Charges if transport charge is $0)."""
+    """Presents the live transit buttons to Driver (Emergency Charges & I Have Returned)."""
     header = "TRIP IN TRANSIT"
     body = (
         f"🚛 *TRIP IN TRANSIT: {trip_id}*\n"
@@ -39,21 +39,10 @@ async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: s
         "Please select an option below:"
     )
 
-    # Check whether there are delivery charges to collect
-    stmt = select(FleetCustomerSchedule).where(FleetCustomerSchedule.trip_id == trip_id)
-    res = await session.execute(stmt)
-    schedules = list(res.scalars().all())
-    total_expected = sum(s.expected_charge for s in schedules)
-    if total_expected <= 0.001:
-        trip = await get_fleet_trip_request_by_id(session, trip_id)
-        if trip and trip.transport_charge:
-            total_expected = float(trip.transport_charge)
-
-    buttons = []
-    if total_expected > 0.001:
-        buttons.append({"id": f"flt_drv_deliv_{trip_id}", "title": "Delivery Charges"})
-    buttons.append({"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"})
-    buttons.append({"id": f"flt_drv_ret_{trip_id}", "title": "I am Returning"})
+    buttons = [
+        {"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"},
+        {"id": f"flt_drv_returned_{trip_id}", "title": "I Have Returned"}
+    ]
 
     await set_user_state(
         session,
@@ -71,12 +60,13 @@ async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: s
 
 
 async def send_driver_returning_menu(session: AsyncSession, phone: str, trip_id: str):
-    """Presents the 2 returning buttons to Driver (NO emojis, <= 20 chars)."""
+    """Presents returning menu to Driver when vehicle is heading back to depot."""
     header = "RETURNING TO BASE"
     body = (
-        f"🚛 *RETURNING TO BASE: {trip_id}*\n"
+        f"↩️ *RETURNING TO BASE: {trip_id}*\n"
         "────────────────────\n"
-        "When you arrive at the company depot, tap 'I Have Returned':"
+        "Vehicle is returning to depot.\n"
+        "Tap below upon arrival at base depot:"
     )
     buttons = [
         {"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"},
@@ -85,8 +75,8 @@ async def send_driver_returning_menu(session: AsyncSession, phone: str, trip_id:
     await set_user_state(
         session,
         phone,
-        current_step="returning_to_base",
-        current_data={"trip_id": trip_id},
+        current_step="in_transit",
+        current_data={"trip_id": trip_id, "returning": True},
         flow_name="fleet_driver"
     )
     await meta_api.send_button_message(
@@ -98,14 +88,9 @@ async def send_driver_returning_menu(session: AsyncSession, phone: str, trip_id:
 
 
 async def return_to_appropriate_driver_menu(session: AsyncSession, phone: str, trip_id: str):
-    """
-    Returns the driver to the correct menu based on trip state:
-    If trip is already returning (status == 'RETURNING' or returning_at is set),
-    presents send_driver_returning_menu ('I Have Returned').
-    Otherwise, presents send_driver_transit_menu ('I am Returning').
-    """
+    """Returns the driver to either the transit menu or returning menu based on trip status."""
     trip = await get_fleet_trip_request_by_id(session, trip_id)
-    if trip and (trip.status == "RETURNING" or trip.returning_at is not None):
+    if trip and trip.status == "RETURNING":
         await send_driver_returning_menu(session, phone, trip_id)
     else:
         await send_driver_transit_menu(session, phone, trip_id)
@@ -224,84 +209,18 @@ async def handle_driver_interaction(
         await meta_api.send_text_message(clean_p, prompt)
         return True
 
-    # 2. Driver clicks [Delivery Charges] -> Present Numbered Customer List
+    # 2. Driver clicks [Delivery Charges] -> Delivery charges collection by driver is disabled
     if text_lower.startswith("flt_drv_deliv_"):
         trip_id = text_strip.replace("flt_drv_deliv_", "").strip()
-
-        # Query customer schedules for this trip
-        stmt = (
-            select(FleetCustomerSchedule)
-            .where(FleetCustomerSchedule.trip_id == trip_id)
-            .order_by(FleetCustomerSchedule.id.asc())
+        await meta_api.send_text_message(
+            clean_p,
+            f"ℹ️ *DELIVERY CHARGES REMOVED: {trip_id}*\n"
+            "────────────────────\n"
+            "Delivery charges collection by driver is disabled.\n"
+            "Please report emergency expenses if needed, or tap 'I Have Returned' upon depot arrival."
         )
-        res = await session.execute(stmt)
-        schedules = list(res.scalars().all())
-
-        total_expected = sum(s.expected_charge for s in schedules)
-        if total_expected <= 0.001:
-            trip = await get_fleet_trip_request_by_id(session, trip_id)
-            if trip and trip.transport_charge:
-                total_expected = float(trip.transport_charge)
-
-        if total_expected <= 0.001:
-            await meta_api.send_text_message(
-                clean_p,
-                f"ℹ️ *NO DELIVERY CHARGES: {trip_id}*\n"
-                "────────────────────\n"
-                "There are no delivery or transport charges to collect for this trip."
-            )
-            await return_to_appropriate_driver_menu(session, clean_p, trip_id)
-            return True
-
-        if schedules:
-            customers_map = {}
-            lines = []
-            number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-            for idx, sched in enumerate(schedules, start=1):
-                num_key = str(idx)
-                customers_map[num_key] = sched.customer_id
-                emoji = number_emojis[idx - 1] if idx <= 10 else f"{idx}."
-                status_icon = "✅ " if sched.status in {"MATCHED", "PAID"} else ""
-                disp_name = sched.reference_note or sched.customer_id
-                if sched.reference_note and sched.reference_note != sched.customer_id:
-                    disp_name = f"{sched.reference_note} ({sched.customer_id})"
-                lines.append(f"{emoji} {status_icon}*{disp_name}*")
-
-            cust_list_str = "\n".join(lines)
-            prompt = (
-                f"📦 *SELECT CUSTOMER: {trip_id}*\n"
-                "────────────────────\n"
-                "Please reply with the customer number:\n\n"
-                f"{cust_list_str}\n"
-                "────────────────────\n"
-                "Reply with 1, 2, 3... to select customer."
-            )
-            await set_user_state(
-                session,
-                clean_p,
-                current_step="awaiting_customer_number",
-                current_data={"trip_id": trip_id, "customers_map": customers_map},
-                flow_name="fleet_driver"
-            )
-            await meta_api.send_text_message(clean_p, prompt)
-            return True
-        else:
-            # Fallback if no schedule manifest registered
-            await set_user_state(
-                session,
-                clean_p,
-                current_step="awaiting_customer_id",
-                current_data={"trip_id": trip_id},
-                flow_name="fleet_driver"
-            )
-            prompt = (
-                f"📦 *RECORD DELIVERY CHARGE: {trip_id}*\n"
-                "────────────────────\n"
-                "Please type the Customer ID or Name:\n"
-                "_(e.g. CUST-101 or 101)_"
-            )
-            await meta_api.send_text_message(clean_p, prompt)
-            return True
+        await return_to_appropriate_driver_menu(session, clean_p, trip_id)
+        return True
 
     # 3. Driver clicks [Emergency Charges]
     if text_lower.startswith("flt_drv_emerg_"):
@@ -408,35 +327,41 @@ async def handle_driver_interaction(
         await return_to_appropriate_driver_menu(session, clean_p, trip_id)
         return True
 
-    # 7. Driver clicks [I am Returning]
-    if text_lower.startswith("flt_drv_ret_"):
-        trip_id = text_strip.replace("flt_drv_ret_", "").strip()
-        trip = await get_fleet_trip_request_by_id(session, trip_id)
-        if trip:
-            trip.returning_at = datetime.datetime.utcnow()
-            trip.status = "RETURNING"
-            await session.commit()
+    # 7. Driver clicks [I Have Returned] -> Prompt for final Return Odometer reading
+    if text_lower.startswith(("flt_drv_returned_", "flt_drv_retd_", "flt_drv_ret_")) or text_lower in {"i have returned", "returned", "have returned", "i am returning"}:
+        trip_id = ""
+        for pfx in ["flt_drv_returned_", "flt_drv_retd_", "flt_drv_ret_"]:
+            if text_strip.startswith(pfx):
+                trip_id = text_strip[len(pfx):].strip()
+                break
 
-            # Alert perspective Sales Rep
-            if trip.salesperson_phone:
-                rep_phone = clean_phone(trip.salesperson_phone)
-                rep_alert = (
-                    f"↩️ *DRIVER RETURNING: {trip.trip_id}*\n"
-                    "────────────────────\n"
-                    f"Driver {trip.driver_name} is returning to base depot."
-                )
-                await meta_api.send_text_message(rep_phone, rep_alert)
+        if not trip_id and state and state.current_data:
+            trip_id = state.current_data.get("trip_id", "")
 
-        await send_driver_returning_menu(session, clean_p, trip_id)
-        return True
-
-    # 8. Driver clicks [I Have Returned] -> Prompt for final Return Odometer reading
-    if text_lower.startswith("flt_drv_returned_"):
-        trip_id = text_strip.replace("flt_drv_returned_", "").strip()
-        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        trip = await get_fleet_trip_request_by_id(session, trip_id) if trip_id else None
         if not trip:
-            await meta_api.send_text_message(clean_p, f"⚠️ Trip {trip_id} not found.")
+            trip = await get_active_trip_for_driver(session, clean_p)
+
+        if not trip:
+            await meta_api.send_text_message(clean_p, "⚠️ Active trip not found.")
             return True
+
+        trip_id = trip.trip_id
+        if not trip.returning_at:
+            trip.returning_at = datetime.datetime.now(datetime.UTC)
+        trip.status = "RETURNING"
+        trip.is_live_location_active = False
+        await session.commit()
+
+        # Alert perspective Sales Rep
+        if trip.salesperson_phone:
+            rep_phone = clean_phone(trip.salesperson_phone)
+            rep_alert = (
+                f"↩️ *DRIVER RETURNED: {trip.trip_id}*\n"
+                "────────────────────\n"
+                f"Driver {trip.driver_name} has arrived back at base depot."
+            )
+            await meta_api.send_text_message(rep_phone, rep_alert)
 
         await set_user_state(
             session,
@@ -490,7 +415,7 @@ async def handle_driver_interaction(
             f"✅ *TRIP STARTED: {trip_id}*\n"
             "────────────────────\n"
             f"Start Odometer: *{odo_val:,.0f} KM*\n"
-            "Drive safely! Please report delivery charges and emergency expenses as you make deliveries."
+            "Drive safely! Please report emergency expenses as needed, and tap 'I Have Returned' upon depot arrival."
         )
         await meta_api.send_text_message(clean_p, ack)
         await send_driver_transit_menu(session, clean_p, trip_id)
@@ -636,7 +561,7 @@ async def handle_driver_interaction(
                 f"✅ *TRIP STARTED: {trip_id}*\n"
                 "────────────────────\n"
                 f"Start Odometer: *{odo_val:,.0f} KM*\n"
-                "Drive safely! Please report delivery charges and emergency expenses as you make deliveries."
+                "Drive safely! Please report emergency expenses as needed, and tap 'I Have Returned' upon depot arrival."
             )
             await meta_api.send_text_message(clean_p, ack)
             await send_driver_transit_menu(session, clean_p, trip_id)

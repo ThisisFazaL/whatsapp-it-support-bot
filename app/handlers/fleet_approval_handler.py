@@ -916,6 +916,59 @@ async def handle_sales_rep_allowance_interaction(
     return False
 
 
+LG_SALES_REPS = {
+    "263779214825",  # Ashraf Nedziwe
+    "263711421201",  # Mercy Mungoriwo
+    "263777425204",  # Callistus Keche
+    "263781337103",  # Primrose Makumbe
+    "263712498581",  # Sharon Mushava
+    "263787448975",  # Tatenda Mombechena
+    "263786032376",  # Wallace Muzarurwi
+}
+
+TG_SALES_REPS = {
+    "263718643451",  # Stuart Chaleka
+    "263782723251",  # Vanessa Zimbiti
+    "263717905914",  # Tafadzwa Sungiso
+    "263717905915",  # Talent Ruziwe
+    "263788231069",  # Tafadzwa Chikove
+    "263780435477",  # Tanaka Mupfumi
+}
+
+KRECKLE_SALES_REPS = {
+    "263780543771",  # David Mungadzi
+    "263780806954",  # Patience Ndlovu
+    "263783103611",  # Mufaro Gambiza
+    "263780573092",  # Ndiwande Samihembo Rosa
+}
+
+
+def resolve_sales_rep_company(phone: str, employee: Optional[Any] = None) -> str:
+    clean_p = clean_phone(phone)
+    last_9 = clean_p[-9:] if len(clean_p) >= 9 else clean_p
+
+    for p in LG_SALES_REPS:
+        if clean_p == p or p.endswith(last_9):
+            return "B. LG Plast"
+    for p in TG_SALES_REPS:
+        if clean_p == p or p.endswith(last_9):
+            return "A. TG Hardware"
+    for p in KRECKLE_SALES_REPS:
+        if clean_p == p or p.endswith(last_9):
+            return "C. Kreckle"
+
+    if employee and getattr(employee, "department", None):
+        dept_name = (employee.department.department_name or "").lower()
+        if "lg" in dept_name or "lightgroove" in dept_name or "plast" in dept_name:
+            return "B. LG Plast"
+        if "kreckle" in dept_name:
+            return "C. Kreckle"
+        if "tg" in dept_name or "tagoneswa" in dept_name or "hardware" in dept_name:
+            return "A. TG Hardware"
+
+    return "A. TG Hardware"
+
+
 async def handle_fleet_approval_flow(
     session: AsyncSession,
     phone: str,
@@ -946,29 +999,27 @@ async def handle_fleet_approval_flow(
     if text_lower.startswith("flt_rep_") or (state and state.flow_name == "fleet_rep_allowance"):
         return await handle_sales_rep_allowance_interaction(session, phone, message_text, state)
 
-    # 1. User taps [ 🚛 Fleet Approval ] button or types 1
+    # 1. User taps [ 🚛 Fleet Approval ] button or types 1 -> Auto-detects company without asking
     if text_lower in {"btn_domain_fleet", "fleet approval", "🚛 fleet approval", "fleet", "trip approval", "1", "1️⃣", "1️⃣ fleet trip approval"}:
-        await set_user_state(session, phone, "awaiting_company_selection", {}, flow_name="fleet_approval")
-        header = "SELECT COMPANY"
-        body = (
-            "🏢 *SELECT COMPANY*\n"
+        company_name = resolve_sales_rep_company(phone, employee)
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_trip_id",
+            {"company_name": company_name},
+            flow_name="fleet_approval"
+        )
+        prompt = (
+            f"🚛 *FLEET TRIP APPROVAL: {company_name}*\n"
             "────────────────────\n"
-            "Please select the company for this fleet trip:"
+            "Please enter the *Trip ID* from Favlogix:\n\n"
+            "_(e.g. `20042026-BINDURA` or `TRIP-2026-00456`)_\n\n"
+            "💡 _Reply 'cancel' to return to the main menu._"
         )
-        buttons = [
-            {"id": "flt_co_tg", "title": "A. TG Hardware"},
-            {"id": "flt_co_lg", "title": "B. LG Plast"},
-            {"id": "flt_co_kr", "title": "C. Kreckle"}
-        ]
-        await meta_api.send_button_message(
-            to_phone=phone,
-            body_text=body,
-            buttons=buttons,
-            header_text=header
-        )
+        await meta_api.send_text_message(phone, prompt)
         return True
 
-    # 1.1 Company Selection button or reply
+    # 1.1 Company Selection button or reply (kept for direct override / test compatibility)
     if text_lower in {"flt_co_tg", "flt_co_lg", "flt_co_kr"} or (
         state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_company_selection"
     ):

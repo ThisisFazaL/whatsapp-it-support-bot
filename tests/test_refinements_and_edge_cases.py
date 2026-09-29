@@ -134,13 +134,13 @@ class TestRefinementsAndEdgeCases(unittest.IsolatedAsyncioTestCase):
                 # Delivery Charges MUST NOT be present
                 self.assertNotIn("Delivery Charges", button_titles)
                 self.assertFalse(any("flt_drv_deliv_" in bid for bid in button_ids))
-                # Only Emergency Charges and I am Returning
+                # Only Emergency Charges and I Have Returned
                 self.assertEqual(len(sent_buttons), 2)
                 self.assertIn("Emergency Charges", button_titles)
-                self.assertIn("I am Returning", button_titles)
+                self.assertIn("I Have Returned", button_titles)
 
-    async def test_delivery_charges_present_when_transport_charge_positive(self):
-        """Test that when transport charge > 0, driver transit menu includes [Delivery Charges]."""
+    async def test_delivery_charges_removed_permanently_from_transit_menu(self):
+        """Test that delivery charges button is removed from driver transit menu even when transport charge > 0."""
         async with async_session_factory() as session:
             await create_or_update_fleet_trip_request(
                 session=session,
@@ -163,8 +163,10 @@ class TestRefinementsAndEdgeCases(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(mock_btn.called)
                 sent_buttons = mock_btn.call_args[1]["buttons"]
                 button_titles = [b["title"] for b in sent_buttons]
-                self.assertIn("Delivery Charges", button_titles)
-                self.assertEqual(len(sent_buttons), 3)
+                self.assertNotIn("Delivery Charges", button_titles)
+                self.assertIn("I Have Returned", button_titles)
+                self.assertIn("Emergency Charges", button_titles)
+                self.assertEqual(len(sent_buttons), 2)
 
     async def test_emergency_fuel_prompt_and_video_instruction(self):
         """Test emergency fuel prompts driver not to send video to WhatsApp and to keep it for balancing."""
@@ -226,18 +228,17 @@ class TestRefinementsAndEdgeCases(unittest.IsolatedAsyncioTestCase):
             trip.status = "ACTIVE"
             await session.commit()
 
-            # 1. Driver clicks [I am Returning]
-            with patch("app.meta_api.meta_api.send_button_message", new_callable=AsyncMock) as mock_btn, \
-                 patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock):
+            # 1. Driver clicks [I Have Returned]
+            with patch("app.meta_api.meta_api.send_text_message", new_callable=AsyncMock) as mock_txt:
                 await handle_driver_interaction(
                     session=session,
                     phone=self.driver_phone,
-                    message_text=f"flt_drv_ret_{self.trip_id}",
+                    message_text=f"flt_drv_returned_{self.trip_id}",
                     state=None
                 )
-                self.assertTrue(mock_btn.called)
-                btn_titles = [b["title"] for b in mock_btn.call_args[1]["buttons"]]
-                self.assertIn("I Have Returned", btn_titles)
+                self.assertTrue(mock_txt.called)
+                prompt = mock_txt.call_args[0][1]
+                self.assertIn("Return Odometer", prompt)
 
             # Trip should now be in RETURNING status
             t_updated = await get_fleet_trip_request_by_id(session, self.trip_id)
