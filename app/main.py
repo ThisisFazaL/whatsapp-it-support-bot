@@ -815,6 +815,15 @@ async def process_webhook_payload(body: dict):
             from app.state_manager import is_employee_registered, is_admin, get_user_state, clear_user_state
             state = await get_user_state(db, sender_phone)
 
+            # Expire stale conversation state if older than 45 minutes of inactivity
+            if state and state.updated_at:
+                now_utc = datetime.datetime.utcnow()
+                state_age = (now_utc - state.updated_at).total_seconds()
+                if state_age > 2700:  # 45 minutes
+                    logger.info(f"Expiring stale conversation state ({state.current_step}, age={int(state_age)}s) for {sender_phone}.")
+                    await clear_user_state(db, sender_phone)
+                    state = None
+
             # Passive chatter / acknowledgment check:
             # Prevents constant spam replies when users say "ok", "thanks", "👍", etc. without initiating a flow
             PASSIVE_CHATTER = {
@@ -884,8 +893,8 @@ async def process_webhook_payload(body: dict):
             ))
 
             # Step 0.6: Dual-Domain Portal Selection Buttons [ 🚚 Logistics & Fleet ] vs [ 💻 IT Support ]
-            is_portal_ws = clean_txt in {"btn_portal_workshop", "btn_domain_workshop"} or (clean_txt in {"logistics & fleet", "🚚 logistics & fleet"} and not is_in_active_flow)
-            is_portal_it = clean_txt in {"btn_portal_it"}
+            is_portal_ws = clean_txt in {"btn_portal_workshop", "btn_domain_workshop", "logistics & fleet", "🚚 logistics & fleet", "logistics", "fleet", "workshop"} or "logistics & fleet" in clean_txt
+            is_portal_it = clean_txt in {"btn_portal_it", "btn_domain_it", "it support", "💻 it support", "it"} or "it support" in clean_txt
 
             if is_portal_ws and not is_in_active_flow:
                 if is_workshop_user:
@@ -912,14 +921,23 @@ async def process_webhook_payload(body: dict):
 
             # Step 0.7: Global Greeting / Reset / Main Menu Handler / Start My Shift
             is_start_shift = (
-                clean_txt in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day", "☀️ start my shift"}
-                or clean_kw in {"start shift", "start my shift", "start workday", "start day"}
+                clean_txt in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day", "☀️ start my shift", "shift"}
+                or clean_kw in {"start shift", "start my shift", "start workday", "start day", "shift"}
                 or clean_txt.startswith("cmd_start_shift")
             )
             is_global_greeting = (
-                clean_kw in {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "restart", "home", "portal", "switch", "switch portal"}
-                or clean_txt in {"hi", "hello", "hey", "menu", "reset", "cancel", "start", "/start", "/menu", "main menu", "switch portal", "btn_main_menu"}
-                or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey"])
+                clean_kw in {
+                    "hi", "hello", "hey", "hie", "hlw", "menu", "reset", "cancel", "start", "restart",
+                    "home", "portal", "switch", "switch portal", "morning", "good morning", "goodmorning",
+                    "afternoon", "good afternoon", "evening", "good evening", "help", "support", "options",
+                    "main menu", "back"
+                }
+                or clean_txt in {
+                    "hi", "hello", "hey", "hie", "hlw", "menu", "reset", "cancel", "start", "/start",
+                    "/menu", "main menu", "switch portal", "btn_main_menu", "morning", "good morning",
+                    "goodmorning", "good afternoon", "good evening", "help", "support", "back"
+                }
+                or any(clean_kw.startswith(g + " ") for g in ["hi", "hello", "hey", "hie", "morning", "good morning", "good afternoon", "good evening"])
                 or is_start_shift
             )
 
@@ -967,6 +985,7 @@ async def process_webhook_payload(body: dict):
                     await send_sales_portal_menu(db, sender_phone, employee)
                     return
                 # Single-domain IT user falls through to standard IT handling below
+
 
 
             # Step 0.8: Check in-flight Workshop states & Workshop-specific buttons
