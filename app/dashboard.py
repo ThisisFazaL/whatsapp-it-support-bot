@@ -22,7 +22,7 @@ from app.auth import (
     COOKIE_NAME, SESSION_MAX_AGE, USERS_DB
 )
 from app.services.config_service import (
-    get_fuel_price, get_meal_rate, get_accommodation_rate, get_expense_budget_pct,
+    get_fuel_price, get_meal_rate, get_accommodation_rate, get_expense_budget_pct, get_van_minimum_surcharge,
     get_all_cached_city_rules, update_system_setting, update_city_rule, recalculate_all_city_minimums
 )
 
@@ -213,7 +213,7 @@ async def process_login(request: Request):
         )
 
     token = create_session_token(user["username"], user["role"])
-    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
+    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "LOGISTICS_MANAGER") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
     
     resp = JSONResponse({
         "status": "success",
@@ -398,6 +398,295 @@ async def api_get_audit_logs(request: Request, db: AsyncSession = Depends(get_db
             "created_at": l.created_at.strftime("%Y-%m-%d %H:%M:%S") if l.created_at else ""
         })
     return {"status": "success", "logs": records}
+
+
+@router.post("/api/v2/config/update-operational-params")
+async def api_update_operational_params(request: Request, db: AsyncSession = Depends(get_db)):
+    """Updates global rates: meal allowance, accommodation rate, expense budget %, van surcharge."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "ACCOUNTS_USER"):
+        raise HTTPException(status_code=403, detail="Permission denied. Admin, Manager, or Accounts role required.")
+    body = await request.json()
+    uname = user.get("name", "Admin")
+
+    updated = {}
+    meal_rate = body.get("meal_rate_usd") if "meal_rate_usd" in body else body.get("meal_rate")
+    if meal_rate is not None:
+        val = round(float(meal_rate), 2)
+        await update_system_setting(db, "meal_rate_usd", val, changed_by=uname, reason="Updated meal rate allowance")
+        updated["meal_rate_usd"] = val
+
+    accom_rate = body.get("accommodation_rate_usd") if "accommodation_rate_usd" in body else body.get("accommodation_rate")
+    if accom_rate is not None:
+        val = round(float(accom_rate), 2)
+        await update_system_setting(db, "accommodation_rate_usd", val, changed_by=uname, reason="Updated accommodation rate allowance")
+        updated["accommodation_rate_usd"] = val
+
+    if "expense_budget_pct" in body:
+        val = round(float(body["expense_budget_pct"]), 4)
+        await update_system_setting(db, "expense_budget_pct", val, changed_by=uname, reason="Updated expense budget pct")
+        updated["expense_budget_pct"] = val
+
+    if "van_minimum_surcharge" in body:
+        val = round(float(body["van_minimum_surcharge"]), 2)
+        await update_system_setting(db, "van_minimum_surcharge", val, changed_by=uname, reason="Updated van surcharge")
+        updated["van_minimum_surcharge"] = val
+
+    return {"status": "success", "updated": updated}
+
+
+@router.post("/api/v2/fleet/trucks/save")
+async def api_save_truck(request: Request, db: AsyncSession = Depends(get_db)):
+    """Creates or updates a commercial truck in the fleet database."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "LOGISTICS_ADMIN"):
+        raise HTTPException(status_code=403, detail="Permission denied. Fleet or Logistics role required.")
+    
+    body = await request.json()
+    truck_id = body.get("truck_id")
+    truck_number = str(body.get("truck_number", "")).strip()
+    plate_number = str(body.get("plate_number", "")).strip().upper()
+    model_make = str(body.get("model_make", "")).strip()
+    body_type = str(body.get("body_type", "Horse")).strip()
+    home_depot = str(body.get("home_depot", "Harare Central")).strip()
+    is_active = bool(body.get("active", True))
+
+    if not truck_number or not plate_number:
+        raise HTTPException(status_code=400, detail="Truck number and plate number are required.")
+
+    uname = user.get("name", "Admin")
+
+    if truck_id:
+        stmt = select(WorkshopTruck).where(WorkshopTruck.truck_id == int(truck_id))
+        truck = (await db.execute(stmt)).scalars().first()
+        if not truck:
+            raise HTTPException(status_code=404, detail="Truck not found.")
+        prev_vals = {"truck_number": truck.truck_number, "plate_number": truck.plate_number, "active": truck.active}
+        truck.truck_number = truck_number
+        truck.plate_number = plate_number
+        truck.model_make = model_make or truck.model_make
+        truck.body_type = body_type
+        truck.home_depot = home_depot
+        truck.active = is_active
+        action = "UPDATE_COMMERCIAL_TRUCK"
+    else:
+        stmt = select(WorkshopTruck).where((WorkshopTruck.truck_number == truck_number) | (WorkshopTruck.plate_number == plate_number))
+        existing = (await db.execute(stmt)).scalars().first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Truck {truck_number} or plate {plate_number} already exists.")
+        truck = WorkshopTruck(
+            truck_number=truck_number,
+            plate_number=plate_number,
+            model_make=model_make or "Commercial Fleet",
+            body_type=body_type,
+            home_depot=home_depot,
+            active=is_active
+        )
+        db.add(truck)
+        prev_vals = None
+        action = "ADD_COMMERCIAL_TRUCK"
+
+    audit = AuditLog(
+        username=uname,
+        user_role=user.get("role", "FLEET_ADMIN"),
+        action=action,
+        module="FLEET_MANAGEMENT",
+        entity_id=plate_number,
+        previous_value=prev_vals,
+        new_value={"truck_number": truck_number, "plate_number": plate_number, "model": model_make, "active": is_active},
+        remarks=f"{action} by {uname}",
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(truck)
+
+    return {
+        "status": "success",
+        "truck": {
+            "truck_id": truck.truck_id,
+            "truck_number": truck.truck_number,
+            "plate_number": truck.plate_number,
+            "model_make": truck.model_make,
+            "body_type": truck.body_type,
+            "home_depot": truck.home_depot,
+            "active": truck.active
+        }
+    }
+
+
+@router.post("/api/v2/fleet/drivers/save")
+async def api_save_driver(request: Request, db: AsyncSession = Depends(get_db)):
+    """Creates or updates a commercial driver in staff and employee directories."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "LOGISTICS_ADMIN"):
+        raise HTTPException(status_code=403, detail="Permission denied. Fleet or Logistics role required.")
+    
+    body = await request.json()
+    staff_id = body.get("staff_id")
+    full_name = str(body.get("full_name", "")).strip()
+    phone = str(body.get("phone", "")).replace("+", "").strip()
+    role = str(body.get("role", "COMMERCIAL DRIVER")).strip()
+    is_active = bool(body.get("active", True))
+
+    if not full_name or not phone:
+        raise HTTPException(status_code=400, detail="Driver name and phone number are required.")
+
+    uname = user.get("name", "Admin")
+
+    if staff_id:
+        stmt = select(WorkshopStaff).where(WorkshopStaff.staff_id == int(staff_id))
+        staff = (await db.execute(stmt)).scalars().first()
+        if not staff:
+            raise HTTPException(status_code=404, detail="Driver not found.")
+        prev_vals = {"full_name": staff.full_name, "phone": staff.phone, "active": staff.active}
+        staff.full_name = full_name
+        staff.phone = phone
+        staff.role = role
+        staff.active = is_active
+        action = "UPDATE_COMMERCIAL_DRIVER"
+    else:
+        stmt = select(WorkshopStaff).where(WorkshopStaff.phone == phone)
+        existing = (await db.execute(stmt)).scalars().first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Driver with phone {phone} already exists.")
+        staff = WorkshopStaff(
+            full_name=full_name,
+            phone=phone,
+            role=role,
+            active=is_active
+        )
+        db.add(staff)
+        prev_vals = None
+        action = "ADD_COMMERCIAL_DRIVER"
+
+    # Sync to Employee table
+    emp_stmt = select(Employee).where(Employee.phone == phone)
+    emp = (await db.execute(emp_stmt)).scalars().first()
+    if emp:
+        emp.full_name = full_name
+        emp.active = is_active
+    else:
+        dept_stmt = select(Department).where(Department.department_name.ilike("%Logistics%"))
+        dept = (await db.execute(dept_stmt)).scalars().first()
+        loc_stmt = select(Location).limit(1)
+        loc = (await db.execute(loc_stmt)).scalars().first()
+        new_emp = Employee(
+            full_name=full_name,
+            phone=phone,
+            department_id=dept.department_id if dept else None,
+            location_id=loc.location_id if loc else None,
+            active=is_active
+        )
+        db.add(new_emp)
+
+    audit = AuditLog(
+        username=uname,
+        user_role=user.get("role", "FLEET_ADMIN"),
+        action=action,
+        module="FLEET_MANAGEMENT",
+        entity_id=phone,
+        previous_value=prev_vals,
+        new_value={"full_name": full_name, "phone": phone, "role": role, "active": is_active},
+        remarks=f"{action} by {uname}",
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(staff)
+
+    return {
+        "status": "success",
+        "driver": {
+            "staff_id": staff.staff_id,
+            "full_name": staff.full_name,
+            "phone": staff.phone,
+            "role": staff.role,
+            "active": staff.active
+        }
+    }
+
+
+@router.post("/api/v2/fleet/sales-reps/save")
+async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db)):
+    """Creates or updates a sales representative in the employee directory."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "FLEET_ADMIN", "LOGISTICS_MANAGER"):
+        raise HTTPException(status_code=403, detail="Permission denied. Sales, Accounts, Logistics, or Admin role required.")
+    
+    body = await request.json()
+    emp_id = body.get("employee_id")
+    full_name = str(body.get("full_name", "")).strip()
+    phone = str(body.get("phone", "")).replace("+", "").strip()
+    email = str(body.get("email", "")).strip() or None
+    is_active = bool(body.get("active", True))
+
+    if not full_name or not phone:
+        raise HTTPException(status_code=400, detail="Sales rep name and phone number are required.")
+
+    uname = user.get("name", "Admin")
+
+    dept_stmt = select(Department).where(Department.department_name.ilike("%Sales%"))
+    sales_dept = (await db.execute(dept_stmt)).scalars().first()
+    loc_stmt = select(Location).limit(1)
+    loc = (await db.execute(loc_stmt)).scalars().first()
+
+    if emp_id:
+        stmt = select(Employee).where(Employee.employee_id == int(emp_id))
+        emp = (await db.execute(stmt)).scalars().first()
+        if not emp:
+            raise HTTPException(status_code=404, detail="Sales representative not found.")
+        prev_vals = {"full_name": emp.full_name, "phone": emp.phone, "active": emp.active}
+        emp.full_name = full_name
+        emp.phone = phone
+        emp.email = email
+        emp.active = is_active
+        if sales_dept:
+            emp.department_id = sales_dept.department_id
+        action = "UPDATE_SALES_REP"
+    else:
+        stmt = select(Employee).where(Employee.phone == phone)
+        existing = (await db.execute(stmt)).scalars().first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Employee with phone {phone} already exists.")
+        emp = Employee(
+            full_name=full_name,
+            phone=phone,
+            email=email,
+            department_id=sales_dept.department_id if sales_dept else None,
+            location_id=loc.location_id if loc else None,
+            active=is_active
+        )
+        db.add(emp)
+        prev_vals = None
+        action = "ADD_SALES_REP"
+
+    audit = AuditLog(
+        username=uname,
+        user_role=user.get("role", "SALES_ADMIN"),
+        action=action,
+        module="SALES_MANAGEMENT",
+        entity_id=phone,
+        previous_value=prev_vals,
+        new_value={"full_name": full_name, "phone": phone, "email": email, "active": is_active},
+        remarks=f"{action} by {uname}",
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(emp)
+
+    return {
+        "status": "success",
+        "sales_rep": {
+            "employee_id": emp.employee_id,
+            "full_name": emp.full_name,
+            "phone": emp.phone,
+            "email": emp.email,
+            "active": emp.active
+        }
+    }
+
 
 # -------------------------------------------------------------
 # Data API: Partitioned & Role-Gated Metrics & Records
@@ -918,9 +1207,47 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "active": wd.active
         } for wd in ws_drivers_all]
 
+        # G. Registered Sales Representatives
+        sales_reps_stmt = (
+            select(Employee)
+            .join(Department, Employee.department_id == Department.department_id, isouter=True)
+            .where(
+                (Department.department_name.ilike("%Sales%")) |
+                (Employee.phone.in_({sp["phone"] for sp in salespersons_list}))
+            )
+        )
+        raw_reps = (await db.execute(sales_reps_stmt)).scalars().all()
+        reps_map = {}
+        for r in raw_reps:
+            reps_map[r.phone] = {
+                "employee_id": r.employee_id,
+                "full_name": r.full_name,
+                "phone": r.phone,
+                "email": r.email or "",
+                "active": r.active
+            }
+        for sp in salespersons_list:
+            p = sp["phone"]
+            rep_info = reps_map.get(p)
+            if rep_info:
+                sp["employee_id"] = rep_info.get("employee_id")
+                sp["email"] = rep_info.get("email") or ""
+            else:
+                sp["employee_id"] = None
+                sp["email"] = ""
+                reps_map[p] = {
+                    "employee_id": None,
+                    "full_name": sp["name"],
+                    "phone": p,
+                    "email": "",
+                    "active": True
+                }
+        sales_reps_list = list(reps_map.values())
+
         fleet_payload = {
             "stats": fleet_stats,
             "salespersons": salespersons_list,
+            "sales_reps": sales_reps_list,
             "records": approval_records,
             "trips": trips_list,
             "payments": payments_list,
@@ -930,6 +1257,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "fuel_price": get_fuel_price(),
             "meal_rate": get_meal_rate(),
             "accommodation_rate": get_accommodation_rate(),
+            "expense_budget_pct": get_expense_budget_pct(),
+            "van_minimum_surcharge": get_van_minimum_surcharge(),
             "trucks": trucks_list,
             "drivers": drivers_list
         }
@@ -1700,7 +2029,10 @@ async def dashboard_view(request: Request):
                         </h2>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative with instant clearance action</p>
                     </div>
-                    <div class="flex items-center gap-3">
+                    <div class="flex items-center gap-2.5">
+                        <button onclick="openAddSalesRepModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
+                            <span>+</span> Add Sales Rep
+                        </button>
                         <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
                             <span>💳</span> Clear Debt Payment
                         </button>
@@ -1761,11 +2093,16 @@ async def dashboard_view(request: Request):
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verified commercial delivery vehicles registered in Tagoneswa database</p>
                     </div>
-                    <input type="text" id="trucks-search" placeholder="🔍 Search Truck #, Plate, Model..." oninput="filterTrucksTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                        <input type="text" id="trucks-search" placeholder="🔍 Search Truck #, Plate, Model..." oninput="filterTrucksTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <button onclick="openAddTruckModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer whitespace-nowrap">
+                            <span>+</span> Add Truck
+                        </button>
+                    </div>
                 </div>
 
                 <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs min-w-[760px]">
+                    <table class="w-full text-left text-xs min-w-[800px]">
                         <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Truck #</th>
@@ -1774,6 +2111,7 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Body Type</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Home Depot</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Active Status</th>
+                                <th class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">Action</th>
                             </tr>
                         </thead>
                         <tbody id="fleet-trucks-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
@@ -1795,11 +2133,16 @@ async def dashboard_view(request: Request):
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verified commercial drivers registered in Tagoneswa database</p>
                     </div>
-                    <input type="text" id="drivers-search" placeholder="🔍 Search Driver Name, Phone..." oninput="filterDriversTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                        <input type="text" id="drivers-search" placeholder="🔍 Search Driver Name, Phone..." oninput="filterDriversTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <button onclick="openAddDriverModal()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer whitespace-nowrap">
+                            <span>+</span> Add Driver
+                        </button>
+                    </div>
                 </div>
 
                 <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs min-w-[760px]">
+                    <table class="w-full text-left text-xs min-w-[800px]">
                         <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
                             <tr>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Staff ID</th>
@@ -1807,6 +2150,7 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">WhatsApp Phone</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Role Designation</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Active Status</th>
+                                <th class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">Action</th>
                             </tr>
                         </thead>
                         <tbody id="fleet-drivers-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
@@ -1995,6 +2339,53 @@ async def dashboard_view(request: Request):
                     <div id="fuel-update-feedback" class="mt-2 text-xs font-semibold hidden"></div>
                 </div>
 
+                <!-- Operational Allowance Rates & Vehicle Surcharges Card -->
+                <div class="bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border border-emerald-200/80 dark:border-emerald-900/40 rounded-2xl p-4 sm:p-5">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                        <div>
+                            <span class="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/20 px-2.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/30">
+                                💵 Operational Allowance Rates & Surcharges
+                            </span>
+                            <h4 class="text-sm font-extrabold text-slate-900 dark:text-zinc-100 mt-1">Crew Allowances & Vehicle Costing Matrix</h4>
+                            <p class="text-[11px] text-slate-600 dark:text-zinc-400 mt-0.5">Edit live meal rates, nightly accommodation, expense allocations, and van surcharges</p>
+                        </div>
+                        <button onclick="saveOperationalParams()" id="modal-save-ops-btn" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1.5 whitespace-nowrap self-start sm:self-auto">
+                            <span>💾</span> Save Operational Rates
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 dark:text-zinc-400 uppercase mb-1">Meal Rate ($/meal)</label>
+                            <div class="relative">
+                                <span class="absolute left-2.5 top-2 text-xs text-slate-400 font-bold">$</span>
+                                <input type="number" id="modal-meal-rate" step="0.50" min="0" value="2.00" class="pl-6 pr-2 py-1.5 w-full bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 dark:text-zinc-400 uppercase mb-1">Accommodation ($/night)</label>
+                            <div class="relative">
+                                <span class="absolute left-2.5 top-2 text-xs text-slate-400 font-bold">$</span>
+                                <input type="number" id="modal-accom-rate" step="1.00" min="0" value="15.00" class="pl-6 pr-2 py-1.5 w-full bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 dark:text-zinc-400 uppercase mb-1">Expense Budget (%)</label>
+                            <div class="relative">
+                                <input type="number" id="modal-budget-pct" step="0.5" min="1" max="50" value="4.0" class="pl-3 pr-6 py-1.5 w-full bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                                <span class="absolute right-2.5 top-2 text-xs text-slate-400 font-bold">%</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-600 dark:text-zinc-400 uppercase mb-1">Van Surcharge ($)</label>
+                            <div class="relative">
+                                <span class="absolute left-2.5 top-2 text-xs text-slate-400 font-bold">$</span>
+                                <input type="number" id="modal-van-surcharge" step="50" min="0" value="1500.00" class="pl-6 pr-2 py-1.5 w-full bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                            </div>
+                        </div>
+                    </div>
+                    <div id="ops-update-feedback" class="mt-2 text-xs font-semibold hidden"></div>
+                </div>
+
                 <!-- 45 Cities Search & Table -->
                 <div class="border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
                     <div class="p-3.5 bg-slate-50/75 dark:bg-[#121216] border-b border-slate-200 dark:border-zinc-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -2171,6 +2562,175 @@ async def dashboard_view(request: Request):
                 <span class="text-[11px] text-slate-400 dark:text-zinc-500">Security & compliance logs cannot be purged or modified</span>
                 <button onclick="closeAuditLogsModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 4: Commercial Truck Registry (Add / Edit) -->
+    <div id="addTruckModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center text-lg font-bold">
+                        🚚
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100" id="truck-modal-title">Commercial Truck Registry</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Register or edit Tagoneswa commercial fleet vehicle</p>
+                    </div>
+                </div>
+                <button onclick="closeAddTruckModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    ✕
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <input type="hidden" id="modal-truck-id" value="">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Truck Number *</label>
+                        <input type="text" id="modal-truck-number" placeholder="e.g. 1045" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Plate Number *</label>
+                        <input type="text" id="modal-truck-plate" placeholder="e.g. ABZ 1045" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold uppercase text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Make & Model</label>
+                    <input type="text" id="modal-truck-make" placeholder="e.g. Volvo FH16 540 / Scania G460" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Body Type</label>
+                        <select id="modal-truck-body" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="Horse">Horse (Tractor Unit)</option>
+                            <option value="Rigid">Rigid Truck</option>
+                            <option value="Tipper">Tipper</option>
+                            <option value="Tanker">Fuel / Water Tanker</option>
+                            <option value="Van">Delivery Van</option>
+                            <option value="Dropside">Dropside Trailer</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Home Depot</label>
+                        <input type="text" id="modal-truck-depot" placeholder="e.g. Harare Central" value="Harare Central" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 pt-2">
+                    <input type="checkbox" id="modal-truck-active" checked class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300">
+                    <label for="modal-truck-active" class="text-xs font-bold text-slate-700 dark:text-zinc-300 cursor-pointer">Active in Commercial Fleet Operations</label>
+                </div>
+                <div id="modal-truck-feedback" class="text-xs font-bold hidden"></div>
+            </div>
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+                <button type="button" onclick="closeAddTruckModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitSaveTruck()" id="modal-submit-truck-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5">
+                    <span>💾</span> Save Truck Details
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 5: Commercial Driver Registry (Add / Edit) -->
+    <div id="addDriverModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center text-lg font-bold">
+                        👤
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100" id="driver-modal-title">Commercial Driver Registry</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Register driver for WhatsApp trip dispatches & allowances</p>
+                    </div>
+                </div>
+                <button onclick="closeAddDriverModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    ✕
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <input type="hidden" id="modal-driver-id" value="">
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Full Legal Name *</label>
+                    <input type="text" id="modal-driver-name" placeholder="e.g. Munashe Milcah" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-purple-500" required>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">WhatsApp Phone Number *</label>
+                    <input type="text" id="modal-driver-phone" placeholder="e.g. 263772123456" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-purple-500" required>
+                    <span class="text-[10px] text-slate-400 mt-1 block">Must match the driver's active WhatsApp line (e.g. 263...)</span>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Role Designation</label>
+                    <select id="modal-driver-role" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <option value="COMMERCIAL DRIVER">COMMERCIAL DRIVER (Long Distance)</option>
+                        <option value="LOCAL DELIVERY DRIVER">LOCAL DELIVERY DRIVER (Harare)</option>
+                        <option value="RELIEF DRIVER">RELIEF DRIVER</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-2 pt-2">
+                    <input type="checkbox" id="modal-driver-active" checked class="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 border-slate-300">
+                    <label for="modal-driver-active" class="text-xs font-bold text-slate-700 dark:text-zinc-300 cursor-pointer">Active Driver on Roster</label>
+                </div>
+                <div id="modal-driver-feedback" class="text-xs font-bold hidden"></div>
+            </div>
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+                <button type="button" onclick="closeAddDriverModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitSaveDriver()" id="modal-submit-driver-btn" class="bg-purple-600 hover:bg-purple-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5">
+                    <span>💾</span> Save Driver
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 6: Sales Representative Registry (Add / Edit) -->
+    <div id="addSalesRepModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
+                        💼
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100" id="salesrep-modal-title">Sales Representative Registry</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Register sales reps for trip requests & shortfall tracking</p>
+                    </div>
+                </div>
+                <button onclick="closeAddSalesRepModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    ✕
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <input type="hidden" id="modal-salesrep-id" value="">
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Full Legal Name *</label>
+                    <input type="text" id="modal-salesrep-name" placeholder="e.g. Panashe Mazai" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">WhatsApp Phone Number *</label>
+                    <input type="text" id="modal-salesrep-phone" placeholder="e.g. 263772111222" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                    <span class="text-[10px] text-slate-400 mt-1 block">WhatsApp number used to submit trip requests</span>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Email Address (Optional)</label>
+                    <input type="email" id="modal-salesrep-email" placeholder="e.g. sales@tagoneswa.co.zw" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex items-center gap-2 pt-2">
+                    <input type="checkbox" id="modal-salesrep-active" checked class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300">
+                    <label for="modal-salesrep-active" class="text-xs font-bold text-slate-700 dark:text-zinc-300 cursor-pointer">Active Sales Representative</label>
+                </div>
+                <div id="modal-salesrep-feedback" class="text-xs font-bold hidden"></div>
+            </div>
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+                <button type="button" onclick="closeAddSalesRepModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitSaveSalesRep()" id="modal-submit-salesrep-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5">
+                    <span>💾</span> Save Sales Rep
                 </button>
             </div>
         </div>
@@ -2855,7 +3415,12 @@ async def dashboard_view(request: Request):
                                             <div class="font-extrabold text-slate-900 dark:text-zinc-100 text-sm">${{sp.name}}</div>
                                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">+${{sp.phone}}</div>
                                         </div>
-                                        <span class="text-[10px] px-2 py-0.5 rounded-full border ${{badgeClass}} whitespace-nowrap">${{badgeText}}</span>
+                                        <div class="flex items-center gap-1.5">
+                                            <button onclick="openAddSalesRepModal('${{sp.employee_id || ''}}', '${{(sp.name || '').replace(/'/g, \"\\\\'\")}}', '${{sp.phone}}', '${{(sp.email || '').replace(/'/g, \"\\\\'\")}}', true)" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 p-1 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs cursor-pointer">
+                                                ✏️
+                                            </button>
+                                            <span class="text-[10px] px-2 py-0.5 rounded-full border ${{badgeClass}} whitespace-nowrap">${{badgeText}}</span>
+                                        </div>
                                     </div>
                                     <div class="mt-3 bg-white dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-lg p-2.5">
                                         <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-zinc-500">Current Outstanding Debt</div>
@@ -3232,6 +3797,11 @@ async def dashboard_view(request: Request):
                                     ${{t.active ? 'Commercial Ready' : 'Maintenance'}}
                                 </span>
                             </td>
+                            <td class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">
+                                <button onclick="openAddTruckModal('${{t.truck_id}}', '${{t.truck_number}}', '${{t.plate_number}}', '${{(t.model_make || '').replace(/'/g, \"\\\\'\")}}', '${{t.body_type}}', '${{(t.home_depot || '').replace(/'/g, \"\\\\'\")}}', ${{t.active}})" class="text-blue-600 hover:text-blue-800 dark:hover:text-blue-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900/60 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer">
+                                    ✏️ Edit
+                                </button>
+                            </td>
                         </tr>
                     `).join('');
                 }}
@@ -3262,7 +3832,7 @@ async def dashboard_view(request: Request):
             const tbody = document.getElementById('fleet-drivers-table-body');
             if (tbody) {{
                 if (drivers.length === 0) {{
-                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No drivers found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No drivers found.</td></tr>';
                 }} else {{
                     tbody.innerHTML = pagedDrivers.map(d => `
                         <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
@@ -3275,6 +3845,11 @@ async def dashboard_view(request: Request):
                                     <span class="w-1.5 h-1.5 rounded-full ${{d.active ? 'bg-emerald-500' : 'bg-zinc-400'}}"></span>
                                     ${{d.active ? 'On Roster' : 'Off Duty'}}
                                 </span>
+                            </td>
+                            <td class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">
+                                <button onclick="openAddDriverModal('${{d.staff_id}}', '${{(d.full_name || '').replace(/'/g, \"\\\\'\")}}', '${{d.phone}}', '${{d.role}}', ${{d.active}})" class="text-purple-600 hover:text-purple-800 dark:hover:text-purple-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-900/60 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition cursor-pointer">
+                                    ✏️ Edit
+                                </button>
                             </td>
                         </tr>
                     `).join('');
@@ -3349,6 +3924,22 @@ async def dashboard_view(request: Request):
                 const fpInput = document.getElementById('modal-fuel-price');
                 if (fpInput && cachedData.fleet.fuel_price) {{
                     fpInput.value = Number(cachedData.fleet.fuel_price).toFixed(2);
+                }}
+                const mealInput = document.getElementById('modal-meal-rate');
+                if (mealInput && cachedData.fleet.meal_rate !== undefined) {{
+                    mealInput.value = Number(cachedData.fleet.meal_rate).toFixed(2);
+                }}
+                const accomInput = document.getElementById('modal-accom-rate');
+                if (accomInput && cachedData.fleet.accommodation_rate !== undefined) {{
+                    accomInput.value = Number(cachedData.fleet.accommodation_rate).toFixed(2);
+                }}
+                const budgetInput = document.getElementById('modal-budget-pct');
+                if (budgetInput && cachedData.fleet.expense_budget_pct !== undefined) {{
+                    budgetInput.value = (Number(cachedData.fleet.expense_budget_pct) * 100).toFixed(1);
+                }}
+                const vanInput = document.getElementById('modal-van-surcharge');
+                if (vanInput && cachedData.fleet.van_minimum_surcharge !== undefined) {{
+                    vanInput.value = Number(cachedData.fleet.van_minimum_surcharge).toFixed(2);
                 }}
                 if (cachedData.fleet.route_rules) {{
                     renderModalCityRules(cachedData.fleet.route_rules);
@@ -3692,6 +4283,287 @@ async def dashboard_view(request: Request):
                 }}
             }} catch (err) {{
                 tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-4 text-center text-rose-500">Failed to load audit logs: ${{err.message}}</td></tr>`;
+            }}
+        }}
+
+        // =============================================================
+        // MODAL 1B: OPERATIONAL RATES & SURCHARGES
+        // =============================================================
+        async function saveOperationalParams() {{
+            const mealInput = document.getElementById('modal-meal-rate');
+            const accomInput = document.getElementById('modal-accom-rate');
+            const budgetInput = document.getElementById('modal-budget-pct');
+            const vanInput = document.getElementById('modal-van-surcharge');
+            const btn = document.getElementById('modal-save-rates-btn');
+            const feedback = document.getElementById('rates-update-feedback');
+            if (!mealInput || !accomInput || !budgetInput || !vanInput || !btn) return;
+
+            const mealRate = parseFloat(mealInput.value);
+            const accomRate = parseFloat(accomInput.value);
+            const budgetPct = parseFloat(budgetInput.value) / 100.0;
+            const vanSurcharge = parseFloat(vanInput.value);
+
+            if (isNaN(mealRate) || isNaN(accomRate) || isNaN(budgetPct) || isNaN(vanSurcharge)) {{
+                alert('Please enter valid numeric values for all operational rates.');
+                return;
+            }}
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Saving Rates...';
+            if (feedback) feedback.classList.add('hidden');
+
+            try {{
+                const res = await fetch('/api/v2/config/update-operational-params', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        meal_rate: mealRate,
+                        accommodation_rate: accomRate,
+                        expense_budget_pct: budgetPct,
+                        van_minimum_surcharge: vanSurcharge
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast('Operational rates updated successfully!');
+                    if (feedback) {{
+                        feedback.textContent = '✅ Operational allowances and parameters updated in system cache';
+                        feedback.className = 'mt-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 block';
+                    }}
+                    await fetchDashboard();
+                }} else {{
+                    alert(data.detail || 'Failed to update operational parameters');
+                }}
+            }} catch (err) {{
+                alert('Network error while updating operational rates: ' + err.message);
+            }} finally {{
+                btn.disabled = false;
+                btn.innerHTML = '<span>💾</span> Save Rates & Surcharges';
+            }}
+        }}
+
+        // =============================================================
+        // MODAL 4: COMMERCIAL TRUCKS MANAGEMENT
+        // =============================================================
+        function openAddTruckModal(truckId = '', truckNum = '', plate = '', make = '', body = 'Horse', depot = 'Harare Central', active = true) {{
+            const modal = document.getElementById('addTruckModal');
+            if (!modal) return;
+            document.getElementById('modal-truck-id').value = truckId || '';
+            document.getElementById('truck-modal-title').textContent = truckId ? ('Edit Commercial Truck #' + truckNum) : 'Register New Commercial Truck';
+            document.getElementById('modal-truck-number').value = truckNum || '';
+            document.getElementById('modal-truck-plate').value = plate || '';
+            document.getElementById('modal-truck-make').value = make || '';
+            document.getElementById('modal-truck-body').value = body || 'Horse';
+            document.getElementById('modal-truck-depot').value = depot || 'Harare Central';
+            document.getElementById('modal-truck-active').checked = (active === true || active === 'true');
+
+            const fb = document.getElementById('modal-truck-feedback');
+            if (fb) fb.classList.add('hidden');
+            modal.classList.remove('hidden');
+        }}
+
+        function closeAddTruckModal() {{
+            const modal = document.getElementById('addTruckModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        async function submitSaveTruck() {{
+            const truckId = document.getElementById('modal-truck-id').value;
+            const truckNum = (document.getElementById('modal-truck-number').value || '').trim();
+            const plate = (document.getElementById('modal-truck-plate').value || '').trim();
+            const make = (document.getElementById('modal-truck-make').value || '').trim();
+            const body = document.getElementById('modal-truck-body').value;
+            const depot = (document.getElementById('modal-truck-depot').value || '').trim();
+            const active = document.getElementById('modal-truck-active').checked;
+            const btn = document.getElementById('modal-submit-truck-btn');
+            const fb = document.getElementById('modal-truck-feedback');
+
+            if (!truckNum || !plate) {{
+                alert('Please provide both Truck Number and Plate Number.');
+                return;
+            }}
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Saving Truck...';
+
+            try {{
+                const res = await fetch('/api/v2/fleet/trucks/save', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        truck_id: truckId ? parseInt(truckId) : null,
+                        truck_number: truckNum,
+                        plate_number: plate,
+                        model_make: make,
+                        body_type: body,
+                        home_depot: depot,
+                        active: active
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Truck ${{truckNum}} (${{plate}}) saved successfully!`);
+                    closeAddTruckModal();
+                    await fetchDashboard();
+                }} else {{
+                    if (fb) {{
+                        fb.textContent = data.detail || 'Failed to save truck';
+                        fb.className = 'text-xs font-bold text-rose-600 block';
+                    }} else {{
+                        alert(data.detail || 'Failed to save truck');
+                    }}
+                }}
+            }} catch (err) {{
+                alert('Network error saving truck: ' + err.message);
+            }} finally {{
+                btn.disabled = false;
+                btn.innerHTML = '<span>💾</span> Save Truck Details';
+            }}
+        }}
+
+        // =============================================================
+        // MODAL 5: COMMERCIAL DRIVERS MANAGEMENT
+        // =============================================================
+        function openAddDriverModal(staffId = '', name = '', phone = '', role = 'COMMERCIAL DRIVER', active = true) {{
+            const modal = document.getElementById('addDriverModal');
+            if (!modal) return;
+            document.getElementById('modal-driver-id').value = staffId || '';
+            document.getElementById('driver-modal-title').textContent = staffId ? ('Edit Commercial Driver: ' + name) : 'Register New Commercial Driver';
+            document.getElementById('modal-driver-name').value = name || '';
+            document.getElementById('modal-driver-phone').value = phone || '';
+            document.getElementById('modal-driver-role').value = role || 'COMMERCIAL DRIVER';
+            document.getElementById('modal-driver-active').checked = (active === true || active === 'true');
+
+            const fb = document.getElementById('modal-driver-feedback');
+            if (fb) fb.classList.add('hidden');
+            modal.classList.remove('hidden');
+        }}
+
+        function closeAddDriverModal() {{
+            const modal = document.getElementById('addDriverModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        async function submitSaveDriver() {{
+            const staffId = document.getElementById('modal-driver-id').value;
+            const name = (document.getElementById('modal-driver-name').value || '').trim();
+            const phone = (document.getElementById('modal-driver-phone').value || '').trim();
+            const role = document.getElementById('modal-driver-role').value;
+            const active = document.getElementById('modal-driver-active').checked;
+            const btn = document.getElementById('modal-submit-driver-btn');
+            const fb = document.getElementById('modal-driver-feedback');
+
+            if (!name || !phone) {{
+                alert('Please enter full legal name and WhatsApp phone number.');
+                return;
+            }}
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Saving Driver...';
+
+            try {{
+                const res = await fetch('/api/v2/fleet/drivers/save', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        staff_id: staffId ? parseInt(staffId) : null,
+                        full_name: name,
+                        phone: phone,
+                        role: role,
+                        active: active
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Driver ${{name}} saved successfully!`);
+                    closeAddDriverModal();
+                    await fetchDashboard();
+                }} else {{
+                    if (fb) {{
+                        fb.textContent = data.detail || 'Failed to save driver';
+                        fb.className = 'text-xs font-bold text-rose-600 block';
+                    }} else {{
+                        alert(data.detail || 'Failed to save driver');
+                    }}
+                }}
+            }} catch (err) {{
+                alert('Network error saving driver: ' + err.message);
+            }} finally {{
+                btn.disabled = false;
+                btn.innerHTML = '<span>💾</span> Save Driver';
+            }}
+        }}
+
+        // =============================================================
+        // MODAL 6: SALES REPRESENTATIVE MANAGEMENT
+        // =============================================================
+        function openAddSalesRepModal(empId = '', name = '', phone = '', email = '', active = true) {{
+            const modal = document.getElementById('addSalesRepModal');
+            if (!modal) return;
+            document.getElementById('modal-salesrep-id').value = empId || '';
+            document.getElementById('salesrep-modal-title').textContent = empId ? ('Edit Sales Rep: ' + name) : 'Register New Sales Representative';
+            document.getElementById('modal-salesrep-name').value = name || '';
+            document.getElementById('modal-salesrep-phone').value = phone || '';
+            document.getElementById('modal-salesrep-email').value = email || '';
+            document.getElementById('modal-salesrep-active').checked = (active === true || active === 'true');
+
+            const fb = document.getElementById('modal-salesrep-feedback');
+            if (fb) fb.classList.add('hidden');
+            modal.classList.remove('hidden');
+        }}
+
+        function closeAddSalesRepModal() {{
+            const modal = document.getElementById('addSalesRepModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        async function submitSaveSalesRep() {{
+            const empId = document.getElementById('modal-salesrep-id').value;
+            const name = (document.getElementById('modal-salesrep-name').value || '').trim();
+            const phone = (document.getElementById('modal-salesrep-phone').value || '').trim();
+            const email = (document.getElementById('modal-salesrep-email').value || '').trim();
+            const active = document.getElementById('modal-salesrep-active').checked;
+            const btn = document.getElementById('modal-submit-salesrep-btn');
+            const fb = document.getElementById('modal-salesrep-feedback');
+
+            if (!name || !phone) {{
+                alert('Please enter sales representative name and WhatsApp phone number.');
+                return;
+            }}
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Saving Sales Rep...';
+
+            try {{
+                const res = await fetch('/api/v2/fleet/sales-reps/save', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        employee_id: empId ? parseInt(empId) : null,
+                        full_name: name,
+                        phone: phone,
+                        email: email,
+                        active: active
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Sales Rep ${{name}} saved successfully!`);
+                    closeAddSalesRepModal();
+                    await fetchDashboard();
+                }} else {{
+                    if (fb) {{
+                        fb.textContent = data.detail || 'Failed to save sales representative';
+                        fb.className = 'text-xs font-bold text-rose-600 block';
+                    }} else {{
+                        alert(data.detail || 'Failed to save sales representative');
+                    }}
+                }}
+            }} catch (err) {{
+                alert('Network error saving sales rep: ' + err.message);
+            }} finally {{
+                btn.disabled = false;
+                btn.innerHTML = '<span>💾</span> Save Sales Rep';
             }}
         }}
 

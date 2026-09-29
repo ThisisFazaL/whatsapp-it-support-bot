@@ -96,6 +96,11 @@ def get_expense_budget_pct() -> float:
     return float(SETTINGS_CACHE.get("expense_budget_pct", 0.04))
 
 
+def get_van_minimum_surcharge() -> float:
+    """Returns active van minimum surcharge in USD."""
+    return float(SETTINGS_CACHE.get("van_minimum_surcharge", 1500.00))
+
+
 def get_cached_city_rule(city_key: str) -> Optional[Dict[str, Any]]:
     """Returns cached route rule for a city key."""
     clean = (city_key or "").strip().lower()
