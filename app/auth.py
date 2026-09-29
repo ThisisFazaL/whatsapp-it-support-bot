@@ -17,7 +17,21 @@ USERS_DB = {
         "password": os.getenv("DASHBOARD_ADMIN_PASS", "Admin@Tagoneswa2026!"),
         "role": "MASTER_ADMIN",
         "name": "Master Administrator",
-        "allowed_domains": ["it", "projects", "logistics", "fleet"]
+        "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+    },
+    "accounts": {
+        "username": "accounts",
+        "password": os.getenv("DASHBOARD_ACCOUNTS_PASS", "Accounts@Tagoneswa2026!"),
+        "role": "ACCOUNTS_USER",
+        "name": "Accounts & Finance Lead",
+        "allowed_domains": ["accounts", "fleet"]
+    },
+    "logisticsmgr": {
+        "username": "logisticsmgr",
+        "password": os.getenv("DASHBOARD_LOGISTICSMGR_PASS", "LogisticsMgr@2026!"),
+        "role": "LOGISTICS_MANAGER",
+        "name": "Logistics Operations Manager",
+        "allowed_domains": ["logistics", "fleet"]
     },
     "fleet": {
         "username": "fleet",

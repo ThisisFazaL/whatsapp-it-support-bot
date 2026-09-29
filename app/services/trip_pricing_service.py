@@ -234,6 +234,26 @@ def get_corridor(corridor_id_or_number: str) -> Optional[Dict[str, Any]]:
 def get_city_minimum(city_name: str, is_van_sales: bool = False) -> Dict[str, Any]:
     """Retrieves required minimum sales, corridor, and route info for a given destination."""
     canonical = normalize_city_name(city_name)
+
+    # 1. Check dynamic database-backed config cache first
+    try:
+        from app.services.config_service import get_cached_city_rule
+        cached_rule = get_cached_city_rule(canonical)
+        if cached_rule:
+            required_min = cached_rule["van_min"] if is_van_sales else cached_rule["min_sales"]
+            corridor_key = cached_rule.get("corridor")
+            corridor_data = MASTER_CORRIDORS.get(corridor_key) if corridor_key else None
+            return {
+                "canonical_city": cached_rule.get("city_name", canonical.title()),
+                "route": cached_rule.get("route", ""),
+                "corridor": corridor_key,
+                "corridor_name": corridor_data["name"] if corridor_data else None,
+                "required_minimum": float(required_min),
+                "is_van_sales": is_van_sales
+            }
+    except Exception:
+        pass
+
     if canonical not in CITY_MINIMUMS:
         raise CityNotFoundError(f"Destination area '{city_name}' is not configured in minimum sales rules.")
 

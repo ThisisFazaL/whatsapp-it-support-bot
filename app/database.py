@@ -370,6 +370,85 @@ class AdminNotificationLog(Base):
     ticket_number = Column(String(50), index=True, nullable=False)
     delivered_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+class WebUser(Base):
+    __tablename__ = "web_users"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    full_name = Column(String(100), nullable=False)
+    role = Column(String(50), nullable=False, default="LOGISTICS_USER")  # MASTER_ADMIN, ACCOUNTS_USER, LOGISTICS_MANAGER, LOGISTICS_USER, SALES_ADMIN, IT_ADMIN, PROJECTS_ADMIN
+    email = Column(String(100), nullable=True)
+    phone = Column(String(30), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key = Column(String(100), primary_key=True)  # e.g. "fuel_price_usd", "meal_rate_usd", "accommodation_rate_usd", "expense_budget_pct"
+    category = Column(String(50), nullable=False, default="GENERAL")  # "PRICING", "ALLOWANCES", "FLEET", "GENERAL"
+    value = Column(Text, nullable=False)
+    data_type = Column(String(20), default="float")  # "float", "integer", "string", "json", "boolean"
+    label = Column(String(150), nullable=False)
+    description = Column(Text, nullable=True)
+    updated_by = Column(String(100), nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class SystemSettingHistory(Base):
+    __tablename__ = "system_setting_history"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    setting_key = Column(String(100), nullable=False, index=True)
+    previous_value = Column(Text, nullable=True)
+    new_value = Column(Text, nullable=False)
+    changed_by = Column(String(100), nullable=True)
+    change_reason = Column(Text, nullable=True)
+    effective_from = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class FleetRouteRule(Base):
+    __tablename__ = "fleet_route_rules"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    city_key = Column(String(50), unique=True, nullable=False, index=True)  # e.g. "norton", "bulawayo"
+    city_name = Column(String(100), nullable=False)
+    corridor_name = Column(String(100), nullable=False)  # e.g. "Corridor 1"
+    route_label = Column(String(150), nullable=True)
+    distance_km = Column(Float, nullable=False, default=0.0)
+    min_sales = Column(Float, nullable=False, default=0.0)
+    van_min = Column(Float, nullable=False, default=0.0)
+    is_active = Column(Boolean, default=True)
+    updated_by = Column(String(100), nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class SalesRepPayment(Base):
+    __tablename__ = "sales_rep_payments"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    salesperson_phone = Column(String(30), nullable=False, index=True)
+    salesperson_name = Column(String(100), nullable=True)
+    cleared_amount = Column(Float, nullable=False)
+    payment_method = Column(String(50), default="CASH")  # CASH, BANK_TRANSFER, ECOCASH, PAYROLL_DEDUCTION
+    reference_number = Column(String(100), nullable=True)
+    previous_balance = Column(Float, nullable=False, default=0.0)
+    remaining_balance = Column(Float, nullable=False, default=0.0)
+    payment_date = Column(DateTime, default=datetime.datetime.utcnow)
+    recorded_by = Column(String(100), nullable=True)
+    remarks = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=True)
+    username = Column(String(100), nullable=False, index=True)
+    user_role = Column(String(50), nullable=True)
+    action = Column(String(50), nullable=False, index=True)  # UPDATE_FUEL_PRICE, CLEAR_PAYMENT, UPDATE_ROUTE, etc.
+    module = Column(String(50), nullable=False, index=True)  # CONFIG, FINANCE, FLEET, MASTER_DATA, AUTH
+    entity_id = Column(String(100), nullable=True)
+    previous_value = Column(JSON, nullable=True)
+    new_value = Column(JSON, nullable=True)
+    remarks = Column(Text, nullable=True)
+    ip_address = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+
 engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
@@ -597,6 +676,104 @@ async def init_db_models():
                     )
                 """))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_dpl_driver_phone ON driver_pending_ledger(driver_phone)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS web_users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR(50) UNIQUE NOT NULL,
+                        password_hash VARCHAR(255) NOT NULL,
+                        full_name VARCHAR(100) NOT NULL,
+                        role VARCHAR(50) NOT NULL DEFAULT 'LOGISTICS_USER',
+                        email VARCHAR(100),
+                        phone VARCHAR(30),
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_web_users_username ON web_users(username)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS system_settings (
+                        key VARCHAR(100) PRIMARY KEY,
+                        category VARCHAR(50) NOT NULL DEFAULT 'GENERAL',
+                        value TEXT NOT NULL,
+                        data_type VARCHAR(20) DEFAULT 'float',
+                        label VARCHAR(150) NOT NULL,
+                        description TEXT,
+                        updated_by VARCHAR(100),
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS system_setting_history (
+                        id SERIAL PRIMARY KEY,
+                        setting_key VARCHAR(100) NOT NULL,
+                        previous_value TEXT,
+                        new_value TEXT NOT NULL,
+                        changed_by VARCHAR(100),
+                        change_reason TEXT,
+                        effective_from TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ssh_key ON system_setting_history(setting_key)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fleet_route_rules (
+                        id SERIAL PRIMARY KEY,
+                        city_key VARCHAR(50) UNIQUE NOT NULL,
+                        city_name VARCHAR(100) NOT NULL,
+                        corridor_name VARCHAR(100) NOT NULL,
+                        route_label VARCHAR(150),
+                        distance_km DOUBLE PRECISION DEFAULT 0.0,
+                        min_sales DOUBLE PRECISION DEFAULT 0.0,
+                        van_min DOUBLE PRECISION DEFAULT 0.0,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        updated_by VARCHAR(100),
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_frr_city_key ON fleet_route_rules(city_key)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS sales_rep_payments (
+                        id SERIAL PRIMARY KEY,
+                        salesperson_phone VARCHAR(30) NOT NULL,
+                        salesperson_name VARCHAR(100),
+                        cleared_amount DOUBLE PRECISION NOT NULL,
+                        payment_method VARCHAR(50) DEFAULT 'CASH',
+                        reference_number VARCHAR(100),
+                        previous_balance DOUBLE PRECISION DEFAULT 0.0,
+                        remaining_balance DOUBLE PRECISION DEFAULT 0.0,
+                        payment_date TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        recorded_by VARCHAR(100),
+                        remarks TEXT,
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_srp_phone ON sales_rep_payments(salesperson_phone)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS audit_logs (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER,
+                        username VARCHAR(100) NOT NULL,
+                        user_role VARCHAR(50),
+                        action VARCHAR(50) NOT NULL,
+                        module VARCHAR(50) NOT NULL,
+                        entity_id VARCHAR(100),
+                        previous_value JSONB,
+                        new_value JSONB,
+                        remarks TEXT,
+                        ip_address VARCHAR(50),
+                        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_username ON audit_logs(username)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_module ON audit_logs(module)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_created_at ON audit_logs(created_at)"))
         except Exception as e:
             print(f"Database table init note: {e}")
             
@@ -897,6 +1074,14 @@ async def init_db_models():
         except Exception as p_err:
             import logging
             logging.getLogger("database").warning(f"Products seed note: {p_err}")
+
+        # Seed System Settings, Route Rules, and Web Users if empty
+        try:
+            from app.services.config_service import seed_config_and_routes
+            await seed_config_and_routes(session)
+        except Exception as cfg_err:
+            import logging
+            logging.getLogger("database").warning(f"Config service seed note: {cfg_err}")
 
 
 

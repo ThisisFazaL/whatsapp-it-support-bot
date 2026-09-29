@@ -3,8 +3,13 @@ import datetime
 from typing import Dict, Any, Tuple
 
 
-MEAL_RATE_PER_PERSON = 2.00  # $2.00 per person per meal as requested by user
-ACCOMMODATION_RATE_PER_PERSON = 15.00  # $15.00 per person per night
+try:
+    from app.services.config_service import get_meal_rate, get_accommodation_rate
+    MEAL_RATE_PER_PERSON = get_meal_rate()
+    ACCOMMODATION_RATE_PER_PERSON = get_accommodation_rate()
+except Exception:
+    MEAL_RATE_PER_PERSON = 2.00  # $2.00 per person per meal as requested by user
+    ACCOMMODATION_RATE_PER_PERSON = 15.00  # $15.00 per person per night
 
 
 def parse_time_to_minutes(time_str: str) -> int:

@@ -10,7 +10,9 @@ from sqlalchemy.orm import selectinload
 from app.database import (
     get_db, Ticket, MaintenanceTicket, TicketAssignment, MaintenanceTicketAssignment,
     SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus,
-    FleetTripApproval, FleetPendingLedger
+    FleetTripApproval, FleetPendingLedger, FleetTripRequest, FleetCustomerSchedule,
+    FleetEmergencyExpense, SalesRepPayment, AuditLog, FleetRouteRule, SystemSetting,
+    get_sales_rep_pending_balance
 )
 from app.workshop.models import (
     WorkshopTicket, WorkshopTruck, WorkshopStaff, WorkshopPartsRequest
@@ -18,6 +20,10 @@ from app.workshop.models import (
 from app.auth import (
     authenticate_user, create_session_token, get_current_user_from_request,
     COOKIE_NAME, SESSION_MAX_AGE, USERS_DB
+)
+from app.services.config_service import (
+    get_fuel_price, get_meal_rate, get_accommodation_rate, get_expense_budget_pct,
+    get_all_cached_city_rules, update_system_setting, update_city_rule, recalculate_all_city_minimums
 )
 
 logger = logging.getLogger("dashboard")
@@ -239,6 +245,159 @@ async def api_logout():
     resp = JSONResponse({"status": "logged_out"})
     resp.delete_cookie(key=COOKIE_NAME, path="/")
     return resp
+
+# -------------------------------------------------------------
+# Configuration & Management APIs (V2)
+# -------------------------------------------------------------
+@router.get("/api/v2/config/settings")
+async def api_get_settings(request: Request):
+    """Returns current active business rules and all 45 city minimum thresholds."""
+    user = get_current_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {
+        "fuel_price_usd": get_fuel_price(),
+        "expense_budget_pct": get_expense_budget_pct(),
+        "meal_rate_usd": get_meal_rate(),
+        "accommodation_rate_usd": get_accommodation_rate(),
+        "route_rules": get_all_cached_city_rules()
+    }
+
+
+@router.post("/api/v2/config/update-fuel")
+async def api_update_fuel(request: Request, db: AsyncSession = Depends(get_db)):
+    """Updates active fuel price and optionally auto-recalculates all 45 city minimums."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "ACCOUNTS_USER"):
+        raise HTTPException(status_code=403, detail="Permission denied. Admin or Manager role required.")
+    
+    body = await request.json()
+    new_price = float(body.get("fuel_price", 1.55))
+    recalc = bool(body.get("recalculate_cities", False))
+    uname = user.get("name", "Admin")
+
+    if recalc:
+        res = await recalculate_all_city_minimums(db, new_price, updated_by=uname)
+        return res
+    else:
+        await update_system_setting(db, "fuel_price_usd", new_price, changed_by=uname, reason=f"Fuel price updated to ${new_price:.2f}/L")
+        return {"status": "success", "fuel_price": new_price}
+
+
+@router.post("/api/v2/config/update-city-minimum")
+async def api_update_city_min(request: Request, db: AsyncSession = Depends(get_db)):
+    """Updates minimum sales and van minimum for a specific city."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "ACCOUNTS_USER"):
+        raise HTTPException(status_code=403, detail="Permission denied.")
+    
+    body = await request.json()
+    city_key = body.get("city_key", "").strip().lower()
+    min_sales = float(body.get("min_sales", 0.0))
+    van_min = float(body.get("van_min", 0.0))
+    uname = user.get("name", "Admin")
+
+    ok = await update_city_rule(db, city_key, min_sales, van_min, updated_by=uname)
+    return {"status": "success" if ok else "not_found", "city_key": city_key}
+
+
+@router.post("/api/v2/finance/clear-sales-rep-payment")
+async def api_clear_sales_rep_payment(request: Request, db: AsyncSession = Depends(get_db)):
+    """Clears pending sales rep shortfall debt with audit trail and ledger offsetting."""
+    user = get_current_user_from_request(request)
+    if not user or user.get("role") not in ("MASTER_ADMIN", "ACCOUNTS_USER", "FLEET_ADMIN", "SALES_ADMIN"):
+        raise HTTPException(status_code=403, detail="Permission denied. Accounts or Admin role required.")
+    
+    body = await request.json()
+    phone = body.get("salesperson_phone", "").replace("+", "").strip()
+    name = body.get("salesperson_name", "")
+    cleared_amount = round(float(body.get("cleared_amount", 0.0)), 2)
+    payment_method = body.get("payment_method", "CASH")
+    reference = body.get("reference_number", "").strip()
+    remarks = body.get("remarks", "").strip()
+
+    if cleared_amount <= 0:
+        raise HTTPException(status_code=400, detail="Cleared amount must be greater than zero.")
+
+    current_balance = await get_sales_rep_pending_balance(db, phone)
+    remaining_balance = round(current_balance - cleared_amount, 2)
+    uname = user.get("name", "Accounts")
+
+    # 1. Record payment clearance
+    payment_rec = SalesRepPayment(
+        salesperson_phone=phone,
+        salesperson_name=name,
+        cleared_amount=cleared_amount,
+        payment_method=payment_method,
+        reference_number=reference,
+        previous_balance=current_balance,
+        remaining_balance=remaining_balance,
+        recorded_by=uname,
+        remarks=remarks,
+        payment_date=datetime.datetime.utcnow(),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(payment_rec)
+
+    # 2. Add offsetting recovery entry into FleetPendingLedger (negative amount offsets debt)
+    ledger_entry = FleetPendingLedger(
+        salesperson_phone=phone,
+        salesperson_name=name,
+        entry_type="PAYMENT_CLEARED_BY_ACCOUNTS",
+        amount=-cleared_amount,
+        notes=f"Payment cleared via {payment_method}. Ref: {reference}. Notes: {remarks}",
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(ledger_entry)
+
+    # 3. Add Audit Log
+    audit = AuditLog(
+        username=uname,
+        user_role=user.get("role", "ACCOUNTS_USER"),
+        action="CLEAR_SALES_REP_DEBT",
+        module="FINANCE",
+        entity_id=phone,
+        previous_value={"balance": current_balance},
+        new_value={"cleared": cleared_amount, "remaining": remaining_balance, "method": payment_method, "ref": reference},
+        remarks=remarks,
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {
+        "status": "success",
+        "salesperson_phone": phone,
+        "cleared_amount": cleared_amount,
+        "remaining_balance": remaining_balance
+    }
+
+
+@router.get("/api/v2/audit/logs")
+async def api_get_audit_logs(request: Request, db: AsyncSession = Depends(get_db)):
+    """Returns recent audit logs across finance, config, and fleet operations."""
+    user = get_current_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    stmt = select(AuditLog).order_by(AuditLog.id.desc()).limit(100)
+    res = await db.execute(stmt)
+    logs = res.scalars().all()
+    records = []
+    for l in logs:
+        records.append({
+            "id": l.id,
+            "username": l.username,
+            "user_role": l.user_role or "--",
+            "action": l.action,
+            "module": l.module,
+            "entity_id": l.entity_id or "--",
+            "previous_value": l.previous_value,
+            "new_value": l.new_value,
+            "remarks": l.remarks or "",
+            "created_at": l.created_at.strftime("%Y-%m-%d %H:%M:%S") if l.created_at else ""
+        })
+    return {"status": "success", "logs": records}
 
 # -------------------------------------------------------------
 # Data API: Partitioned & Role-Gated Metrics & Records
@@ -689,12 +848,90 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "date_only": le.created_at.strftime("%Y-%m-%d") if le.created_at else ""
             })
 
+        # D. All 7-stage Trips
+        trips_stmt = select(FleetTripRequest).order_by(FleetTripRequest.created_at.desc())
+        raw_trips = (await db.execute(trips_stmt)).scalars().all()
+        trips_list = []
+        for tr in raw_trips:
+            trips_list.append({
+                "id": tr.id,
+                "trip_id": tr.trip_id,
+                "company_name": tr.company_name,
+                "salesperson_name": tr.salesperson_name or "Sales Rep",
+                "salesperson_phone": tr.salesperson_phone,
+                "destination_city": tr.destination_city,
+                "route": tr.route or tr.destination_city,
+                "truck_plate": tr.truck_plate or "Pending Allocation",
+                "driver_name": tr.driver_name or "Pending Allocation",
+                "driver_phone": tr.driver_phone or "",
+                "total_allowance": round(tr.total_allowance or 0.0, 2),
+                "transport_charge": round(tr.transport_charge or 0.0, 2),
+                "status": tr.status,
+                "distance_km": tr.distance_km or 0.0,
+                "start_odometer": tr.start_odometer or 0.0,
+                "end_odometer": tr.end_odometer or 0.0,
+                "discrepancy_amount": round(tr.discrepancy_amount or 0.0, 2),
+                "discrepancy_reason": tr.discrepancy_reason or "",
+                "created_at": tr.created_at.strftime("%Y-%m-%d %H:%M") if tr.created_at else "",
+                "departed_at": tr.departed_at.strftime("%Y-%m-%d %H:%M") if tr.departed_at else "",
+                "returned_at": tr.returned_at.strftime("%Y-%m-%d %H:%M") if tr.returned_at else "",
+                "closed_at": tr.closed_at.strftime("%Y-%m-%d %H:%M") if tr.closed_at else ""
+            })
+
+        # E. Payment Settlements
+        payments_stmt = select(SalesRepPayment).order_by(SalesRepPayment.created_at.desc()).limit(100)
+        raw_payments = (await db.execute(payments_stmt)).scalars().all()
+        payments_list = []
+        for pm in raw_payments:
+            payments_list.append({
+                "id": pm.id,
+                "salesperson_name": pm.salesperson_name or "Sales Rep",
+                "salesperson_phone": pm.salesperson_phone,
+                "cleared_amount": round(pm.cleared_amount, 2),
+                "payment_method": pm.payment_method,
+                "reference_number": pm.reference_number or "--",
+                "previous_balance": round(pm.previous_balance, 2),
+                "remaining_balance": round(pm.remaining_balance, 2),
+                "recorded_by": pm.recorded_by or "Accounts",
+                "remarks": pm.remarks or "",
+                "payment_date": pm.payment_date.strftime("%Y-%m-%d %H:%M") if pm.payment_date else ""
+            })
+
+        # F. Workshop Trucks and Drivers
+        ws_trucks_all = (await db.execute(select(WorkshopTruck))).scalars().all()
+        trucks_list = [{
+            "truck_id": wt.truck_id,
+            "truck_number": wt.truck_number,
+            "plate_number": wt.plate_number,
+            "model_make": wt.model_make,
+            "body_type": wt.body_type,
+            "home_depot": wt.home_depot,
+            "active": wt.active
+        } for wt in ws_trucks_all]
+
+        ws_drivers_all = (await db.execute(select(WorkshopStaff).where(WorkshopStaff.role.ilike("%DRIVER%")))).scalars().all()
+        drivers_list = [{
+            "staff_id": wd.staff_id,
+            "full_name": wd.full_name,
+            "phone": wd.phone,
+            "role": wd.role,
+            "active": wd.active
+        } for wd in ws_drivers_all]
+
         fleet_payload = {
             "stats": fleet_stats,
             "salespersons": salespersons_list,
             "records": approval_records,
+            "trips": trips_list,
+            "payments": payments_list,
             "ledger": ledger_records,
-            "cities": sorted(list(cities_set))
+            "cities": sorted(list(cities_set)),
+            "route_rules": get_all_cached_city_rules(),
+            "fuel_price": get_fuel_price(),
+            "meal_rate": get_meal_rate(),
+            "accommodation_rate": get_accommodation_rate(),
+            "trucks": trucks_list,
+            "drivers": drivers_list
         }
 
     # Master Cross-Domain Executive KPI Calculation
@@ -752,13 +989,13 @@ async def dashboard_view(request: Request):
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet"])
-    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
+    allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet", "accounts", "admin"])
+    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "LOGISTICS_MANAGER") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
 
     # Generate navigation tab buttons based on allowed domains
     tabs_html = []
     if "fleet" in allowed:
-        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Fleet Approval</button>')
+        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Commercial Fleet Operations</button>')
     if "it" in allowed:
         tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>💻</span> IT Support</button>')
     if "projects" in allowed:
@@ -768,6 +1005,41 @@ async def dashboard_view(request: Request):
 
     nav_tabs_markup = "\n".join(tabs_html)
     allowed_domains_json = str(allowed).replace("'", '"')
+
+    # Construct Dynamic Role-Based Sidebar Navigation
+    user_role = user.get("role", "LOGISTICS_USER")
+    user_name = user.get("name", "User")
+    sidebar_links = []
+    sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Dashboards</div>')
+
+    if user_role == "MASTER_ADMIN":
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>👑</span> Master Admin Dashboard</button>')
+
+    if user_role in ("MASTER_ADMIN", "ACCOUNTS_USER") or "accounts" in allowed or "fleet" in allowed:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>💼</span> Accounts & Finance</button>')
+
+    if user_role in ("MASTER_ADMIN", "LOGISTICS_MANAGER") or "fleet" in allowed:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>📈</span> Logistics Manager Hub</button>')
+
+    if "logistics" in allowed or "fleet" in allowed:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>🚛</span> Operations Execution</button>')
+
+    sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Operations & Fleet</div>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛣️</span> 7-Stage Trips Pipeline</button>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🚚</span> 39 Commercial Trucks</button>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👤</span> 21 Commercial Drivers</button>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📍</span> 45 Delivery Corridors & Stops</button>')
+
+    sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👥</span> Sales Rep Debt Ledger</button>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>💳</span> Cleared Payments History</button>')
+    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📜</span> Shortfall Recovery Ledger</button>')
+
+    sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
+    sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>⚙️</span> Edit Fuel & City Minimums</button>')
+    sidebar_links.append('<button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛡️</span> System Audit Logs</button>')
+
+    sidebar_markup = "\n".join(sidebar_links)
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -823,6 +1095,52 @@ async def dashboard_view(request: Request):
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-black text-slate-800 dark:text-zinc-100 min-h-screen pb-16 transition-colors duration-200">
+    <!-- Sliding Sidebar Backdrop -->
+    <div id="sidebar-backdrop" onclick="toggleSidebar(false)" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-40 hidden transition-opacity duration-300"></div>
+
+    <!-- 3-Line Sliding Sidebar Navigation Menu -->
+    <aside id="sliding-sidebar" class="fixed top-0 left-0 bottom-0 w-72 sm:w-80 bg-white dark:bg-[#0c0c10] border-r border-slate-200 dark:border-zinc-800 z-50 transform -translate-x-full transition-transform duration-300 ease-in-out shadow-2xl flex flex-col">
+        <!-- Sidebar Header -->
+        <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between">
+            <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center text-white text-base font-bold shadow-md shadow-blue-500/20">
+                    🚚
+                </div>
+                <div>
+                    <h3 class="text-sm font-extrabold text-slate-900 dark:text-zinc-100">Tagoneswa Hub</h3>
+                    <p class="text-[10px] text-slate-500 dark:text-zinc-400 font-medium">Enterprise Central Control</p>
+                </div>
+            </div>
+            <button onclick="toggleSidebar(false)" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer" title="Close Menu">
+                ✕
+            </button>
+        </div>
+
+        <!-- User Profile Pill in Sidebar -->
+        <div class="p-3.5 mx-3 mt-3 bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-2xl flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 font-extrabold text-sm flex items-center justify-center">
+                {user_name[:2].upper()}
+            </div>
+            <div class="overflow-hidden">
+                <div class="text-xs font-bold text-slate-900 dark:text-zinc-100 truncate">{user_name}</div>
+                <div class="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> {user_role.replace('_', ' ')}
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Links (Dynamic by Role) -->
+        <nav class="flex-1 overflow-y-auto p-3 space-y-1 no-scrollbar">
+            {sidebar_markup}
+        </nav>
+
+        <!-- Sidebar Footer -->
+        <div class="p-3.5 border-t border-slate-200 dark:border-zinc-800 flex items-center justify-between text-[11px] text-slate-400 dark:text-zinc-500">
+            <span>Enterprise Operations v2.4</span>
+            <button onclick="handleLogout()" class="text-rose-500 hover:underline font-bold cursor-pointer">Logout</button>
+        </div>
+    </aside>
+
     <!-- Toast Notification -->
     <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none bg-slate-900 dark:bg-[#121216] text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 dark:border-zinc-800 text-xs font-semibold flex items-center gap-2">
         <span id="toastIcon">✅</span>
@@ -835,7 +1153,11 @@ async def dashboard_view(request: Request):
             <div class="flex flex-col md:flex-row items-center justify-between gap-3">
                 <!-- Top Row: Brand & Mobile Actions -->
                 <div class="flex items-center justify-between w-full md:w-auto gap-3">
-                    <div class="flex items-center gap-2.5">
+                    <div class="flex items-center gap-2 sm:gap-2.5">
+                        <!-- 3-line hamburger menu toggle button -->
+                        <button onclick="toggleSidebar(true)" class="p-2 rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer border border-slate-200 dark:border-zinc-800 shadow-xs flex items-center justify-center text-lg leading-none" title="Open Navigation Menu">
+                            ☰
+                        </button>
                         <div class="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-500 rounded-xl flex items-center justify-center text-white text-lg sm:text-xl font-bold shadow-md shadow-blue-500/20 shrink-0 border border-blue-400/30">
                             🚚
                         </div>
@@ -1212,22 +1534,30 @@ async def dashboard_view(request: Request):
             </div>
         </div>
         <!-- ========================================================= -->
-        <!-- TAB 4: FLEET APPROVAL & ANTI-FRAUD SALES AUDIT -->
+        <!-- TAB 4: COMMERCIAL FLEET & LOGISTICS OPERATIONS -->
         <!-- ========================================================= -->
         <div id="view-fleet" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'fleet' in allowed and default_tab == 'fleet' else 'none'}">
-            <!-- Executive Fleet Command Center Banner (Exclusively in Fleet Approval) -->
+            <!-- Executive Fleet Command Center Banner -->
             <div id="master-kpi-banner" class="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 dark:from-[#0a0a0f] dark:via-[#0c0c14] dark:to-[#08080c] text-white rounded-3xl p-5 sm:p-7 shadow-2xl border border-slate-800 dark:border-zinc-800">
-                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 dark:border-zinc-800/80 pb-4 mb-5">
+                <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800/80 dark:border-zinc-800/80 pb-4 mb-5">
                     <div>
                         <div class="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 border border-blue-400/30 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase mb-1.5">
-                            ⚡ Fleet Approval & Audit Operations
+                            ⚡ Commercial Fleet & Logistics Operations
                         </div>
-                        <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Fleet & Sales Command Center</h2>
+                        <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Fleet & Commercial Command Center</h2>
+                        <p class="text-xs text-slate-400 mt-1">Full 7-Stage Trip Pipeline, 39 Commercial Trucks, 21 Drivers, 45 Zimbabwe Corridors & Financial Debt Ledgers</p>
                     </div>
-                    <div class="flex items-center gap-3 text-xs text-slate-300">
-                        <span class="flex items-center gap-1.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-xl font-bold shadow-xs">
-                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Live System Sync
-                        </span>
+                    <!-- Quick Management Action Buttons -->
+                    <div class="flex flex-wrap items-center gap-2 sm:gap-2.5">
+                        <button onclick="openCityConfigModal()" class="bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-blue-400/40 shadow-xs cursor-pointer">
+                            <span>⚙️</span> Edit Fuel & City Minimums
+                        </button>
+                        <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-emerald-400/40 shadow-xs cursor-pointer">
+                            <span>💳</span> Clear Sales Rep Debt
+                        </button>
+                        <button onclick="openAuditLogsModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700 shadow-xs cursor-pointer">
+                            <span>🛡️</span> Audit Logs
+                        </button>
                     </div>
                 </div>
 
@@ -1253,6 +1583,34 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Pending shortfall recovery</div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Fleet Operational Sub-View Navigation Pills -->
+            <div class="flex items-center gap-1.5 p-1.5 bg-slate-100 dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 overflow-x-auto no-scrollbar scroll-smooth">
+                <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-blue-600 text-white shadow-md">
+                    <span>🛣️</span> 7-Stage Trips Pipeline
+                </button>
+                <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>👥</span> Sales Rep Debt Ledger
+                </button>
+                <button onclick="switchFleetSubView('payments')" id="fleet-btn-payments" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>💳</span> Cleared Payments History
+                </button>
+                <button onclick="switchFleetSubView('trucks')" id="fleet-btn-trucks" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>🚚</span> 39 Commercial Trucks
+                </button>
+                <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>👤</span> 21 Commercial Drivers
+                </button>
+                <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>📋</span> Shortfall Approvals
+                </button>
+                <button onclick="switchFleetSubView('ledger')" id="fleet-btn-ledger" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>📜</span> Financial Audit Ledger
+                </button>
+                <button onclick="switchFleetSubView('all')" id="fleet-btn-all" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
+                    <span>🌐</span> All Operations
+                </button>
             </div>
 
             <!-- Fleet Approval Top Stats Cards -->
@@ -1284,18 +1642,72 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- Salesperson Pending Balance & Performance Grid -->
-            <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
+            <!-- SUBVIEW 1: 7-STAGE TRIPS PIPELINE -->
+            <div id="fleet-section-trips" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                    <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+                        <input type="text" id="trips-search" placeholder="🔍 Search Trip #, Driver, Truck, City..." oninput="filterTripsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        
+                        <select id="trips-stage-filter" onchange="filterTripsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
+                            <option value="ALL">All Trip Stages (1–7)</option>
+                            <option value="QUOTED">Stage 1: Quoted</option>
+                            <option value="APPROVED">Stage 2: Dispatch Approved</option>
+                            <option value="VOUCHER_ISSUED">Stage 3: Fuel & Allowance</option>
+                            <option value="LOADED">Stage 4: Loading & Odometer</option>
+                            <option value="IN_TRANSIT">Stage 5: In Transit</option>
+                            <option value="OFFLOADED">Stage 6: Offloaded & POD</option>
+                            <option value="SETTLED">Stage 7: Trip Settled</option>
+                        </select>
+                    </div>
+
+                    <div class="flex items-center justify-between sm:justify-end gap-2">
+                        <span id="trips-count-badge" class="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
+                            Showing 0 trips
+                        </span>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[900px]">
+                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Trip ID</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Stage & Status</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Sales Rep & Client</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Destination & Route</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Truck & Driver</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Allowance / Transport</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Timestamps</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Odometer (KM)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-trips-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
+                    </table>
+                </div>
+
+                <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-850 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60 dark:bg-[#0c0c10]/80">
+                    <div class="text-xs text-slate-500 dark:text-zinc-400 font-medium" id="trips-pagination-info">Showing 0 entries</div>
+                    <div class="flex items-center gap-1.5" id="trips-pagination-controls"></div>
+                </div>
+            </div>
+
+            <!-- SUBVIEW 2: SALESPERSON DEBT LEDGER & BALANCES -->
+            <div id="fleet-section-salespersons" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
                     <div>
                         <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
                             <span>👥</span> Salesperson Outstanding Balance & Recovery Audit
                         </h2>
-                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative</p>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative with instant clearance action</p>
                     </div>
-                    <div class="text-right">
-                        <span class="text-xs font-bold text-slate-500 dark:text-zinc-400">Total Pending Backlog: </span>
-                        <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
+                    <div class="flex items-center gap-3">
+                        <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
+                            <span>💳</span> Clear Debt Payment
+                        </button>
+                        <div class="text-right">
+                            <span class="text-xs font-bold text-slate-500 dark:text-zinc-400">Total Pending: </span>
+                            <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
+                        </div>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4" id="fleet-salesperson-cards">
@@ -1303,8 +1715,168 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- Daily Anti-Fraud Reconciliation & Ledger Audit Panel -->
-            <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+            <!-- SUBVIEW 3: CLEARED PAYMENTS HISTORY -->
+            <div id="fleet-section-payments" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                    <div>
+                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                            <span>💳</span> Cleared Sales Rep Debt Settlements
+                        </h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400">Official accounting verification and payment offset audit history</p>
+                    </div>
+                    <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto">
+                        <span>+</span> Record New Clearance
+                    </button>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[850px]">
+                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Payment Date</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Sales Representative</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Amount Cleared</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Method & Reference</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Balance Impact</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Recorded By</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Remarks / Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-payments-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
+                    </table>
+                </div>
+
+                <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-850 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60 dark:bg-[#0c0c10]/80">
+                    <div class="text-xs text-slate-500 dark:text-zinc-400 font-medium" id="payments-pagination-info">Showing 0 entries</div>
+                    <div class="flex items-center gap-1.5" id="payments-pagination-controls"></div>
+                </div>
+            </div>
+
+            <!-- SUBVIEW 4: 39 COMMERCIAL TRUCKS FLEET -->
+            <div id="fleet-section-trucks" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                    <div>
+                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                            <span>🚚</span> 39 Commercial Trucks Fleet Master
+                        </h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verified commercial delivery vehicles registered in Tagoneswa database</p>
+                    </div>
+                    <input type="text" id="trucks-search" placeholder="🔍 Search Truck #, Plate, Model..." oninput="filterTrucksTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[760px]">
+                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Truck #</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Plate Number</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Model & Make</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Body Type</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Home Depot</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Active Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-trucks-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
+                    </table>
+                </div>
+
+                <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-850 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60 dark:bg-[#0c0c10]/80">
+                    <div class="text-xs text-slate-500 dark:text-zinc-400 font-medium" id="trucks-pagination-info">Showing 0 entries</div>
+                    <div class="flex items-center gap-1.5" id="trucks-pagination-controls"></div>
+                </div>
+            </div>
+
+            <!-- SUBVIEW 5: 21 COMMERCIAL DRIVERS -->
+            <div id="fleet-section-drivers" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                    <div>
+                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                            <span>👤</span> 21 Commercial Drivers Roster
+                        </h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verified commercial drivers registered in Tagoneswa database</p>
+                    </div>
+                    <input type="text" id="drivers-search" placeholder="🔍 Search Driver Name, Phone..." oninput="filterDriversTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[760px]">
+                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Staff ID</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Full Name</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">WhatsApp Phone</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Role Designation</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Active Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-drivers-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
+                    </table>
+                </div>
+
+                <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-850 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60 dark:bg-[#0c0c10]/80">
+                    <div class="text-xs text-slate-500 dark:text-zinc-400 font-medium" id="drivers-pagination-info">Showing 0 entries</div>
+                    <div class="flex items-center gap-1.5" id="drivers-pagination-controls"></div>
+                </div>
+            </div>
+
+            <!-- SUBVIEW 6: SHORTFALL APPROVALS & DISPATCH AUDITS -->
+            <div id="fleet-section-approvals" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                    <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+                        <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        
+                        <!-- City Filter -->
+                        <select id="fleet-city-filter" onchange="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
+                            <option value="ALL">All Destination Cities</option>
+                        </select>
+
+                        <!-- Status Filter -->
+                        <select id="fleet-status-filter" onchange="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
+                            <option value="ALL">All Statuses</option>
+                            <option value="APPROVED">Approved for Dispatch</option>
+                            <option value="SHORTFALL_RECORDED">Shortfall Pending Resolution</option>
+                            <option value="DISPATCHED">Dispatched</option>
+                        </select>
+                    </div>
+
+                    <div class="flex items-center justify-between sm:justify-end gap-2">
+                        <span id="fleet-count-badge" class="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
+                            Showing 0 trips
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs min-w-[850px]">
+                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                            <tr>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Trip ID</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Salesperson</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Destination & Route</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">ERP Valuation</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Shortfall / Transport</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Settlement (Customer vs Debt)</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Audit Check</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Status</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fleet-approvals-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
+                    </table>
+                </div>
+
+                <!-- Approvals Pagination Footer -->
+                <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-850 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60 dark:bg-[#0c0c10]/80">
+                    <div class="text-xs text-slate-500 dark:text-zinc-400 font-medium" id="fleet-pagination-info">
+                        Showing 0 entries
+                    </div>
+                    <div class="flex items-center gap-1.5" id="fleet-pagination-controls"></div>
+                </div>
+            </div>
+
+            <!-- SUBVIEW 7: FINANCIAL AUDIT & RECOVERY LEDGER -->
+            <div id="fleet-section-ledger" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 bg-slate-50/75 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
@@ -1314,7 +1886,7 @@ async def dashboard_view(request: Request):
                             <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">
                                 Daily Recovery & Shortfall Audit Ledger
                             </h3>
-                            <p class="text-[11px] text-slate-500 dark:text-zinc-400">Cross-verifies customer charges and ledger declarations against Favlogix ERP</p>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400">Cross-verifies customer charges, debt records, and accounts clearances</p>
                         </div>
 
                         <!-- Date Filters -->
@@ -1376,64 +1948,233 @@ async def dashboard_view(request: Request):
                     <div class="flex items-center gap-1.5" id="ledger-pagination-controls"></div>
                 </div>
             </div>
-
-            <!-- Fleet Trip Approvals Master Table Section -->
-            <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
-                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
-                    <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
-                        
-                        <!-- City Filter -->
-                        <select id="fleet-city-filter" onchange="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
-                            <option value="ALL">All Destination Cities</option>
-                        </select>
-
-                        <!-- Status Filter -->
-                        <select id="fleet-status-filter" onchange="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
-                            <option value="ALL">All Statuses</option>
-                            <option value="APPROVED">Approved for Dispatch</option>
-                            <option value="SHORTFALL_RECORDED">Shortfall Pending Resolution</option>
-                            <option value="DISPATCHED">Dispatched</option>
-                        </select>
-                    </div>
-
-                    <div class="flex items-center justify-between sm:justify-end gap-2">
-                        <span id="fleet-count-badge" class="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-xs font-bold px-3 py-1.5 rounded-full">
-                            Showing 0 trips
-                        </span>
-                    </div>
-                </div>
-
-                <!-- Table -->
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs min-w-[850px]">
-                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
-                            <tr>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Trip ID</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Salesperson</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Destination & Route</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">ERP Valuation</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Shortfall / Transport</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Settlement (Customer vs Debt)</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Audit Check</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Status</th>
-                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Date</th>
-                            </tr>
-                        </thead>
-                        <tbody id="fleet-approvals-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
-                    </table>
-                </div>
-
-                <!-- Approvals Pagination Footer -->
-                <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-850 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60 dark:bg-[#0c0c10]/80">
-                    <div class="text-xs text-slate-500 dark:text-zinc-400 font-medium" id="fleet-pagination-info">
-                        Showing 0 entries
-                    </div>
-                    <div class="flex items-center gap-1.5" id="fleet-pagination-controls"></div>
-                </div>
-            </div>
         </div>
     </main>
+
+    <!-- Modal 1: Dynamic Fuel Price & 45 City Delivery Corridors Configuration -->
+    <div id="cityMinimumsModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <!-- Modal Header -->
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center text-lg font-bold">
+                        ⚙️
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100">Delivery Corridors & City Minimums</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Dynamic fuel rates, 4% expense formula & 45 Zimbabwe route minimums</p>
+                    </div>
+                </div>
+                <button onclick="closeCityConfigModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Modal Content (Scrollable) -->
+            <div class="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
+                <!-- Top Fuel Price Controller Card -->
+                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20 border border-blue-200/80 dark:border-blue-900/40 rounded-2xl p-4 sm:p-5">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                            <span class="text-[10px] font-extrabold uppercase tracking-wider text-blue-700 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/20 px-2.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-500/30">
+                                ⛽ Global Fuel Price Formula Engine
+                            </span>
+                            <h4 class="text-sm font-extrabold text-slate-900 dark:text-zinc-100 mt-1">Active Diesel / Fuel Rate ($/L)</h4>
+                            <p class="text-[11px] text-slate-600 dark:text-zinc-400 mt-0.5">Changing the fuel price automatically updates trip operating costs across all corridors</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <div class="relative">
+                                <span class="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
+                                <input type="number" id="modal-fuel-price" step="0.01" min="0.5" max="10.0" value="1.55" class="pl-6 pr-3 py-2 w-28 bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                            </div>
+                            <button onclick="saveFuelPrice()" id="modal-save-fuel-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer flex items-center gap-1.5 whitespace-nowrap">
+                                <span>💾</span> Save & Recalculate 45 Cities
+                            </button>
+                        </div>
+                    </div>
+                    <div id="fuel-update-feedback" class="mt-2 text-xs font-semibold hidden"></div>
+                </div>
+
+                <!-- 45 Cities Search & Table -->
+                <div class="border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
+                    <div class="p-3.5 bg-slate-50/75 dark:bg-[#121216] border-b border-slate-200 dark:border-zinc-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                        <div class="flex items-center gap-2">
+                            <input type="text" id="modal-city-search" placeholder="🔍 Search city or route..." oninput="filterCityRulesModal()" class="bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-1.5 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-60 transition">
+                            <span id="modal-city-count" class="text-xs text-slate-500 dark:text-zinc-400 font-bold whitespace-nowrap">45 Cities</span>
+                        </div>
+                        <span class="text-[11px] text-slate-400 dark:text-zinc-500 italic">Values saved dynamically into database without hardcoding</span>
+                    </div>
+
+                    <div class="max-h-[46vh] overflow-y-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-slate-100 dark:bg-[#14141a] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-4 py-2.5">City & Destination</th>
+                                    <th class="px-4 py-2.5">Route / Corridor</th>
+                                    <th class="px-4 py-2.5">Distance (KM)</th>
+                                    <th class="px-4 py-2.5">Min Sales ($)</th>
+                                    <th class="px-4 py-2.5">Van Min ($)</th>
+                                    <th class="px-4 py-2.5 text-right">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modal-city-rules-tbody" class="divide-y divide-slate-200 dark:divide-zinc-800 text-slate-700 dark:text-zinc-200">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between">
+                <span class="text-[11px] text-slate-500 dark:text-zinc-400">All trip pricing calculations update instantly in WhatsApp</span>
+                <button onclick="closeCityConfigModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Done / Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 2: Financial Debt Settlement & Payment Clearance -->
+    <div id="clearPaymentModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <!-- Modal Header -->
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-lg font-bold">
+                        💳
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100">Clear Sales Rep Debt</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Verify payment settlement and offset shortfall ledger</p>
+                    </div>
+                </div>
+                <button onclick="closeClearPaymentModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    ✕
+                </button>
+            </div>
+
+            <!-- Modal Content Form -->
+            <div class="p-4 sm:p-6 space-y-4">
+                <!-- Salesperson Selector -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Select Sales Representative</label>
+                    <select id="modal-pay-salesperson" onchange="onSelectPaySalesperson()" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        <option value="">-- Choose Sales Rep --</option>
+                    </select>
+                </div>
+
+                <!-- Current Balance Display -->
+                <div class="bg-slate-50 dark:bg-[#14141a] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                    <div>
+                        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-zinc-500">Current Outstanding Debt</div>
+                        <div class="text-xl font-extrabold font-mono text-rose-600 dark:text-rose-400 mt-0.5" id="modal-pay-current-balance">$0.00</div>
+                    </div>
+                    <button type="button" onclick="fillFullClearance()" class="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-500/30 cursor-pointer">
+                        Clear 100% Full Balance
+                    </button>
+                </div>
+
+                <!-- Cleared Amount -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Amount to Clear (USD $)</label>
+                    <div class="relative">
+                        <span class="absolute left-3.5 top-2.5 text-xs text-slate-400 font-bold">$</span>
+                        <input type="number" id="modal-pay-amount" step="0.01" min="0.01" placeholder="0.00" class="pl-8 pr-3.5 py-2.5 w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- Payment Method -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Payment Method</label>
+                    <select id="modal-pay-method" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                        <option value="BANK_TRANSFER">Bank Transfer (Stanbic / CABS / Ecocash USD)</option>
+                        <option value="CASH_USD">Cash USD (Receipted at Cash Office)</option>
+                        <option value="DIRECT_DEPOSIT">Direct Bank Deposit</option>
+                        <option value="CREDIT_NOTE">ERP Credit Note / Commission Offset</option>
+                        <option value="CHEQUE">Corporate Cheque</option>
+                    </select>
+                </div>
+
+                <!-- Reference Number -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Reference / Transaction / Receipt #</label>
+                    <input type="text" id="modal-pay-ref" placeholder="e.g. TXN-89214, REC-0045" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                </div>
+
+                <!-- Remarks / Notes -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Verification Remarks / Notes</label>
+                    <textarea id="modal-pay-remarks" rows="2" placeholder="e.g. Verified by Accounts. Bank confirmation received." class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2 text-xs text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                </div>
+
+                <div id="modal-pay-feedback" class="text-xs font-bold hidden"></div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+                <button type="button" onclick="closeClearPaymentModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitClearPayment()" id="modal-submit-pay-btn" class="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5">
+                    <span>✅</span> Confirm Debt Clearance
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 3: System Audit Logs & Financial Trail -->
+    <div id="auditLogsModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <!-- Modal Header -->
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center text-lg font-bold">
+                        🛡️
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100">Enterprise System Audit Trail</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Immutable audit trail of configuration changes and debt settlements</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="loadAuditLogs()" class="p-2 rounded-xl text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-800 text-xs font-bold transition flex items-center gap-1 cursor-pointer">
+                        <span>🔄</span> Refresh
+                    </button>
+                    <button onclick="closeAuditLogsModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                        ✕
+                    </button>
+                </div>
+            </div>
+
+            <!-- Modal Content Table -->
+            <div class="overflow-y-auto flex-1 p-4">
+                <table class="w-full text-left text-xs min-w-[700px]">
+                    <thead class="bg-slate-100 dark:bg-[#14141a] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-10">
+                        <tr>
+                            <th class="px-4 py-2.5 whitespace-nowrap">Timestamp</th>
+                            <th class="px-4 py-2.5 whitespace-nowrap">User & Role</th>
+                            <th class="px-4 py-2.5 whitespace-nowrap">Action</th>
+                            <th class="px-4 py-2.5 whitespace-nowrap">Module</th>
+                            <th class="px-4 py-2.5 whitespace-nowrap">Entity / Target</th>
+                            <th class="px-4 py-2.5 whitespace-nowrap">Changes & Remarks</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modal-audit-tbody" class="divide-y divide-slate-200 dark:divide-zinc-800 text-slate-700 dark:text-zinc-200">
+                        <!-- Populated dynamically -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="p-3.5 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between">
+                <span class="text-[11px] text-slate-400 dark:text-zinc-500">Security & compliance logs cannot be purged or modified</span>
+                <button onclick="closeAuditLogsModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
 
     <script>
         let cachedData = null;
@@ -1446,6 +2187,10 @@ async def dashboard_view(request: Request):
         let wsPage = 1, wsPageSize = 15;
         let fleetPage = 1, fleetPageSize = 15;
         let ledgerPage = 1, ledgerPageSize = 15;
+        let tripsPage = 1, tripsPageSize = 15;
+        let trucksPage = 1, trucksPageSize = 15;
+        let driversPage = 1, driversPageSize = 15;
+        let paymentsPage = 1, paymentsPageSize = 15;
 
         function renderPaginationControls(infoId, controlsId, currentPage, totalCount, pageSize, changeFnName) {{
             const infoEl = document.getElementById(infoId);
@@ -1494,6 +2239,55 @@ async def dashboard_view(request: Request):
         function changeWSPage(p) {{ wsPage = p; filterFleetTable(false); }}
         function changeFleetPage(p) {{ fleetPage = p; filterFleetApprovalsTable(false); }}
         function changeLedgerPage(p) {{ ledgerPage = p; filterLedgerTable(false); }}
+        function changeTripsPage(p) {{ tripsPage = p; filterTripsTable(false); }}
+        function changeTrucksPage(p) {{ trucksPage = p; filterTrucksTable(false); }}
+        function changeDriversPage(p) {{ driversPage = p; filterDriversTable(false); }}
+        function changePaymentsPage(p) {{ paymentsPage = p; filterPaymentsTable(false); }}
+
+        // -------------------------------------------------------------
+        // Sliding Sidebar Controller
+        // -------------------------------------------------------------
+        function toggleSidebar(open) {{
+            const sidebar = document.getElementById('sliding-sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            if (!sidebar || !backdrop) return;
+            if (open) {{
+                sidebar.classList.remove('-translate-x-full');
+                backdrop.classList.remove('hidden');
+            }} else {{
+                sidebar.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }}
+        }}
+
+        // -------------------------------------------------------------
+        // Fleet Operations Sub-View Switcher
+        // -------------------------------------------------------------
+        let currentFleetSubView = 'trips';
+        function switchFleetSubView(viewId) {{
+            currentFleetSubView = viewId;
+            document.querySelectorAll('.fleet-subview-btn').forEach(btn => {{
+                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-md');
+                btn.classList.add('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
+            }});
+            const activeBtn = document.getElementById('fleet-btn-' + viewId);
+            if (activeBtn) {{
+                activeBtn.classList.add('bg-blue-600', 'text-white', 'shadow-md');
+                activeBtn.classList.remove('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
+            }}
+
+            const subviews = ['trips', 'salespersons', 'payments', 'trucks', 'drivers', 'approvals', 'ledger'];
+            subviews.forEach(sv => {{
+                const el = document.getElementById('fleet-section-' + sv);
+                if (el) {{
+                    if (viewId === 'all' || viewId === sv) {{
+                        el.style.display = 'block';
+                    }} else {{
+                        el.style.display = 'none';
+                    }}
+                }}
+            }});
+        }}
 
         function filterByITAdmin(adminName) {{
             const adminFilter = document.getElementById('it-admin-filter');
@@ -2063,7 +2857,7 @@ async def dashboard_view(request: Request):
                                         </div>
                                         <span class="text-[10px] px-2 py-0.5 rounded-full border ${{badgeClass}} whitespace-nowrap">${{badgeText}}</span>
                                     </div>
-                                    <div class="mt-3.5 bg-white dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-lg p-2.5">
+                                    <div class="mt-3 bg-white dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-lg p-2.5">
                                         <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-zinc-500">Current Outstanding Debt</div>
                                         <div class="text-xl font-extrabold font-mono ${{sp.net_balance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}} mt-0.5">
                                             $${{sp.net_balance.toFixed(2)}}
@@ -2074,6 +2868,11 @@ async def dashboard_view(request: Request):
                                     <span>Accrued: <strong class="text-rose-600 dark:text-rose-400 font-mono">$${{sp.total_shortfalls.toFixed(2)}}</strong></span>
                                     <span>Recovered: <strong class="text-emerald-600 dark:text-emerald-400 font-mono">$${{sp.total_recovered.toFixed(2)}}</strong></span>
                                 </div>
+                                ${{sp.net_balance > 0 ? `
+                                    <button onclick="openClearPaymentModal('${{sp.name}}', '${{sp.phone}}', ${{sp.net_balance}})" class="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center justify-center gap-1 shadow-xs cursor-pointer">
+                                        <span>💳</span> Clear Debt Settlement
+                                    </button>
+                                ` : ''}}
                             </div>
                         `;
                     }}).join('');
@@ -2089,8 +2888,15 @@ async def dashboard_view(request: Request):
                 `).join('');
             }}
 
+            // 4. Render all Subviews & Modals
+            filterTripsTable(false);
+            filterTrucksTable(false);
+            filterDriversTable(false);
+            filterPaymentsTable(false);
             filterLedgerTable(false);
             filterFleetApprovalsTable(false);
+            populatePaySalespersonDropdown(fleet.salespersons);
+            if (fleet.route_rules) renderModalCityRules(fleet.route_rules);
         }}
 
         function filterLedgerTable(resetPage = false) {{
@@ -2280,6 +3086,613 @@ async def dashboard_view(request: Request):
             }}
 
             renderPaginationControls('fleet-pagination-info', 'fleet-pagination-controls', fleetPage, records.length, fleetPageSize, 'changeFleetPage');
+        }}
+
+        // =============================================================
+        // SUBVIEW 1: 7-STAGE COMMERCIAL TRIPS PIPELINE
+        // =============================================================
+        function filterTripsTable(resetPage = false) {{
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.trips) return;
+            if (resetPage) tripsPage = 1;
+
+            const q = (document.getElementById('trips-search')?.value || '').toLowerCase().trim();
+            const stageFilter = document.getElementById('trips-stage-filter')?.value || 'ALL';
+
+            let trips = cachedData.fleet.trips.filter(t => {{
+                const matchesQ = !q || (t.trip_id && t.trip_id.toLowerCase().includes(q)) ||
+                                 (t.salesperson_name && t.salesperson_name.toLowerCase().includes(q)) ||
+                                 (t.salesperson_phone && t.salesperson_phone.toLowerCase().includes(q)) ||
+                                 (t.destination_city && t.destination_city.toLowerCase().includes(q)) ||
+                                 (t.truck_plate && t.truck_plate.toLowerCase().includes(q)) ||
+                                 (t.driver_name && t.driver_name.toLowerCase().includes(q));
+                
+                let matchesStage = true;
+                if (stageFilter !== 'ALL') {{
+                    const st = (t.status || '').toUpperCase();
+                    matchesStage = st.includes(stageFilter);
+                }}
+                return matchesQ && matchesStage;
+            }});
+
+            const badgeEl = document.getElementById('trips-count-badge');
+            if (badgeEl) badgeEl.textContent = `Showing ${{trips.length}} of ${{cachedData.fleet.trips.length}} trips`;
+
+            const totalPages = Math.max(1, Math.ceil(trips.length / tripsPageSize));
+            if (tripsPage > totalPages) tripsPage = totalPages;
+            const startIndex = (tripsPage - 1) * tripsPageSize;
+            const pagedTrips = trips.slice(startIndex, startIndex + tripsPageSize);
+
+            const tbody = document.getElementById('fleet-trips-table-body');
+            if (tbody) {{
+                if (trips.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No matching trips found in pipeline.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = pagedTrips.map(t => {{
+                        const st = (t.status || '').toUpperCase();
+                        let stageBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                        let stageLabel = '📝 Stage 1: Quoted';
+
+                        if (st.includes('APPROVED')) {{
+                            stageBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            stageLabel = '⚡ Stage 2: Approved';
+                        }} else if (st.includes('VOUCHER') || st.includes('ALLOWANCE')) {{
+                            stageBadge = 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30';
+                            stageLabel = '⛽ Stage 3: Voucher Issued';
+                        }} else if (st.includes('LOADED') || st.includes('ODOMETER')) {{
+                            stageBadge = 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/30';
+                            stageLabel = '📦 Stage 4: Loaded';
+                        }} else if (st.includes('IN_TRANSIT') || st.includes('TRANSIT')) {{
+                            stageBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                            stageLabel = '🚛 Stage 5: In Transit';
+                        }} else if (st.includes('OFFLOADED') || st.includes('POD')) {{
+                            stageBadge = 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-200 dark:border-teal-500/30';
+                            stageLabel = '🏢 Stage 6: Offloaded';
+                        }} else if (st.includes('SETTLED') || st.includes('CLOSED')) {{
+                            stageBadge = 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-500/40';
+                            stageLabel = '✅ Stage 7: Settled';
+                        }}
+
+                        return `
+                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
+                                <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${{t.trip_id}}</td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${{stageBadge}} whitespace-nowrap">
+                                        ${{stageLabel}}
+                                    </span>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                    <strong class="text-slate-900 dark:text-zinc-100">${{t.salesperson_name}}</strong><br>
+                                    <small class="text-slate-400 dark:text-zinc-500 font-mono">+${{t.salesperson_phone}}</small>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                    <span class="font-bold text-slate-800 dark:text-zinc-200">📍 ${{t.destination_city}}</span><br>
+                                    <small class="text-slate-500 dark:text-zinc-400">${{t.route}}</small>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                    <strong class="text-slate-900 dark:text-zinc-100">🚚 ${{t.truck_plate}}</strong><br>
+                                    <small class="text-slate-500 dark:text-zinc-400">👤 ${{t.driver_name}}</small>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap font-mono text-xs">
+                                    <div>Allow: <strong class="text-slate-900 dark:text-zinc-100">$${{t.total_allowance.toFixed(2)}}</strong></div>
+                                    <div>Transp: <strong class="text-indigo-600 dark:text-indigo-400">$${{t.transport_charge.toFixed(2)}}</strong></div>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap text-[11px] text-slate-500 dark:text-zinc-400 font-mono">
+                                    <div>Dep: ${{t.departed_at || '--'}}</div>
+                                    <div>Ret: ${{t.returned_at || '--'}}</div>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap font-mono text-xs">
+                                    <span>${{t.start_odometer ? t.start_odometer + ' km' : '--'}} → ${{t.end_odometer ? t.end_odometer + ' km' : '--'}}</span>
+                                    ${{t.discrepancy_amount > 0 ? `<br><small class="text-rose-600 dark:text-rose-400 font-bold">⚠️ Discrepancy: $${{t.discrepancy_amount.toFixed(2)}}</small>` : ''}}
+                                </td>
+                            </tr>
+                        `;
+                    }}).join('');
+                }}
+            }}
+
+            renderPaginationControls('trips-pagination-info', 'trips-pagination-controls', tripsPage, trips.length, tripsPageSize, 'changeTripsPage');
+        }}
+
+        // =============================================================
+        // SUBVIEW 4: 39 COMMERCIAL TRUCKS FLEET
+        // =============================================================
+        function filterTrucksTable(resetPage = false) {{
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.trucks) return;
+            if (resetPage) trucksPage = 1;
+
+            const q = (document.getElementById('trucks-search')?.value || '').toLowerCase().trim();
+            let trucks = cachedData.fleet.trucks.filter(t => {{
+                return !q || (t.truck_number && t.truck_number.toLowerCase().includes(q)) ||
+                             (t.plate_number && t.plate_number.toLowerCase().includes(q)) ||
+                             (t.model_make && t.model_make.toLowerCase().includes(q)) ||
+                             (t.body_type && t.body_type.toLowerCase().includes(q)) ||
+                             (t.home_depot && t.home_depot.toLowerCase().includes(q));
+            }});
+
+            const totalPages = Math.max(1, Math.ceil(trucks.length / trucksPageSize));
+            if (trucksPage > totalPages) trucksPage = totalPages;
+            const startIndex = (trucksPage - 1) * trucksPageSize;
+            const pagedTrucks = trucks.slice(startIndex, startIndex + trucksPageSize);
+
+            const tbody = document.getElementById('fleet-trucks-table-body');
+            if (tbody) {{
+                if (trucks.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No commercial trucks found.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = pagedTrucks.map(t => `
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
+                            <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">#${{t.truck_number}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-extrabold text-slate-900 dark:text-zinc-100 whitespace-nowrap">${{t.plate_number}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-medium text-slate-800 dark:text-zinc-200 whitespace-nowrap">${{t.model_make}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-slate-600 dark:text-zinc-300 whitespace-nowrap">${{t.body_type}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-slate-500 dark:text-zinc-400 whitespace-nowrap">${{t.home_depot}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${{t.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30'}}">
+                                    <span class="w-1.5 h-1.5 rounded-full ${{t.active ? 'bg-emerald-500' : 'bg-rose-500'}}"></span>
+                                    ${{t.active ? 'Commercial Ready' : 'Maintenance'}}
+                                </span>
+                            </td>
+                        </tr>
+                    `).join('');
+                }}
+            }}
+
+            renderPaginationControls('trucks-pagination-info', 'trucks-pagination-controls', trucksPage, trucks.length, trucksPageSize, 'changeTrucksPage');
+        }}
+
+        // =============================================================
+        // SUBVIEW 5: 21 COMMERCIAL DRIVERS
+        // =============================================================
+        function filterDriversTable(resetPage = false) {{
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.drivers) return;
+            if (resetPage) driversPage = 1;
+
+            const q = (document.getElementById('drivers-search')?.value || '').toLowerCase().trim();
+            let drivers = cachedData.fleet.drivers.filter(d => {{
+                return !q || (d.full_name && d.full_name.toLowerCase().includes(q)) ||
+                             (d.phone && d.phone.toLowerCase().includes(q)) ||
+                             (d.role && d.role.toLowerCase().includes(q));
+            }});
+
+            const totalPages = Math.max(1, Math.ceil(drivers.length / driversPageSize));
+            if (driversPage > totalPages) driversPage = totalPages;
+            const startIndex = (driversPage - 1) * driversPageSize;
+            const pagedDrivers = drivers.slice(startIndex, startIndex + driversPageSize);
+
+            const tbody = document.getElementById('fleet-drivers-table-body');
+            if (tbody) {{
+                if (drivers.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No drivers found.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = pagedDrivers.map(d => `
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-xs text-slate-500 dark:text-zinc-400 whitespace-nowrap">#WD-${{d.staff_id}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-extrabold text-slate-900 dark:text-zinc-100 whitespace-nowrap">👤 ${{d.full_name}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-blue-600 dark:text-blue-400 whitespace-nowrap">+${{d.phone}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs font-semibold text-slate-700 dark:text-zinc-300 whitespace-nowrap">${{d.role}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${{d.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30' : 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-200'}}">
+                                    <span class="w-1.5 h-1.5 rounded-full ${{d.active ? 'bg-emerald-500' : 'bg-zinc-400'}}"></span>
+                                    ${{d.active ? 'On Roster' : 'Off Duty'}}
+                                </span>
+                            </td>
+                        </tr>
+                    `).join('');
+                }}
+            }}
+
+            renderPaginationControls('drivers-pagination-info', 'drivers-pagination-controls', driversPage, drivers.length, driversPageSize, 'changeDriversPage');
+        }}
+
+        // =============================================================
+        // SUBVIEW 3: CLEARED PAYMENTS HISTORY
+        // =============================================================
+        function filterPaymentsTable(resetPage = false) {{
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.payments) return;
+            if (resetPage) paymentsPage = 1;
+
+            const q = (document.getElementById('payments-search')?.value || '').toLowerCase().trim();
+            let payments = cachedData.fleet.payments.filter(p => {{
+                return !q || (p.salesperson_name && p.salesperson_name.toLowerCase().includes(q)) ||
+                             (p.salesperson_phone && p.salesperson_phone.toLowerCase().includes(q)) ||
+                             (p.reference_number && p.reference_number.toLowerCase().includes(q)) ||
+                             (p.payment_method && p.payment_method.toLowerCase().includes(q)) ||
+                             (p.recorded_by && p.recorded_by.toLowerCase().includes(q));
+            }});
+
+            const totalPages = Math.max(1, Math.ceil(payments.length / paymentsPageSize));
+            if (paymentsPage > totalPages) paymentsPage = totalPages;
+            const startIndex = (paymentsPage - 1) * paymentsPageSize;
+            const pagedPayments = payments.slice(startIndex, startIndex + paymentsPageSize);
+
+            const tbody = document.getElementById('fleet-payments-table-body');
+            if (tbody) {{
+                if (payments.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No payment clearances recorded yet.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = pagedPayments.map(p => `
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap">${{p.payment_date}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                <strong class="text-slate-900 dark:text-zinc-100">${{p.salesperson_name}}</strong><br>
+                                <small class="text-slate-400 dark:text-zinc-500 font-mono">+${{p.salesperson_phone}}</small>
+                            </td>
+                            <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                                +$${{p.cleared_amount.toFixed(2)}}
+                            </td>
+                            <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
+                                <span class="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-[10px] font-bold px-2 py-0.5 rounded">
+                                    ${{p.payment_method}}
+                                </span>
+                                <div class="text-[11px] font-mono text-slate-500 dark:text-zinc-400 mt-0.5">Ref: ${{p.reference_number}}</div>
+                            </td>
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-xs whitespace-nowrap">
+                                <span class="text-slate-400">$${{p.previous_balance.toFixed(2)}}</span> → <strong class="text-slate-900 dark:text-zinc-100">$${{p.remaining_balance.toFixed(2)}}</strong>
+                            </td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-700 dark:text-zinc-300 whitespace-nowrap">👤 ${{p.recorded_by}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-600 dark:text-zinc-300">${{p.remarks || '--'}}</td>
+                        </tr>
+                    `).join('');
+                }}
+            }}
+
+            renderPaginationControls('payments-pagination-info', 'payments-pagination-controls', paymentsPage, payments.length, paymentsPageSize, 'changePaymentsPage');
+        }}
+
+        // =============================================================
+        // MODAL 1: DELIVERY CORRIDORS & CITY MINIMUMS
+        // =============================================================
+        function openCityConfigModal() {{
+            const modal = document.getElementById('cityMinimumsModal');
+            if (!modal) return;
+            if (cachedData && cachedData.fleet) {{
+                const fpInput = document.getElementById('modal-fuel-price');
+                if (fpInput && cachedData.fleet.fuel_price) {{
+                    fpInput.value = Number(cachedData.fleet.fuel_price).toFixed(2);
+                }}
+                if (cachedData.fleet.route_rules) {{
+                    renderModalCityRules(cachedData.fleet.route_rules);
+                }}
+            }}
+            modal.classList.remove('hidden');
+        }}
+
+        function closeCityConfigModal() {{
+            const modal = document.getElementById('cityMinimumsModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        let modalCityRulesCache = [];
+        function renderModalCityRules(rules) {{
+            if (!rules) return;
+            modalCityRulesCache = Object.keys(rules).map(k => {{
+                return {{ key: k, ...rules[k] }};
+            }});
+            filterCityRulesModal();
+        }}
+
+        function filterCityRulesModal() {{
+            const q = (document.getElementById('modal-city-search')?.value || '').toLowerCase().trim();
+            const tbody = document.getElementById('modal-city-rules-tbody');
+            if (!tbody) return;
+
+            let filtered = modalCityRulesCache.filter(c => {{
+                return !q || c.key.toLowerCase().includes(q) || (c.route && c.route.toLowerCase().includes(q));
+            }});
+
+            const countEl = document.getElementById('modal-city-count');
+            if (countEl) countEl.textContent = `${{filtered.length}} Cities`;
+
+            if (filtered.length === 0) {{
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-4 text-center text-slate-400">No matching cities found.</td></tr>';
+                return;
+            }}
+
+            tbody.innerHTML = filtered.map(c => `
+                <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
+                    <td class="px-4 py-2.5 font-bold text-slate-900 dark:text-zinc-100 capitalize">📍 ${{c.key}}</td>
+                    <td class="px-4 py-2.5 text-[11px] text-slate-500 dark:text-zinc-400">${{c.route || '--'}}</td>
+                    <td class="px-4 py-2.5 font-mono text-xs text-slate-700 dark:text-zinc-300">${{c.distance_km || 0}} km</td>
+                    <td class="px-4 py-2.5">
+                        <div class="relative w-28">
+                            <span class="absolute left-2 top-1 text-slate-400 text-xs">$</span>
+                            <input type="number" step="0.01" id="min-input-${{c.key}}" value="${{Number(c.min_sales || 0).toFixed(2)}}" class="w-full pl-5 pr-2 py-1 bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-mono font-bold text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                    </td>
+                    <td class="px-4 py-2.5">
+                        <div class="relative w-28">
+                            <span class="absolute left-2 top-1 text-slate-400 text-xs">$</span>
+                            <input type="number" step="0.01" id="van-input-${{c.key}}" value="${{Number(c.van_min || 0).toFixed(2)}}" class="w-full pl-5 pr-2 py-1 bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-mono font-bold text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                    </td>
+                    <td class="px-4 py-2.5 text-right">
+                        <button onclick="saveCityMin('${{c.key}}')" id="btn-save-${{c.key}}" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
+                            Save
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }}
+
+        async function saveFuelPrice() {{
+            const fpInput = document.getElementById('modal-fuel-price');
+            const btn = document.getElementById('modal-save-fuel-btn');
+            const feedback = document.getElementById('fuel-update-feedback');
+            if (!fpInput || !btn) return;
+
+            const newPrice = parseFloat(fpInput.value);
+            if (isNaN(newPrice) || newPrice <= 0) {{
+                alert('Please enter a valid fuel price.');
+                return;
+            }}
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Recalculating 45 Cities...';
+            if (feedback) feedback.classList.add('hidden');
+
+            try {{
+                const res = await fetch('/api/v2/config/update-fuel', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ fuel_price: newPrice, recalculate_cities: true }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Fuel price updated to $${{newPrice.toFixed(2)}}/L and 45 cities recalculated!`);
+                    if (feedback) {{
+                        feedback.textContent = `✅ Successfully recalculated all 45 cities based on $${{newPrice.toFixed(2)}}/L fuel rate`;
+                        feedback.className = 'mt-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 block';
+                    }}
+                    await fetchDashboard();
+                }} else {{
+                    alert(data.detail || 'Failed to update fuel price');
+                }}
+            }} catch (err) {{
+                alert('Network error while updating fuel price: ' + err.message);
+            }} finally {{
+                btn.disabled = false;
+                btn.innerHTML = '<span>💾</span> Save & Recalculate 45 Cities';
+            }}
+        }}
+
+        async function saveCityMin(cityKey) {{
+            const minInput = document.getElementById('min-input-' + cityKey);
+            const vanInput = document.getElementById('van-input-' + cityKey);
+            const btn = document.getElementById('btn-save-' + cityKey);
+            if (!minInput || !vanInput || !btn) return;
+
+            const minSales = parseFloat(minInput.value);
+            const vanMin = parseFloat(vanInput.value);
+            btn.disabled = true;
+            btn.textContent = '...';
+
+            try {{
+                const res = await fetch('/api/v2/config/update-city-minimum', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ city_key: cityKey, min_sales: minSales, van_min: vanMin }})
+                }});
+                if (res.ok) {{
+                    btn.textContent = '✅ Saved';
+                    btn.className = 'bg-emerald-600 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs';
+                    setTimeout(() => {{
+                        btn.textContent = 'Save';
+                        btn.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer';
+                        btn.disabled = false;
+                    }}, 2000);
+                    showToast(`Updated threshold for ${{cityKey.toUpperCase()}}!`);
+                    await fetchDashboard();
+                }} else {{
+                    btn.disabled = false;
+                    btn.textContent = 'Save';
+                    alert('Failed to save city minimum threshold.');
+                }}
+            }} catch (err) {{
+                btn.disabled = false;
+                btn.textContent = 'Save';
+                alert('Network error: ' + err.message);
+            }}
+        }}
+
+        // =============================================================
+        // MODAL 2: CLEAR SALES REP DEBT SETTLEMENT
+        // =============================================================
+        let activeSalespersonsForPay = [];
+        function populatePaySalespersonDropdown(salespersons) {{
+            if (!salespersons) return;
+            activeSalespersonsForPay = salespersons;
+            const selectEl = document.getElementById('modal-pay-salesperson');
+            if (!selectEl) return;
+
+            const currentVal = selectEl.value;
+            selectEl.innerHTML = '<option value="">-- Choose Sales Rep --</option>' + salespersons.map(sp => `
+                <option value="${{sp.phone}}" data-name="${{sp.name}}" data-balance="${{sp.net_balance}}">
+                    ${{sp.name}} (+${{sp.phone}}) — Debt: $${{sp.net_balance.toFixed(2)}}
+                </option>
+            `).join('');
+
+            if (currentVal) selectEl.value = currentVal;
+        }}
+
+        function openClearPaymentModal(repName = '', repPhone = '', balance = 0) {{
+            const modal = document.getElementById('clearPaymentModal');
+            if (!modal) return;
+            const selectEl = document.getElementById('modal-pay-salesperson');
+            const amountInput = document.getElementById('modal-pay-amount');
+            const refInput = document.getElementById('modal-pay-ref');
+            const remarksInput = document.getElementById('modal-pay-remarks');
+            const feedback = document.getElementById('modal-pay-feedback');
+
+            if (feedback) feedback.classList.add('hidden');
+            if (refInput) refInput.value = '';
+            if (remarksInput) remarksInput.value = '';
+
+            if (repPhone && selectEl) {{
+                selectEl.value = repPhone;
+            }}
+            onSelectPaySalesperson();
+
+            if (balance > 0 && amountInput) {{
+                amountInput.value = balance.toFixed(2);
+            }}
+
+            modal.classList.remove('hidden');
+        }}
+
+        function closeClearPaymentModal() {{
+            const modal = document.getElementById('clearPaymentModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        function onSelectPaySalesperson() {{
+            const selectEl = document.getElementById('modal-pay-salesperson');
+            const balanceEl = document.getElementById('modal-pay-current-balance');
+            const amountInput = document.getElementById('modal-pay-amount');
+            if (!selectEl || !balanceEl) return;
+
+            const selectedOption = selectEl.options[selectEl.selectedIndex];
+            if (selectedOption && selectedOption.dataset.balance) {{
+                const bal = parseFloat(selectedOption.dataset.balance);
+                balanceEl.textContent = '$' + bal.toFixed(2);
+                if (amountInput && (!amountInput.value || parseFloat(amountInput.value) <= 0)) {{
+                    amountInput.value = bal > 0 ? bal.toFixed(2) : '0.00';
+                }}
+            }} else {{
+                balanceEl.textContent = '$0.00';
+            }}
+        }}
+
+        function fillFullClearance() {{
+            const selectEl = document.getElementById('modal-pay-salesperson');
+            const amountInput = document.getElementById('modal-pay-amount');
+            if (!selectEl || !amountInput) return;
+            const selectedOption = selectEl.options[selectEl.selectedIndex];
+            if (selectedOption && selectedOption.dataset.balance) {{
+                amountInput.value = parseFloat(selectedOption.dataset.balance).toFixed(2);
+            }}
+        }}
+
+        async function submitClearPayment() {{
+            const selectEl = document.getElementById('modal-pay-salesperson');
+            const amountInput = document.getElementById('modal-pay-amount');
+            const methodSelect = document.getElementById('modal-pay-method');
+            const refInput = document.getElementById('modal-pay-ref');
+            const remarksInput = document.getElementById('modal-pay-remarks');
+            const btn = document.getElementById('modal-submit-pay-btn');
+            const feedback = document.getElementById('modal-pay-feedback');
+
+            if (!selectEl.value) {{
+                alert('Please select a sales representative.');
+                return;
+            }}
+            const amt = parseFloat(amountInput.value);
+            if (isNaN(amt) || amt <= 0) {{
+                alert('Please enter a valid amount greater than $0.00');
+                return;
+            }}
+
+            const selectedOption = selectEl.options[selectEl.selectedIndex];
+            const repPhone = selectEl.value;
+            const repName = selectedOption.dataset.name || 'Sales Rep';
+            const method = methodSelect.value;
+            const ref = (refInput.value || '').trim();
+            const remarks = (remarksInput.value || '').trim();
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Processing Clearance...';
+
+            try {{
+                const res = await fetch('/api/v2/finance/clear-sales-rep-payment', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        salesperson_phone: repPhone,
+                        salesperson_name: repName,
+                        cleared_amount: amt,
+                        payment_method: method,
+                        reference_number: ref,
+                        remarks: remarks
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Successfully cleared $${{amt.toFixed(2)}} for ${{repName}}!`);
+                    closeClearPaymentModal();
+                    await fetchDashboard();
+                }} else {{
+                    if (feedback) {{
+                        feedback.textContent = data.detail || 'Error clearing payment';
+                        feedback.className = 'text-xs font-bold text-rose-600 block';
+                    }} else {{
+                        alert(data.detail || 'Error clearing payment');
+                    }}
+                }}
+            }} catch (err) {{
+                alert('Network error while recording payment: ' + err.message);
+            }} finally {{
+                btn.disabled = false;
+                btn.innerHTML = '<span>✅</span> Confirm Debt Clearance';
+            }}
+        }}
+
+        // =============================================================
+        // MODAL 3: SYSTEM AUDIT LOGS TRAIL
+        // =============================================================
+        function openAuditLogsModal() {{
+            const modal = document.getElementById('auditLogsModal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            loadAuditLogs();
+        }}
+
+        function closeAuditLogsModal() {{
+            const modal = document.getElementById('auditLogsModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        async function loadAuditLogs() {{
+            const tbody = document.getElementById('modal-audit-tbody');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">Loading audit records...</td></tr>';
+
+            try {{
+                const res = await fetch('/api/v2/audit/logs');
+                const data = await res.json();
+                if (res.ok && data.logs) {{
+                    if (data.logs.length === 0) {{
+                        tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400">No audit logs found yet.</td></tr>';
+                    }} else {{
+                        tbody.innerHTML = data.logs.map(l => {{
+                            let actionColor = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                            if (l.action.includes('CLEAR')) actionColor = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            else if (l.action.includes('UPDATE')) actionColor = 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/30';
+
+                            return `
+                                <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
+                                    <td class="px-4 py-2.5 font-mono text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap">${{l.created_at}}</td>
+                                    <td class="px-4 py-2.5 whitespace-nowrap">
+                                        <strong class="text-slate-900 dark:text-zinc-100">${{l.username}}</strong><br>
+                                        <small class="text-slate-400 dark:text-zinc-500">${{l.user_role}}</small>
+                                    </td>
+                                    <td class="px-4 py-2.5 whitespace-nowrap">
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${{actionColor}} whitespace-nowrap">
+                                            ${{l.action}}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-2.5 font-mono text-xs font-semibold text-slate-700 dark:text-zinc-300 whitespace-nowrap">${{l.module}}</td>
+                                    <td class="px-4 py-2.5 font-mono text-xs text-slate-600 dark:text-zinc-400 whitespace-nowrap">${{l.entity_id}}</td>
+                                    <td class="px-4 py-2.5 text-xs text-slate-700 dark:text-zinc-300">
+                                        <div>${{l.remarks || '--'}}</div>
+                                        ${{l.new_value ? `<small class="font-mono text-slate-400 dark:text-zinc-500 block truncate max-w-xs">${{JSON.stringify(l.new_value)}}</small>` : ''}}
+                                    </td>
+                                </tr>
+                            `;
+                        }}).join('');
+                    }}
+                }}
+            }} catch (err) {{
+                tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-4 text-center text-rose-500">Failed to load audit logs: ${{err.message}}</td></tr>`;
+            }}
         }}
 
         // Initialize dashboard
