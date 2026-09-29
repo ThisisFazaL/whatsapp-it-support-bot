@@ -896,7 +896,7 @@ async def process_webhook_payload(body: dict):
             is_portal_ws = clean_txt in {"btn_portal_workshop", "btn_domain_workshop", "logistics & fleet", "🚚 logistics & fleet", "logistics", "fleet", "workshop"} or "logistics & fleet" in clean_txt
             is_portal_it = clean_txt in {"btn_portal_it", "btn_domain_it", "it support", "💻 it support", "it"} or "it support" in clean_txt
 
-            if is_portal_ws and not is_in_active_flow:
+            if is_portal_ws:
                 if is_workshop_user:
                     await clear_user_state(db, sender_phone)
                     from app.workshop.flow_handler import start_workshop_flow
@@ -906,7 +906,7 @@ async def process_webhook_payload(body: dict):
                     await meta_api.send_text_message(sender_phone, "⚠️ *Access Denied*: Logistics & Fleet portal is restricted to authorized workshop and logistics staff.")
                     return
 
-            if is_portal_it and not is_in_active_flow:
+            if is_portal_it:
                 if is_it_user:
                     await clear_user_state(db, sender_phone)
                     if admin:

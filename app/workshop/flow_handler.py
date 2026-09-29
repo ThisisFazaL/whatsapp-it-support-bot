@@ -37,7 +37,7 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff, is_st
     role = staff.role.upper()
     
     if role in {"DRIVER", "CLERK", "LOGISTICS_ASSISTANT", "LOGISTICS ASSISTANT", "ASSISTANT"}:
-        await set_user_state(session, phone, "ws_truck_search", {})
+        await set_user_state(session, phone, "ws_truck_search", {}, flow_name="workshop_flow")
         role_label = "Logistics Assistant" if "ASSISTANT" in role else ("Clerk" if "CLERK" in role else "Driver")
         if is_start_shift:
             msg = (
@@ -141,7 +141,7 @@ async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text:
         data["truck_info"] = f"{truck.model_make} ({truck.plate_number})"
         data["truck_number"] = truck.truck_number
         
-        await set_user_state(session, phone, "ws_confirm_truck", data)
+        await set_user_state(session, phone, "ws_confirm_truck", data, flow_name="workshop_flow")
         body = (
             f"🚚 Truck Found:\n\n"
             f"• *Number:* #{truck.truck_number}\n"
@@ -162,13 +162,13 @@ async def handle_truck_search(session: AsyncSession, staff: WorkshopStaff, text:
         lines.append("\nPlease reply with the number (e.g. `1`, `2`) to select:")
         
         data["multi_truck_ids"] = [t.truck_id for t in matching_trucks[:5]]
-        await set_user_state(session, phone, "ws_select_multi_truck", data)
+        await set_user_state(session, phone, "ws_select_multi_truck", data, flow_name="workshop_flow")
         await meta_api.send_text_message(phone, "\n".join(lines))
 
 async def handle_truck_confirmation(session: AsyncSession, staff: WorkshopStaff, text: str, data: dict):
     phone = staff.phone
     if "reenter" in text.lower() or text == "2":
-        await set_user_state(session, phone, "ws_truck_search", {})
+        await set_user_state(session, phone, "ws_truck_search", {}, flow_name="workshop_flow")
         await meta_api.send_text_message(phone, "Please enter the Truck Number (e.g. `9999` or `1045`):")
         return
         
@@ -182,7 +182,7 @@ async def handle_truck_confirmation(session: AsyncSession, staff: WorkshopStaff,
         cat_map[str(idx)] = c.category_id
         
     data["category_map"] = cat_map
-    await set_user_state(session, phone, "ws_select_category", data)
+    await set_user_state(session, phone, "ws_select_category", data, flow_name="workshop_flow")
     
     msg = (
         f"📋 *Select Fault Category for Truck #{data.get('truck_number')}*:\n\n"
@@ -218,7 +218,7 @@ async def handle_category_selection(session: AsyncSession, staff: WorkshopStaff,
         sub_map[str(idx)] = sc.subcategory_name
         
     data["sub_map"] = sub_map
-    await set_user_state(session, phone, "ws_select_subcategory", data)
+    await set_user_state(session, phone, "ws_select_subcategory", data, flow_name="workshop_flow")
     
     msg = (
         f"📌 *{cat_obj.category_name}* ➔ Select Specific Fault:\n\n"
@@ -237,7 +237,7 @@ async def handle_subcategory_selection(session: AsyncSession, staff: WorkshopSta
         return
         
     data["subcategory_name"] = sub_map[choice]
-    await set_user_state(session, phone, "ws_enter_description", data)
+    await set_user_state(session, phone, "ws_enter_description", data, flow_name="workshop_flow")
     
     msg = (
         f"📝 *Please describe the problem in detail:*\n\n"
@@ -255,7 +255,7 @@ async def handle_description_entry(session: AsyncSession, staff: WorkshopStaff, 
         return await finalize_ticket_logging(session, staff, data)
         
     # Prompt for optional photo
-    await set_user_state(session, phone, "ws_attach_clerk_photo", data)
+    await set_user_state(session, phone, "ws_attach_clerk_photo", data, flow_name="workshop_flow")
     photo_prompt = (
         f"📸 *Attach Photo (Optional)*\n\n"
         f"Please send a photo of the defect/damage right now, or tap below to skip:"
