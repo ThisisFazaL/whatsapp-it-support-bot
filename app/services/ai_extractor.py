@@ -337,9 +337,9 @@ async def extract_odometer_with_gemini(image_bytes: bytes, api_key: str) -> Opti
     )
 
     models_to_try = [
-        "gemini-1.5-pro",
+        "gemini-1.5-flash",
         "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-1.5-pro"
     ]
     payload = {
         "contents": [{
@@ -354,8 +354,7 @@ async def extract_odometer_with_gemini(image_bytes: bytes, api_key: str) -> Opti
             ]
         }],
         "generationConfig": {
-            "response_mime_type": "application/json",
-            "temperature": 0.1
+            "temperature": 0.0
         }
     }
 
@@ -387,6 +386,19 @@ async def extract_odometer_with_gemini(image_bytes: bytes, api_key: str) -> Opti
                                     val = v
                                     break
 
+                        # Fallback: regex search for 4-7 digit odometer in raw text
+                        if val is None:
+                            digit_candidates = re.findall(r"\b([0-9]{4,7})\b", raw_text)
+                            for cand in digit_candidates:
+                                try:
+                                    c_int = int(cand)
+                                    # Filter out impossible years or clock numbers
+                                    if 1000 <= c_int <= 9999999 and c_int not in {2024, 2025, 2026, 2027}:
+                                        val = c_int
+                                        break
+                                except ValueError:
+                                    pass
+
                         if val is not None:
                             clean_str = re.sub(r"[^\d.]", "", str(val))
                             if clean_str:
@@ -409,8 +421,8 @@ async def extract_odometer_with_gemini(image_bytes: bytes, api_key: str) -> Opti
 async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
     """
     Extracts vehicle odometer reading from a photo of the dashboard instrument cluster.
-    Primary engine: Anthropic Claude 3.5 Sonnet (benchmark accuracy on instrument LCDs).
-    Secondary engine: Google Gemini 1.5 Pro / 2.0 Flash.
+    Primary engine: Google Gemini 1.5 Flash / 2.0 Flash / 1.5 Pro (Free tier via Google AI Studio).
+    Secondary fallback: Anthropic Claude 3.5 Sonnet (if ANTHROPIC_API_KEY is configured).
     Returns float (e.g. 145280.0) or None if undetectable.
     Does not save images to disk or database.
     """
@@ -419,21 +431,7 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
 
     from app.config import settings
 
-    # 1. Primary Engine: Claude 3.5 Sonnet
-    claude_key = (
-        getattr(settings, "anthropic_api_key", None)
-        or os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("CLAUDE_API_KEY")
-    )
-    if claude_key:
-        try:
-            val = await extract_odometer_with_claude(image_bytes, claude_key)
-            if val and val > 0:
-                return val
-        except Exception as e:
-            logger.error(f"Error in Claude odometer extraction: {e}", exc_info=True)
-
-    # 2. Secondary Engine: Gemini 1.5 Pro / 2.0 Flash
+    # 1. Primary Free Engine: Google Gemini (0$ cost with Google AI Studio key)
     gemini_key = (
         getattr(settings, "gemini_api_key", None)
         or os.getenv("GEMINI_API_KEY")
@@ -447,8 +445,22 @@ async def extract_odometer_from_image(image_bytes: bytes) -> Optional[float]:
         except Exception as e:
             logger.error(f"Error in Gemini odometer extraction: {e}", exc_info=True)
 
-    if not claude_key and not gemini_key:
-        logger.warning("Neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is configured for odometer extraction.")
+    # 2. Secondary Engine: Claude 3.5 Sonnet (if user configures an Anthropic key)
+    claude_key = (
+        getattr(settings, "anthropic_api_key", None)
+        or os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("CLAUDE_API_KEY")
+    )
+    if claude_key:
+        try:
+            val = await extract_odometer_with_claude(image_bytes, claude_key)
+            if val and val > 0:
+                return val
+        except Exception as e:
+            logger.error(f"Error in Claude odometer extraction: {e}", exc_info=True)
+
+    if not gemini_key and not claude_key:
+        logger.warning("Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is configured for odometer extraction.")
 
     return None
 
