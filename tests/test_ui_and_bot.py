@@ -8,7 +8,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from httpx import AsyncClient, ASGITransport
 from app.main import app
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_dashboard_and_auth():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

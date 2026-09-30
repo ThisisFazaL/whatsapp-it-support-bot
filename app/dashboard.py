@@ -2100,40 +2100,25 @@ async def dashboard_view(request: Request):
     can_view_balances = user_has_permission(user, "view_sales_rep_balances")
 
     sidebar_links = []
-    sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Dashboards</div>')
+    sidebar_links.append('<div class="px-4 pt-2 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Commercial Operations</div>')
+    sidebar_links.append('<button onclick="switchFleetSubView(\'overview\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Operations Overview</button>')
+    sidebar_links.append('<button onclick="switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Trip Pipeline</button>')
+    sidebar_links.append('<button onclick="switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Fleet Vehicles</button>')
+    sidebar_links.append('<button onclick="switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Commercial Drivers</button>')
+    sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Delivery Corridors</button>')
 
-    if "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'overview\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Operations Overview</button>')
-
-    if user_role == "MASTER_ADMIN":
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Master Admin Dashboard</button>')
-
-    if user_role in ("MASTER_ADMIN", "ACCOUNTS_USER") or "accounts" in allowed or "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Accounts & Finance</button>')
-
-    if user_role in ("MASTER_ADMIN", "LOGISTICS_MANAGER") or "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Logistics Manager Hub</button>')
-
-    if "logistics" in allowed or "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Operations Execution</button>')
-
-    sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Operations & Fleet</div>')
-    if "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Trip Pipeline</button>')
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Fleet Vehicles</button>')
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Commercial Drivers</button>')
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Delivery Corridors</button>')
-
-    sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
+    sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
     if can_view_balances:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Sales Representative Balances</button>')
+        sidebar_links.append('<button onclick="switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Sales Representative Balances</button>')
     if can_view_balances or can_clear_debt:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Payment History</button>')
-    if "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Financial Audit Log</button>')
+        sidebar_links.append('<button onclick="switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Payment History</button>')
+    sidebar_links.append('<button onclick="switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Financial Audit Log</button>')
+
+    sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Analytics & Insights</div>')
+    sidebar_links.append('<button onclick="switchFleetSubView(\'analytics\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Operations Analytics</button>')
 
     if can_manage_fuel or can_manage_city or can_view_audit or can_manage_users:
-        sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
+        sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
         if can_manage_fuel or can_manage_city:
             sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Fuel & City Rates</button>')
         if can_manage_users:
@@ -2194,6 +2179,16 @@ async def dashboard_view(request: Request):
         .spinning {{
             animation: spinFast 0.6s linear infinite;
         }}
+        body.modal-open {{
+            overflow: hidden !important;
+            height: 100vh !important;
+        }}
+        .modal-overlay {{
+            overscroll-behavior: contain;
+        }}
+        .modal-card {{
+            overscroll-behavior: contain;
+        }}
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-black text-slate-800 dark:text-zinc-100 min-h-screen pb-16 transition-colors duration-200">
@@ -2232,7 +2227,7 @@ async def dashboard_view(request: Request):
         </div>
 
         <!-- Navigation Links (Dynamic by Role) -->
-        <nav class="flex-1 overflow-y-auto p-3 space-y-1 no-scrollbar">
+        <nav id="sidebar-nav-container" class="flex-1 overflow-y-auto p-3 space-y-1 no-scrollbar">
             {sidebar_markup}
         </nav>
 
@@ -2698,11 +2693,11 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- Compact Fleet Workspace Navigation Bar -->
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-white dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xs">
-                <div class="flex items-center gap-2.5">
-                    <span class="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Workspace:</span>
-                    <select id="fleet-view-selector" onchange="switchFleetSubView(this.value)" class="bg-slate-100 dark:bg-zinc-800/90 text-slate-900 dark:text-zinc-100 text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 dark:border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500">
+            <!-- Compact Fleet Navigation Control Area -->
+            <div class="p-2 sm:p-2.5 bg-white dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <!-- Mobile Dropdown Selector (sm:hidden) -->
+                <div class="sm:hidden w-full">
+                    <select id="fleet-view-selector" onchange="switchFleetSubView(this.value)" class="w-full bg-slate-100 dark:bg-zinc-800/90 text-slate-900 dark:text-zinc-100 text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 dark:border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500">
                         <option value="overview">Operations Overview</option>
                         <option value="trips">Trip Pipeline</option>
                         <option value="salespersons">Sales Representative Balances</option>
@@ -2711,20 +2706,29 @@ async def dashboard_view(request: Request):
                         <option value="drivers">Commercial Drivers</option>
                         <option value="approvals">Trip Approvals</option>
                         <option value="ledger">Financial Audit Log</option>
+                        <option value="analytics">Data Analytics</option>
                         <option value="all">Consolidated View</option>
                     </select>
                 </div>
-                <!-- Compact Fast-Nav Pills (Desktop) -->
-                <div class="hidden md:flex items-center gap-1 overflow-x-auto no-scrollbar" id="fleet-fast-nav">
-                    <button onclick="switchFleetSubView('overview')" id="fleet-btn-overview" data-view="overview" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">Overview</button>
-                    <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" data-view="trips" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Trips</button>
-                    <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" data-view="salespersons" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Sales Reps</button>
-                    <button onclick="switchFleetSubView('payments')" id="fleet-btn-payments" data-view="payments" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Payments</button>
-                    <button onclick="switchFleetSubView('trucks')" id="fleet-btn-trucks" data-view="trucks" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Vehicles</button>
-                    <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" data-view="drivers" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Drivers</button>
-                    <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" data-view="approvals" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Approvals</button>
-                    <button onclick="switchFleetSubView('ledger')" id="fleet-btn-ledger" data-view="ledger" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Audit Log</button>
-                    <button onclick="switchFleetSubView('all')" id="fleet-btn-all" data-view="all" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">All</button>
+
+                <!-- Desktop Segmented Fast-Nav Pills (hidden sm:flex) -->
+                <div class="hidden sm:flex items-center gap-1 overflow-x-auto no-scrollbar" id="fleet-fast-nav">
+                    <button onclick="switchFleetSubView('overview')" id="fleet-btn-overview" data-view="overview" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer whitespace-nowrap">Overview</button>
+                    <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" data-view="trips" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Trips</button>
+                    <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" data-view="salespersons" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Sales Reps</button>
+                    <button onclick="switchFleetSubView('payments')" id="fleet-btn-payments" data-view="payments" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Payments</button>
+                    <button onclick="switchFleetSubView('trucks')" id="fleet-btn-trucks" data-view="trucks" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Vehicles</button>
+                    <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" data-view="drivers" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Drivers</button>
+                    <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" data-view="approvals" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Approvals</button>
+                    <button onclick="switchFleetSubView('ledger')" id="fleet-btn-ledger" data-view="ledger" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Audit Log</button>
+                    <button onclick="switchFleetSubView('analytics')" id="fleet-btn-analytics" data-view="analytics" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Analytics</button>
+                    <button onclick="switchFleetSubView('all')" id="fleet-btn-all" data-view="all" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">All</button>
+                </div>
+
+                <!-- Right Live Status Indicator -->
+                <div class="hidden sm:flex items-center gap-2 px-3 py-1 text-[11px] font-semibold text-slate-500 dark:text-zinc-400 shrink-0">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span class="font-mono">Live Sync</span>
                 </div>
             </div>
 
@@ -3072,7 +3076,7 @@ async def dashboard_view(request: Request):
             </div>
 
 
-            <!-- SUBVIEW 1: 7-STAGE TRIPS PIPELINE -->
+            <!-- SUBVIEW 1: TRIP PIPELINE -->
             <div id="fleet-section-trips" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200" style="display: none;">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
@@ -3152,7 +3156,7 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- SUBVIEW 3: CLEARED PAYMENTS HISTORY -->
+            <!-- SUBVIEW 3: PAYMENT HISTORY -->
             <div id="fleet-section-payments" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div>
@@ -3437,14 +3441,127 @@ async def dashboard_view(request: Request):
                     <div class="flex items-center gap-1.5" id="ledger-pagination-controls"></div>
                 </div>
             </div>
+
+            <!-- SUBVIEW 8: DATA ANALYTICS & FLEET METRICS -->
+            <div id="fleet-section-analytics" class="fleet-subview-panel space-y-6 transition-all duration-200" style="display: none;">
+                <!-- Analytics Header Card -->
+                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-2.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-500/30">Intelligence</span>
+                            <span class="text-xs font-bold text-slate-400 dark:text-zinc-500 font-mono">Real-time DB Telemetry</span>
+                        </div>
+                        <h2 class="text-base sm:text-lg font-extrabold text-slate-900 dark:text-zinc-100 tracking-tight mt-1.5">Fleet Operations & Financial Analytics</h2>
+                        <p class="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">Aggregated metrics calculated live across trip records, WhatsApp expenses, debt recovery, and workshop operations.</p>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <button onclick="manualRefresh()" class="bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-200 dark:hover:bg-zinc-700 font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer">
+                            <span id="analyticsRefreshIcon">🔄</span> Refresh Analytics
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 4 Top Executive Analytics Summary KPI Cards -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Trip Volume & Completion</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-zinc-100 mt-1 font-mono" id="an-stat-trips-total">0</div>
+                        <div class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1" id="an-stat-trips-completed">0 completed</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Avg Revenue / Trip</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-avg-revenue">$0.00</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-avg-opex">Avg Opex: $0.00</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Fleet Utilization</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1 font-mono" id="an-stat-utilization">0%</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-ws-impact">0 trucks in workshop</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Shortfall Recovery Rate</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono" id="an-stat-recovery-rate">0%</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-recovery-sub">$0 recovered of $0</div>
+                    </div>
+                </div>
+
+                <!-- Deep Analytics Grid: Operational Breakdown & Corridors -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    <!-- Panel 1: Trip Pipeline Operational Distribution -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs">
+                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between">
+                            <span>Pipeline Stage Volume Distribution</span>
+                            <span class="text-[10px] font-mono text-slate-400">Total Lifecycle</span>
+                        </h3>
+                        <div class="mt-4 space-y-3.5" id="an-pipeline-bars">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Panel 2: Operational Cost Composition -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs">
+                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between">
+                            <span>Operational Expense Composition</span>
+                            <span class="text-[10px] font-mono text-slate-400">Fuel vs Allowances vs Other</span>
+                        </h3>
+                        <div class="mt-4 space-y-3.5" id="an-cost-bars">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 3: Top Corridors & Financial Ledger Health -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                    <!-- Top Destinations & Routes -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs">
+                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
+                            <span>Top Delivery Destinations & Corridors</span>
+                            <span class="text-[10px] font-mono text-slate-400">Zimbabwe Routes</span>
+                        </h3>
+                        <div class="divide-y divide-slate-100 dark:divide-zinc-850" id="an-top-cities-list">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Debt Ledger & Clearance Liquidity Health -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
+                                <span>Financial Recovery & Ledger Liquidity</span>
+                                <span class="text-[10px] font-mono text-slate-400">Accounts Audit</span>
+                            </h3>
+                            <div class="space-y-3">
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                    <div>
+                                        <div class="text-[10px] uppercase font-bold text-slate-400">Total Cleared Payments</div>
+                                        <div class="text-lg font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5" id="an-cleared-total">$0.00</div>
+                                    </div>
+                                    <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Bank Verified</span>
+                                </div>
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                    <div>
+                                        <div class="text-[10px] uppercase font-bold text-slate-400">Outstanding Debt Backlog</div>
+                                        <div class="text-lg font-extrabold font-mono text-rose-600 dark:text-rose-400 mt-0.5" id="an-outstanding-total">$0.00</div>
+                                    </div>
+                                    <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Pending Offset</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
+                            <span class="text-[11px] text-slate-500 dark:text-zinc-400">Accounts Reconciliation Status</span>
+                            <span class="text-xs font-bold text-blue-600 dark:text-blue-400">Synchronized</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </main>
 
     <!-- Modal 1: Dynamic Fuel Price & 45 City Delivery Corridors Configuration -->
-    <div id="cityMinimumsModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div id="cityMinimumsModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 overscroll-contain">
             <!-- Modal Header -->
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center text-lg font-bold">
                         ⚙️
@@ -3460,7 +3577,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Content (Scrollable) -->
-            <div class="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
+            <div class="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 overscroll-contain">
                 <!-- Top Fuel Price Controller Card -->
                 <div class="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20 border border-blue-200/80 dark:border-blue-900/40 rounded-2xl p-4 sm:p-5">
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -3541,7 +3658,7 @@ async def dashboard_view(request: Request):
                         <span class="text-[11px] text-slate-400 dark:text-zinc-500 italic">Values saved dynamically into database without hardcoding</span>
                     </div>
 
-                    <div class="max-h-[46vh] overflow-y-auto">
+                    <div class="max-h-[46vh] overflow-y-auto overscroll-contain">
                         <table class="w-full text-left text-xs">
                             <thead class="bg-slate-100 dark:bg-[#14141a] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-10">
                                 <tr>
@@ -3562,7 +3679,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Footer -->
-            <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between">
+            <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between shrink-0">
                 <span class="text-[11px] text-slate-500 dark:text-zinc-400">All trip pricing calculations update instantly in WhatsApp</span>
                 <button onclick="closeCityConfigModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Done / Close
@@ -3572,10 +3689,10 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 2: Financial Debt Settlement & Payment Clearance -->
-    <div id="clearPaymentModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div id="clearPaymentModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 overscroll-contain">
             <!-- Modal Header -->
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-lg font-bold">
                         💳
@@ -3591,7 +3708,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Content Form -->
-            <div class="p-4 sm:p-6 space-y-4">
+            <div class="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1 overscroll-contain">
                 <!-- Salesperson Selector -->
                 <div>
                     <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Select Sales Representative</label>
@@ -3648,7 +3765,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Footer -->
-            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5 shrink-0">
                 <button type="button" onclick="closeClearPaymentModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Cancel
                 </button>
@@ -3660,10 +3777,10 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 3: System Audit Logs & Financial Trail -->
-    <div id="auditLogsModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div id="auditLogsModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 overscroll-contain">
             <!-- Modal Header -->
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center text-lg font-bold">
                         🛡️
@@ -3684,7 +3801,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Content Table -->
-            <div class="overflow-y-auto flex-1 p-4">
+            <div class="overflow-y-auto flex-1 p-4 overscroll-contain">
                 <table class="w-full text-left text-xs min-w-[700px]">
                     <thead class="bg-slate-100 dark:bg-[#14141a] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-10">
                         <tr>
@@ -3703,7 +3820,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Footer -->
-            <div class="p-3.5 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between">
+            <div class="p-3.5 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between shrink-0">
                 <span class="text-[11px] text-slate-400 dark:text-zinc-500">Security & compliance logs cannot be purged or modified</span>
                 <button onclick="closeAuditLogsModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Close
@@ -3713,9 +3830,9 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 4: Commercial Truck Registry (Add / Edit) -->
-    <div id="addTruckModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+    <div id="addTruckModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-center text-lg font-bold">
                         🚚
@@ -3729,7 +3846,7 @@ async def dashboard_view(request: Request):
                     ✕
                 </button>
             </div>
-            <div class="p-5 space-y-4">
+            <div class="p-5 space-y-4 overflow-y-auto flex-1 overscroll-contain">
                 <input type="hidden" id="modal-truck-id" value="">
                 <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -3768,7 +3885,7 @@ async def dashboard_view(request: Request):
                 </div>
                 <div id="modal-truck-feedback" class="text-xs font-bold hidden"></div>
             </div>
-            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5 shrink-0">
                 <button type="button" onclick="closeAddTruckModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Cancel
                 </button>
@@ -3780,9 +3897,9 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 5: Commercial Driver Registry (Add / Edit) -->
-    <div id="addDriverModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+    <div id="addDriverModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 flex items-center justify-center text-lg font-bold">
                         👤
@@ -3796,7 +3913,7 @@ async def dashboard_view(request: Request):
                     ✕
                 </button>
             </div>
-            <div class="p-5 space-y-4">
+            <div class="p-5 space-y-4 overflow-y-auto flex-1 overscroll-contain">
                 <input type="hidden" id="modal-driver-id" value="">
                 <div>
                     <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Full Legal Name *</label>
@@ -3821,7 +3938,7 @@ async def dashboard_view(request: Request):
                 </div>
                 <div id="modal-driver-feedback" class="text-xs font-bold hidden"></div>
             </div>
-            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5 shrink-0">
                 <button type="button" onclick="closeAddDriverModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Cancel
                 </button>
@@ -3833,9 +3950,9 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 6: Sales Representative Registry (Add / Edit) -->
-    <div id="addSalesRepModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+    <div id="addSalesRepModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
                         💼
@@ -3849,7 +3966,7 @@ async def dashboard_view(request: Request):
                     ✕
                 </button>
             </div>
-            <div class="p-5 space-y-4">
+            <div class="p-5 space-y-4 overflow-y-auto flex-1 overscroll-contain">
                 <input type="hidden" id="modal-salesrep-id" value="">
                 <div>
                     <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Full Legal Name *</label>
@@ -3870,7 +3987,7 @@ async def dashboard_view(request: Request):
                 </div>
                 <div id="modal-salesrep-feedback" class="text-xs font-bold hidden"></div>
             </div>
-            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5">
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5 shrink-0">
                 <button type="button" onclick="closeAddSalesRepModal()" class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Cancel
                 </button>
@@ -3882,10 +3999,10 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 7: User Management & Granular Permissions (MASTER_ADMIN only) -->
-    <div id="userManagementModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div id="userManagementModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <!-- Modal Header -->
-            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
                 <div class="flex items-center gap-2.5">
                     <div class="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
                         👥
@@ -3906,7 +4023,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Content (Scrollable) -->
-            <div class="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
+            <div class="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 overscroll-contain">
                 <!-- User Accounts Overview Table -->
                 <div class="border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
                     <div class="p-3.5 bg-slate-50/75 dark:bg-[#121216] border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between">
@@ -3981,7 +4098,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- Modal Footer -->
-            <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between">
+            <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between shrink-0">
                 <span class="text-[11px] text-slate-500 dark:text-zinc-400">All permission changes are recorded in System Audit Logs</span>
                 <button onclick="closeUserManagementModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Close
@@ -4002,6 +4119,84 @@ async def dashboard_view(request: Request):
         }}
 
         // =============================================================
+        // MODAL SCROLL CONTROLLER & INTERACTION HANDLERS
+        // =============================================================
+        const ALL_MODAL_IDS = [
+            'cityMinimumsModal',
+            'clearPaymentModal',
+            'auditLogsModal',
+            'addTruckModal',
+            'addDriverModal',
+            'addSalesRepModal',
+            'userManagementModal'
+        ];
+
+        function syncBodyScrollLock() {{
+            const anyOpen = ALL_MODAL_IDS.some(id => {{
+                const el = document.getElementById(id);
+                return el && !el.classList.contains('hidden');
+            }});
+            if (anyOpen) {{
+                document.body.classList.add('modal-open');
+            }} else {{
+                document.body.classList.remove('modal-open');
+            }}
+        }}
+
+        function closeModalById(id) {{
+            switch (id) {{
+                case 'cityMinimumsModal': closeCityConfigModal(); break;
+                case 'clearPaymentModal': closeClearPaymentModal(); break;
+                case 'auditLogsModal': closeAuditLogsModal(); break;
+                case 'addTruckModal': closeAddTruckModal(); break;
+                case 'addDriverModal': closeAddDriverModal(); break;
+                case 'addSalesRepModal': closeAddSalesRepModal(); break;
+                case 'userManagementModal': closeUserManagementModal(); break;
+                default:
+                    const el = document.getElementById(id);
+                    if (el) el.classList.add('hidden');
+                    syncBodyScrollLock();
+            }}
+        }}
+
+        function setupModalInteractions() {{
+            ALL_MODAL_IDS.forEach(id => {{
+                const modal = document.getElementById(id);
+                if (!modal) return;
+                // Click on backdrop outside modal-card closes the modal
+                modal.addEventListener('click', (e) => {{
+                    if (e.target === modal) {{
+                        closeModalById(id);
+                    }}
+                }});
+                // Prevent scrolling through the overlay backdrop
+                modal.addEventListener('wheel', (e) => {{
+                    if (e.target === modal) {{
+                        e.preventDefault();
+                    }}
+                }}, {{ passive: false }});
+                modal.addEventListener('touchmove', (e) => {{
+                    if (e.target === modal) {{
+                        e.preventDefault();
+                    }}
+                }}, {{ passive: false }});
+            }});
+
+            // Escape key closes topmost modal
+            document.addEventListener('keydown', (e) => {{
+                if (e.key === 'Escape') {{
+                    for (const id of ALL_MODAL_IDS) {{
+                        const el = document.getElementById(id);
+                        if (el && !el.classList.contains('hidden')) {{
+                            closeModalById(id);
+                            break;
+                        }}
+                    }}
+                }}
+            }});
+        }}
+
+        // =============================================================
         // MODAL 7: USER MANAGEMENT & GRANULAR PERMISSIONS
         // =============================================================
         let loadedUsersData = null;
@@ -4011,12 +4206,14 @@ async def dashboard_view(request: Request):
             const modal = document.getElementById('userManagementModal');
             if (!modal) return;
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
             loadUsersList();
         }}
 
         function closeUserManagementModal() {{
             const modal = document.getElementById('userManagementModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         async function loadUsersList() {{
@@ -4320,7 +4517,7 @@ async def dashboard_view(request: Request):
                 activeBtn.classList.remove('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
             }}
 
-            const subviews = ['overview', 'trips', 'salespersons', 'payments', 'trucks', 'drivers', 'approvals', 'ledger'];
+            const subviews = ['overview', 'trips', 'salespersons', 'payments', 'trucks', 'drivers', 'approvals', 'ledger', 'analytics'];
             subviews.forEach(sv => {{
                 const el = document.getElementById('fleet-section-' + sv);
                 if (el) {{
@@ -4609,6 +4806,322 @@ async def dashboard_view(request: Request):
             }}
         }}
 
+        // =============================================================
+        // SUBVIEW 8: DATA ANALYTICS RENDERER
+        // =============================================================
+        function renderAnalyticsSection(an, stats) {{
+            if (!an && !stats) return;
+            an = an || {{}};
+            stats = stats || {{}};
+
+            // 1. KPI Cards
+            const tripsTotalEl = document.getElementById('an-stat-trips-total');
+            if (tripsTotalEl) tripsTotalEl.textContent = an.trips_total ?? stats.total_trips ?? 0;
+
+            const tripsCompletedEl = document.getElementById('an-stat-trips-completed');
+            if (tripsCompletedEl) tripsCompletedEl.textContent = `${{an.trips_completed ?? 0}} completed · ${{an.trips_pending ?? 0}} active`;
+
+            const avgRevEl = document.getElementById('an-stat-avg-revenue');
+            if (avgRevEl) avgRevEl.textContent = '$' + Number(an.avg_revenue_per_trip || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+
+            const avgOpexEl = document.getElementById('an-stat-avg-opex');
+            if (avgOpexEl) avgOpexEl.textContent = 'Avg Opex: $' + Number(an.avg_opex_per_trip || 0).toFixed(2);
+
+            const utilEl = document.getElementById('an-stat-utilization');
+            if (utilEl) utilEl.textContent = `${{an.fleet_utilization_pct || 0}}%`;
+
+            const wsEl = document.getElementById('an-stat-ws-impact');
+            if (wsEl) wsEl.textContent = `${{an.workshop_impact_count || 0}} trucks in workshop / service`;
+
+            const recRateEl = document.getElementById('an-stat-recovery-rate');
+            if (recRateEl) recRateEl.textContent = `${{an.recovery_rate_pct || 0}}%`;
+
+            const recSubEl = document.getElementById('an-stat-recovery-sub');
+            if (recSubEl) recSubEl.textContent = `$${{Number(an.recovery_total || 0).toLocaleString()}} recovered of $${{Number(an.shortfall_total || 0).toLocaleString()}}`;
+
+            // 2. Pipeline Stage Volume Distribution Bars
+            const pipelineBarsEl = document.getElementById('an-pipeline-bars');
+            if (pipelineBarsEl) {{
+                const totalT = an.trips_total || stats.total_trips || 1;
+                const completed = an.trips_completed || 0;
+                const active = Math.max(0, (an.trips_total || 0) - completed - (an.trips_cancelled || 0));
+                const shortfalls = stats.shortfall_trips || 0;
+                const approved = stats.approved_trips || 0;
+
+                const stages = [
+                    {{ label: 'Completed Deliveries', count: completed, color: 'bg-emerald-500' }},
+                    {{ label: 'Active / In-Transit Operations', count: active, color: 'bg-blue-500' }},
+                    {{ label: 'Shortfalls & Discrepancies Recorded', count: shortfalls, color: 'bg-amber-500' }},
+                    {{ label: 'Dispatches Cleared & Settled', count: approved, color: 'bg-indigo-500' }}
+                ];
+
+                pipelineBarsEl.innerHTML = stages.map(s => {{
+                    const pct = Math.min(100, Math.round((s.count / totalT) * 100));
+                    return `
+                        <div>
+                            <div class="flex justify-between text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">
+                                <span>${{s.label}}</span>
+                                <span class="font-mono text-slate-500">${{s.count}} trips (${{pct}}%)</span>
+                            </div>
+                            <div class="w-full bg-slate-100 dark:bg-[#181820] rounded-full h-2.5 overflow-hidden">
+                                <div class="${{s.color}} h-2.5 rounded-full transition-all duration-500" style="width: ${{pct}}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }}).join('');
+            }}
+
+            // 3. Operational Expense Composition Bars
+            const costBarsEl = document.getElementById('an-cost-bars');
+            if (costBarsEl) {{
+                const totalOpex = an.total_operational_expenses || 1;
+                const fuel = an.total_emergency_fuel || 0;
+                const allowances = (an.total_allowances || 0) + (an.total_meals || 0);
+                const accom = an.total_accommodation || 0;
+                const other = (an.total_tolls || 0) + (an.total_emergency_other || 0);
+
+                const costs = [
+                    {{ label: 'Emergency Fuel Allocations', amount: fuel, color: 'bg-amber-500' }},
+                    {{ label: 'Driver Allowances & Meal Subsidies', amount: allowances, color: 'bg-blue-500' }},
+                    {{ label: 'Nightly Driver Accommodation', amount: accom, color: 'bg-purple-500' }},
+                    {{ label: 'Tollgates & Route Contingencies', amount: other, color: 'bg-rose-500' }}
+                ];
+
+                costBarsEl.innerHTML = costs.map(c => {{
+                    const pct = totalOpex > 0 ? Math.min(100, Math.round((c.amount / totalOpex) * 100)) : 0;
+                    return `
+                        <div>
+                            <div class="flex justify-between text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">
+                                <span>${{c.label}}</span>
+                                <span class="font-mono text-slate-500">$${{Number(c.amount).toFixed(2)}} (${{pct}}%)</span>
+                            </div>
+                            <div class="w-full bg-slate-100 dark:bg-[#181820] rounded-full h-2.5 overflow-hidden">
+                                <div class="${{c.color}} h-2.5 rounded-full transition-all duration-500" style="width: ${{pct}}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }}).join('');
+            }}
+
+            // 4. Top Delivery Corridors & Cities
+            const topCitiesEl = document.getElementById('an-top-cities-list');
+            if (topCitiesEl) {{
+                const cities = an.cities || [];
+                if (cities.length === 0) {{
+                    topCitiesEl.innerHTML = '<div class="text-xs text-slate-400 p-4 text-center">No city delivery records logged yet.</div>';
+                }} else {{
+                    topCitiesEl.innerHTML = cities.slice(0, 6).map(c => `
+                        <div class="py-2.5 flex items-center justify-between text-xs">
+                            <div>
+                                <span class="font-bold text-slate-900 dark:text-zinc-100 capitalize">${{c.city}}</span>
+                                <span class="text-[11px] text-slate-400 dark:text-zinc-500 ml-2 font-mono">${{c.trips}} trips</span>
+                            </div>
+                            <div class="font-mono font-bold text-slate-700 dark:text-zinc-300">
+                                $${{Number(c.sales || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}
+                            </div>
+                        </div>
+                    `).join('');
+                }}
+            }}
+
+            // 5. Cleared & Outstanding Debt Totals
+            const clearedTotEl = document.getElementById('an-cleared-total');
+            if (clearedTotEl) clearedTotEl.textContent = '$' + Number(an.cleared_payments_total || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+
+            const debtTotEl = document.getElementById('an-outstanding-total');
+            if (debtTotEl) debtTotEl.textContent = '$' + Number(an.outstanding_debt_total || stats.total_outstanding_backlog || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+        }}
+
+        // =============================================================
+        // DYNAMIC DOMAIN-AWARE SIDEBAR CONTROLLER
+        // =============================================================
+        function updateSidebarForDomain(domain) {{
+            const nav = document.getElementById('sidebar-nav-container');
+            if (!nav) return;
+
+            let html = '';
+
+            if (domain === 'fleet') {{
+                const canFuel = hasPermission('manage_fuel_price') || hasPermission('manage_city_minimums');
+                const canTrucks = hasPermission('manage_trucks');
+                const canDrivers = hasPermission('manage_drivers');
+                const canSales = hasPermission('manage_sales_reps');
+                const canAudit = hasPermission('view_audit_logs');
+                const canUsers = currentUser && currentUser.role === 'MASTER_ADMIN';
+
+                html = `
+                    <div class="space-y-4">
+                        <!-- Group 1: Commercial Operations -->
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                Commercial Operations
+                            </div>
+                            <div class="space-y-0.5">
+                                <button onclick="switchFleetSubView('overview'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>📊</span> Operations Overview</span>
+                                    <span class="text-[10px] font-mono text-slate-400">Live</span>
+                                </button>
+                                <button onclick="switchFleetSubView('trips'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>🚚</span> Trip Pipeline</span>
+                                    <span class="text-[10px] font-mono text-slate-400">7 Stages</span>
+                                </button>
+                                <button onclick="switchFleetSubView('trucks'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>🚛</span> Fleet Vehicles</span>
+                                    <span class="text-[10px] font-mono text-slate-400">Registry</span>
+                                </button>
+                                <button onclick="switchFleetSubView('drivers'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>👤</span> Commercial Drivers</span>
+                                    <span class="text-[10px] font-mono text-slate-400">Roster</span>
+                                </button>
+                                <button onclick="switchFleetSubView('approvals'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>⏳</span> Shortfall Approvals</span>
+                                    <span class="text-[10px] font-mono text-amber-500 font-bold">Queue</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Group 2: Finance & Ledgers -->
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                Finance & Ledgers
+                            </div>
+                            <div class="space-y-0.5">
+                                <button onclick="switchFleetSubView('salespersons'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>💼</span> Sales Representative Balances</span>
+                                    <span class="text-[10px] font-mono text-rose-500 font-bold">Balances</span>
+                                </button>
+                                <button onclick="switchFleetSubView('payments'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>💳</span> Payment History</span>
+                                    <span class="text-[10px] font-mono text-emerald-500 font-bold">History</span>
+                                </button>
+                                <button onclick="switchFleetSubView('ledger'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>📑</span> Financial Audit Log</span>
+                                    <span class="text-[10px] font-mono text-slate-400">Ledger</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Group 3: Analytics & Insights -->
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                Analytics & Insights
+                            </div>
+                            <div class="space-y-0.5">
+                                <button onclick="switchFleetSubView('analytics'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>📈</span> Data Analytics</span>
+                                    <span class="text-[10px] font-bold text-blue-600 dark:text-blue-400">KPIs</span>
+                                </button>
+                                <button onclick="switchFleetSubView('all'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>📑</span> Consolidated View (All)</span>
+                                    <span class="text-[10px] font-mono text-slate-400">Full</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Group 4: Operational Actions & Config -->
+                        ${{(canFuel || canTrucks || canDrivers || canSales || canAudit || canUsers) ? `
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                Operational Actions
+                            </div>
+                            <div class="space-y-0.5">
+                                ${{canFuel ? `
+                                <button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>⚙️</span> Fuel & City Rates</span>
+                                    <span class="text-[10px] font-mono text-slate-400">Config</span>
+                                </button>` : ''}}
+                                ${{canTrucks ? `
+                                <button onclick="openAddTruckModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>➕</span> Register Truck</span>
+                                </button>` : ''}}
+                                ${{canDrivers ? `
+                                <button onclick="openAddDriverModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>➕</span> Register Driver</span>
+                                </button>` : ''}}
+                                ${{canSales ? `
+                                <button onclick="openAddSalesRepModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>➕</span> Register Sales Rep</span>
+                                </button>` : ''}}
+                                ${{canAudit ? `
+                                <button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>📜</span> System Audit Logs</span>
+                                </button>` : ''}}
+                                ${{canUsers ? `
+                                <button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2"><span>👥</span> User Management & Permissions</span>
+                                </button>` : ''}}
+                            </div>
+                        </div>` : ''}}
+                    </div>
+                `;
+            }} else if (domain === 'it') {{
+                html = `
+                    <div class="space-y-4">
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                IT Helpdesk & Support
+                            </div>
+                            <div class="space-y-0.5">
+                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>🎫</span> Active Tickets Queue</span>
+                                </a>
+                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>🔴</span> Critical & SLA Breaches</span>
+                                </a>
+                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>🤖</span> WhatsApp Bot Diagnostics</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }} else if (domain === 'projects') {{
+                html = `
+                    <div class="space-y-4">
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                Construction & Projects
+                            </div>
+                            <div class="space-y-0.5">
+                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>🏗️</span> Active Site Projects</span>
+                                </a>
+                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>📦</span> Materials & Cement Logistics</span>
+                                </a>
+                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>💰</span> Site Budgets & Approvals</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }} else if (domain === 'logistics') {{
+                html = `
+                    <div class="space-y-4">
+                        <div>
+                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                                Workshop Fleet Maintenance
+                            </div>
+                            <div class="space-y-0.5">
+                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>🔧</span> Active Service Jobs</span>
+                                </a>
+                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>⚙️</span> Awaiting Spares & Parts</span>
+                                </a>
+                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                    <span class="flex items-center gap-2"><span>🚦</span> Fleet Readiness Matrix</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }}
+
+            nav.innerHTML = html;
+        }}
+
 
         function filterByITAdmin(adminName) {{
             const adminFilter = document.getElementById('it-admin-filter');
@@ -4674,6 +5187,8 @@ async def dashboard_view(request: Request):
                 targetView.style.display = 'block';
                 window.location.hash = domain;
             }}
+
+            updateSidebarForDomain(domain);
         }}
 
         async function manualRefresh() {{
@@ -5146,8 +5661,9 @@ async def dashboard_view(request: Request):
 
         function renderFleet(fleet) {{
             if (!fleet) return;
-            // 0. Operations Overview
+            // 0. Operations Overview & Analytics
             if (fleet.overview) renderOperationsOverview(fleet.overview, currentUser);
+            if (fleet.analytics || fleet.stats) renderAnalyticsSection(fleet.analytics, fleet.stats);
 
             // 1. Top Stats Cards
             document.getElementById('fleet-stat-trips').textContent = fleet.stats.total_trips;
@@ -5610,7 +6126,7 @@ async def dashboard_view(request: Request):
         }}
 
         // =============================================================
-        // SUBVIEW 4: 39 COMMERCIAL TRUCKS FLEET
+        // SUBVIEW 4: FLEET VEHICLES
         // =============================================================
         function filterTrucksTable(resetPage = false) {{
             if (!cachedData || !cachedData.fleet || !cachedData.fleet.trucks) return;
@@ -5662,7 +6178,7 @@ async def dashboard_view(request: Request):
         }}
 
         // =============================================================
-        // SUBVIEW 5: 21 COMMERCIAL DRIVERS
+        // SUBVIEW 5: COMMERCIAL DRIVERS
         // =============================================================
         function filterDriversTable(resetPage = false) {{
             if (!cachedData || !cachedData.fleet || !cachedData.fleet.drivers) return;
@@ -5711,7 +6227,7 @@ async def dashboard_view(request: Request):
         }}
 
         // =============================================================
-        // SUBVIEW 3: CLEARED PAYMENTS HISTORY
+        // SUBVIEW 3: PAYMENT HISTORY
         // =============================================================
         function filterPaymentsTable(resetPage = false) {{
             if (!cachedData || !cachedData.fleet || !cachedData.fleet.payments) return;
@@ -5815,11 +6331,13 @@ async def dashboard_view(request: Request):
                 if (opsBtn) opsBtn.style.display = (canMeal || canAccom || canFuel || canCity) ? '' : 'none';
             }}
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
         }}
 
         function closeCityConfigModal() {{
             const modal = document.getElementById('cityMinimumsModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         let modalCityRulesCache = [];
@@ -6037,11 +6555,13 @@ async def dashboard_view(request: Request):
             }}
 
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
         }}
 
         function closeClearPaymentModal() {{
             const modal = document.getElementById('clearPaymentModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         function onSelectPaySalesperson() {{
@@ -6142,12 +6662,14 @@ async def dashboard_view(request: Request):
             const modal = document.getElementById('auditLogsModal');
             if (!modal) return;
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
             loadAuditLogs();
         }}
 
         function closeAuditLogsModal() {{
             const modal = document.getElementById('auditLogsModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         async function loadAuditLogs() {{
@@ -6273,11 +6795,13 @@ async def dashboard_view(request: Request):
             const fb = document.getElementById('modal-truck-feedback');
             if (fb) fb.classList.add('hidden');
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
         }}
 
         function closeAddTruckModal() {{
             const modal = document.getElementById('addTruckModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         async function submitSaveTruck() {{
@@ -6350,11 +6874,13 @@ async def dashboard_view(request: Request):
             const fb = document.getElementById('modal-driver-feedback');
             if (fb) fb.classList.add('hidden');
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
         }}
 
         function closeAddDriverModal() {{
             const modal = document.getElementById('addDriverModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         async function submitSaveDriver() {{
@@ -6423,11 +6949,13 @@ async def dashboard_view(request: Request):
             const fb = document.getElementById('modal-salesrep-feedback');
             if (fb) fb.classList.add('hidden');
             modal.classList.remove('hidden');
+            syncBodyScrollLock();
         }}
 
         function closeAddSalesRepModal() {{
             const modal = document.getElementById('addSalesRepModal');
             if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
         }}
 
         async function submitSaveSalesRep() {{
@@ -6481,6 +7009,7 @@ async def dashboard_view(request: Request):
         }}
 
         // Initialize dashboard
+        setupModalInteractions();
         switchDomain(initialDefaultTab);
         fetchDashboard();
         setInterval(() => {{
