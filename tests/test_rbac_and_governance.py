@@ -83,6 +83,9 @@ class TestRBACAndGovernance(unittest.IsolatedAsyncioTestCase):
             res_meal = await api_update_meal_rate(req_meal, session)
             self.assertEqual(res_meal["status"], "success")
             self.assertEqual(res_meal["meal_rate_usd"], 3.00)
+            # Cleanup
+            await api_update_fuel(self.make_mock_request({"fuel_price": 1.65}), session)
+            await api_update_meal_rate(self.make_mock_request({"meal_rate_usd": 2.00}), session)
 
     # -------------------------------------------------------------
     # 2. Base FLEET_ADMIN vs Delegated FLEET_ADMIN (Sujit)
@@ -167,6 +170,8 @@ class TestRBACAndGovernance(unittest.IsolatedAsyncioTestCase):
             res_meal = await api_update_meal_rate(req_meal, session)
             self.assertEqual(res_meal["status"], "success")
             self.assertEqual(res_meal["meal_rate_usd"], 2.50)
+            # Cleanup
+            await api_update_meal_rate(self.make_mock_request({"meal_rate_usd": 2.00, "reason": "Cleanup"}), session)
 
     # -------------------------------------------------------------
     # 3. SALES_ADMIN Strict Lockdown

@@ -1631,6 +1631,183 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 }
         sales_reps_list = list(reps_map.values())
 
+        # H. Enterprise Operations Overview: Role-Gated KPIs, Alerts & Recent Activity
+        can_view_schedules = user_has_permission(user, "view_customer_schedules") or user_has_permission(user, "manage_sales_pipeline")
+        can_view_balances = user_has_permission(user, "view_sales_rep_balances")
+        can_approve_trips = user_has_permission(user, "approve_trips")
+        can_clear_debt = user_has_permission(user, "clear_sales_rep_debt")
+        can_view_workshop = user_has_permission(user, "view_workshop_workspace")
+        is_observer = (user.get("role") == "EXECUTIVE_OBSERVER")
+
+        # 1. Active / Ongoing Trips
+        active_trips_count = sum(1 for tr in raw_trips if (tr.status or "").upper() in ("APPROVED", "DISPATCH_APPROVED", "VOUCHER_ISSUED", "LOADED", "IN_TRANSIT", "OFFLOADED", "ACTIVE", "TRANSFERRED"))
+        in_transit_trips = sum(1 for tr in raw_trips if "TRANSIT" in (tr.status or "").upper())
+
+        # 2. Pending Approvals
+        pending_approvals_count = sum(1 for fa in fleet_approvals if fa.status == "SHORTFALL_RECORDED")
+        quoted_trips_count = sum(1 for tr in raw_trips if (tr.status or "").upper() in ("QUOTED", "CREATED", "PENDING_ASSIGNMENT"))
+        total_pending_approvals = pending_approvals_count + quoted_trips_count
+
+        # 3. Trucks & Drivers
+        trucks_total = len(trucks_list)
+        trucks_active = sum(1 for t in trucks_list if t["active"])
+        trucks_maintenance = trucks_total - trucks_active
+        drivers_total = len(drivers_list)
+        drivers_active = sum(1 for d in drivers_list if d["active"])
+
+        # 4. Sales Pipeline / Customer Schedules Summary (Role Gated)
+        sales_pipeline_summary = None
+        if can_view_schedules:
+            sched_stmt = select(FleetCustomerSchedule).order_by(FleetCustomerSchedule.created_at.desc())
+            raw_schedules = (await db.execute(sched_stmt)).scalars().all()
+            sched_total = len(raw_schedules)
+            sched_pending = sum(1 for s in raw_schedules if s.status == "PENDING")
+            sched_matched = sum(1 for s in raw_schedules if s.status == "MATCHED")
+            sched_variance = sum(1 for s in raw_schedules if s.status == "VARIANCE")
+            sched_expected_rev = round(sum(s.expected_charge or 0.0 for s in raw_schedules), 2)
+            sched_collected_rev = round(sum(s.collected_charge or 0.0 for s in raw_schedules), 2)
+            sales_pipeline_summary = {
+                "total_schedules": sched_total,
+                "pending_collection": sched_pending,
+                "matched_collection": sched_matched,
+                "variance_collection": sched_variance,
+                "expected_revenue": sched_expected_rev,
+                "collected_revenue": sched_collected_rev
+            }
+
+        # 5. Sales Rep Balance Summary (Role Gated)
+        sales_rep_balance_summary = None
+        reps_in_debt = sum(1 for sp in salespersons_list if sp["net_balance"] > 0)
+        reps_high_alert = sum(1 for sp in salespersons_list if sp["risk_level"] == "HIGH_ALERT")
+        if can_view_balances:
+            sales_rep_balance_summary = {
+                "total_backlog": fleet_stats["total_outstanding_backlog"],
+                "reps_in_debt": reps_in_debt,
+                "reps_high_alert": reps_high_alert,
+                "total_recovered": fleet_stats["total_recovered"]
+            }
+
+        # 6. Prioritized Operational Exceptions & Alerts
+        operations_alerts = []
+        if total_pending_approvals > 0:
+            operations_alerts.append({
+                "id": "alert-pending-approvals",
+                "severity": "urgent" if pending_approvals_count > 0 else "warning",
+                "category": "APPROVALS",
+                "title": f"{total_pending_approvals} Trip(s) Awaiting Management Sign-off",
+                "description": f"{pending_approvals_count} commercial shortfall exception(s) requiring decision; {quoted_trips_count} quote(s) awaiting dispatch approval.",
+                "action_label": "Review Approvals",
+                "target_subview": "approvals",
+                "can_action": can_approve_trips and not is_observer
+            })
+
+        needing_voucher = sum(1 for tr in raw_trips if (tr.status or "").upper() == "APPROVED")
+        needing_loading = sum(1 for tr in raw_trips if "VOUCHER" in (tr.status or "").upper())
+        discrepancy_trips = sum(1 for tr in raw_trips if (tr.discrepancy_amount or 0.0) > 0)
+        if needing_voucher > 0 or needing_loading > 0 or discrepancy_trips > 0:
+            operations_alerts.append({
+                "id": "alert-dispatch-action",
+                "severity": "urgent" if discrepancy_trips > 0 else "warning",
+                "category": "DISPATCH",
+                "title": f"Dispatch Actions Required ({needing_voucher + needing_loading} in queue)",
+                "description": f"{needing_voucher} trip(s) approved awaiting fuel/allowance voucher; {needing_loading} awaiting loading & start odometer.{f' ⚠️ {discrepancy_trips} odometer discrepancy flagged!' if discrepancy_trips else ''}",
+                "action_label": "Open Trips Pipeline",
+                "target_subview": "trips",
+                "can_action": True
+            })
+
+        if can_view_balances and reps_in_debt > 0:
+            operations_alerts.append({
+                "id": "alert-rep-debt",
+                "severity": "urgent" if reps_high_alert > 0 else "warning",
+                "category": "FINANCE",
+                "title": f"${fleet_stats['total_outstanding_backlog']:,.2f} Outstanding Sales Rep Debt",
+                "description": f"{reps_in_debt} sales representative(s) currently carry deficit balances. {reps_high_alert} rep(s) flagged on HIGH DEBT ALERT (> $250.00).",
+                "action_label": "Clear Debt Settlement" if can_clear_debt and not is_observer else "View Debt Ledger",
+                "target_subview": "salespersons",
+                "modal_target": "clearPaymentModal" if can_clear_debt and not is_observer else None,
+                "can_action": (can_clear_debt or can_view_balances) and not is_observer
+            })
+
+        ws_in_floor = logistics_payload["stats"]["in_workshop"] if logistics_payload else trucks_maintenance
+        ws_awaiting_parts = logistics_payload["stats"]["awaiting_parts"] if logistics_payload else 0
+        if (can_view_workshop or user_has_permission(user, "manage_trucks")) and (trucks_maintenance > 0 or ws_in_floor > 0 or ws_awaiting_parts > 0):
+            operations_alerts.append({
+                "id": "alert-fleet-maintenance",
+                "severity": "warning" if ws_awaiting_parts > 0 else "info",
+                "category": "FLEET",
+                "title": f"{trucks_maintenance} Commercial Truck(s) Out of Service",
+                "description": f"{trucks_active} of {trucks_total} commercial vehicles operational. {ws_in_floor} vehicle(s) on workshop floor, {ws_awaiting_parts} awaiting parts requisition.",
+                "action_label": "Inspect Fleet Vehicles",
+                "target_subview": "trucks",
+                "can_action": True
+            })
+
+        if can_view_schedules and sales_pipeline_summary and sales_pipeline_summary.get("variance_collection", 0) > 0:
+            operations_alerts.append({
+                "id": "alert-customer-variance",
+                "severity": "warning",
+                "category": "SALES",
+                "title": f"{sales_pipeline_summary['variance_collection']} Customer Payment Variance(s) Flagged",
+                "description": f"Customer delivery schedules report collected payment differing from expected invoiced manifest amounts.",
+                "action_label": "View Trips Pipeline",
+                "target_subview": "trips",
+                "can_action": True
+            })
+
+        # 7. Recent Operational Activity Feed (Audit logs + Real operational events)
+        recent_activity_list = []
+        audit_stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(10)
+        raw_audits = (await db.execute(audit_stmt)).scalars().all()
+        for idx, al in enumerate(raw_audits):
+            cat = "CONFIG"
+            badge = "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30"
+            if "PAYMENT" in al.action or "CLEAR" in al.action:
+                cat = "FINANCE"
+                badge = "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30"
+            elif "FUEL" in al.action or "ROUTE" in al.action or "RATE" in al.action:
+                cat = "PRICING"
+                badge = "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/30"
+            elif "USER" in al.action or "PERMISSION" in al.action:
+                cat = "SECURITY"
+                badge = "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30"
+
+            recent_activity_list.append({
+                "id": f"aud-{al.id}",
+                "timestamp": al.created_at.strftime("%Y-%m-%d %H:%M") if al.created_at else "",
+                "category": cat,
+                "title": al.action.replace("_", " ").title(),
+                "description": al.remarks or f"{al.action} performed on {al.module} ({al.entity_id or ''})",
+                "actor": al.username or "Admin",
+                "badge_class": badge
+            })
+
+        # If audit logs are fewer than 6, blend with real recent payments & trip approvals
+        if len(recent_activity_list) < 6:
+            for pm in payments_list[:4]:
+                recent_activity_list.append({
+                    "id": f"pay-{pm['id']}",
+                    "timestamp": pm["payment_date"],
+                    "category": "FINANCE",
+                    "title": f"Cleared ${pm['cleared_amount']:,.2f} Debt",
+                    "description": f"Settlement recorded for {pm['salesperson_name']} via {pm['payment_method']}",
+                    "actor": pm["recorded_by"],
+                    "badge_class": "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30"
+                })
+            for fa in approval_records[:4]:
+                recent_activity_list.append({
+                    "id": f"app-{fa['id']}",
+                    "timestamp": fa["created_at"],
+                    "category": "APPROVALS",
+                    "title": f"Trip {fa['trip_id']} Approved",
+                    "description": f"{fa['salesperson_name']} to {fa['destination_city']} (${fa['trip_sales_value']:,.2f})",
+                    "actor": "Fleet Operations",
+                    "badge_class": "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30"
+                })
+
+        recent_activity_list.sort(key=lambda x: x["timestamp"], reverse=True)
+        recent_activity_list = recent_activity_list[:10]
+
         fleet_payload = {
             "stats": fleet_stats,
             "salespersons": salespersons_list,
@@ -1647,7 +1824,28 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "expense_budget_pct": get_expense_budget_pct(),
             "van_minimum_surcharge": get_van_minimum_surcharge(),
             "trucks": trucks_list,
-            "drivers": drivers_list
+            "drivers": drivers_list,
+            "overview": {
+                "kpis": {
+                    "active_ongoing_trips": active_trips_count,
+                    "in_transit_trips": in_transit_trips,
+                    "pending_trip_approvals": total_pending_approvals,
+                    "pending_approvals_shortfall": pending_approvals_count,
+                    "pending_quotes_count": quoted_trips_count,
+                    "trucks_total": trucks_total,
+                    "trucks_active": trucks_active,
+                    "trucks_maintenance": trucks_maintenance,
+                    "drivers_total": drivers_total,
+                    "drivers_active": drivers_active,
+                    "sales_pipeline": sales_pipeline_summary,
+                    "sales_rep_balance": sales_rep_balance_summary,
+                    "pending_bottlenecks_count": len(operations_alerts)
+                },
+                "alerts": operations_alerts,
+                "recent_activity": recent_activity_list,
+                "role": user.get("role"),
+                "is_read_only": is_observer
+            }
         }
 
     # Master Cross-Domain Executive KPI Calculation
@@ -1708,7 +1906,7 @@ async def dashboard_view(request: Request):
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
     allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet", "accounts", "admin"])
-    default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "LOGISTICS_MANAGER") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
+    default_tab = "fleet" if user["role"] in ("MASTER_ADMIN", "EXECUTIVE_OBSERVER", "FLEET_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "LOGISTICS_MANAGER") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
 
     # Generate navigation tab buttons based on allowed domains
     tabs_html = []
@@ -1739,6 +1937,9 @@ async def dashboard_view(request: Request):
 
     sidebar_links = []
     sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Dashboards</div>')
+
+    if "fleet" in allowed:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'overview\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>⚡</span> Operations Overview</button>')
 
     if user_role == "MASTER_ADMIN":
         sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>👑</span> Master Admin Dashboard</button>')
@@ -2335,7 +2536,10 @@ async def dashboard_view(request: Request):
 
             <!-- Fleet Operational Sub-View Navigation Pills -->
             <div class="flex items-center gap-1.5 p-1.5 bg-slate-100 dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 overflow-x-auto no-scrollbar scroll-smooth">
-                <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-blue-600 text-white shadow-md">
+                <button onclick="switchFleetSubView('overview')" id="fleet-btn-overview" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-blue-600 text-white shadow-md">
+                    <span>⚡</span> Operations Overview
+                </button>
+                <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
                     <span>🛣️</span> 7-Stage Trips Pipeline
                 </button>
                 <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
@@ -2361,37 +2565,121 @@ async def dashboard_view(request: Request):
                 </button>
             </div>
 
-            <!-- Fleet Approval Top Stats Cards -->
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Trips Verified</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1.5" id="fleet-stat-trips">0</div>
-                    <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1" id="fleet-stat-sales-val">$0.00 ERP Sales</div>
+            <!-- SUBVIEW 0: OPERATIONS OVERVIEW -->
+            <div id="fleet-section-overview" class="fleet-subview-panel space-y-6 transition-all duration-200" style="display: block;">
+                <!-- 1. KPI SUMMARY DECK (6 Cards) -->
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+                    <!-- Active Trips -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active Trips</span>
+                            <span class="text-xs">🛣️</span>
+                        </div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="ov-kpi-active-trips">0</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-transit-trips">0 in transit</div>
+                    </div>
+
+                    <!-- Pending Approvals -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Trip Approvals</span>
+                            <span class="text-xs">📋</span>
+                        </div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1 font-mono" id="ov-kpi-pending-approvals">0</div>
+                        <div class="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5 font-medium truncate" id="ov-kpi-shortfall-sub">0 shortfalls</div>
+                    </div>
+
+                    <!-- Commercial Fleet / Trucks -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Fleet Ready</span>
+                            <span class="text-xs">🚚</span>
+                        </div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono" id="ov-kpi-trucks-ready">0</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-trucks-total">of 0 total trucks</div>
+                    </div>
+
+                    <!-- Commercial Drivers -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Driver Roster</span>
+                            <span class="text-xs">👤</span>
+                        </div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1 font-mono" id="ov-kpi-drivers-active">0</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-drivers-total">of 0 on roster</div>
+                    </div>
+
+                    <!-- Role-Gated Commercial/Financial Card (Slot 5) -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition" id="ov-kpi-card-slot5">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500" id="ov-kpi-slot5-title">Commercial Balance</span>
+                            <span class="text-xs" id="ov-kpi-slot5-icon">💳</span>
+                        </div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1 font-mono truncate" id="ov-kpi-slot5-val">$0.00</div>
+                        <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-slot5-sub">Outstanding Rep Debt</div>
+                    </div>
+
+                    <!-- Action Queue / Priority Bottlenecks -->
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Action Queue</span>
+                            <span class="text-xs">⚡</span>
+                        </div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-purple-600 dark:text-purple-400 mt-1 font-mono" id="ov-kpi-bottlenecks">0</div>
+                        <div class="text-[11px] text-purple-600 dark:text-purple-400 mt-0.5 font-semibold truncate">Priority Exceptions</div>
+                    </div>
                 </div>
-                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Approved for Dispatch</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 mt-1.5" id="fleet-stat-approved">0</div>
-                    <div class="text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">Cleared Trips</div>
-                </div>
-                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Shortfalls Detected</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1.5" id="fleet-stat-shortfalls">0</div>
-                    <div class="text-[11px] sm:text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1">Below City Threshold</div>
-                </div>
-                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Transport Charges</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5" id="fleet-stat-transport">$0.00</div>
-                    <div class="text-[11px] sm:text-xs text-indigo-600 dark:text-indigo-400 font-semibold mt-1">Total Fee Assessed</div>
-                </div>
-                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200 col-span-2 sm:col-span-1">
-                    <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Salesperson Debt</div>
-                    <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1.5" id="fleet-stat-backlog">$0.00</div>
-                    <div class="text-[11px] sm:text-xs text-rose-600 dark:text-rose-400 font-semibold mt-1">Pending Shortfall Ledger</div>
+
+                <!-- 2. TWO-COLUMN OPERATIONS WORKFLOW GRID -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6">
+                    <!-- Left: Operational Action Center & Priority Alerts (7 cols) -->
+                    <div class="lg:col-span-7 space-y-4">
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
+                            <div class="p-4 sm:p-5 border-b border-slate-200/80 dark:border-zinc-850 flex items-center justify-between bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                                <div>
+                                    <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                                        <span>🚨</span> Operational Action Center & Priority Alerts
+                                    </h3>
+                                    <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Prioritized operational exceptions requiring supervisor adjudication</p>
+                                </div>
+                                <span id="ov-alerts-count-badge" class="bg-amber-100 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-500/30">
+                                    0 active
+                                </span>
+                            </div>
+                            <div id="ov-alerts-list" class="p-4 sm:p-5 space-y-3 divide-y divide-slate-100 dark:divide-zinc-850/50">
+                                <div class="text-center py-8 text-slate-400 dark:text-zinc-500 text-xs">
+                                    Loading live operations stream...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Live Operational Activity Feed (5 cols) -->
+                    <div class="lg:col-span-5 space-y-4">
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
+                            <div class="p-4 sm:p-5 border-b border-slate-200/80 dark:border-zinc-850 flex items-center justify-between bg-slate-50/60 dark:bg-[#0e0e12]/80">
+                                <div>
+                                    <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                                        <span>📜</span> Live Operational Activity Feed
+                                    </h3>
+                                    <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Chronological stream of system modifications, approvals & ledger events</p>
+                                </div>
+                                <span class="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Live
+                                </span>
+                            </div>
+                            <div id="ov-activity-list" class="p-4 sm:p-5 space-y-3 max-h-[620px] overflow-y-auto no-scrollbar">
+                                <div class="text-center py-8 text-slate-400 dark:text-zinc-500 text-xs">
+                                    Loading recent activity...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <!-- SUBVIEW 1: 7-STAGE TRIPS PIPELINE -->
-            <div id="fleet-section-trips" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
+            <div id="fleet-section-trips" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200" style="display: none;">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
                         <input type="text" id="trips-search" placeholder="🔍 Search Trip #, Driver, Truck, City..." oninput="filterTripsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
@@ -2589,8 +2877,38 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- SUBVIEW 6: SHORTFALL APPROVALS & DISPATCH AUDITS -->
-            <div id="fleet-section-approvals" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
-                <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
+            <div id="fleet-section-approvals" class="fleet-subview-panel space-y-4 transition-all duration-200" style="display: none;">
+                <!-- Fleet Approval Top Stats Cards -->
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                        <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Trips Verified</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1.5" id="fleet-stat-trips">0</div>
+                        <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1" id="fleet-stat-sales-val">$0.00 ERP Sales</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                        <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Approved for Dispatch</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-500 dark:text-emerald-400 mt-1.5" id="fleet-stat-approved">0</div>
+                        <div class="text-[11px] sm:text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1">Cleared Trips</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                        <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Shortfalls Detected</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1.5" id="fleet-stat-shortfalls">0</div>
+                        <div class="text-[11px] sm:text-xs text-amber-600 dark:text-amber-400 font-semibold mt-1">Below City Threshold</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
+                        <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Transport Charges</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5" id="fleet-stat-transport">$0.00</div>
+                        <div class="text-[11px] sm:text-xs text-indigo-600 dark:text-indigo-400 font-semibold mt-1">Total Fee Assessed</div>
+                    </div>
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200 col-span-2 sm:col-span-1">
+                        <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Salesperson Debt</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1.5" id="fleet-stat-backlog">$0.00</div>
+                        <div class="text-[11px] sm:text-xs text-rose-600 dark:text-rose-400 font-semibold mt-1">Pending Shortfall Ledger</div>
+                    </div>
+                </div>
+
+                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
+                    <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
                         <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
@@ -3574,7 +3892,7 @@ async def dashboard_view(request: Request):
         // -------------------------------------------------------------
         // Fleet Operations Sub-View Switcher
         // -------------------------------------------------------------
-        let currentFleetSubView = 'trips';
+        let currentFleetSubView = 'overview';
         function switchFleetSubView(viewId) {{
             currentFleetSubView = viewId;
             document.querySelectorAll('.fleet-subview-btn').forEach(btn => {{
@@ -3587,7 +3905,7 @@ async def dashboard_view(request: Request):
                 activeBtn.classList.remove('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
             }}
 
-            const subviews = ['trips', 'salespersons', 'payments', 'trucks', 'drivers', 'approvals', 'ledger'];
+            const subviews = ['overview', 'trips', 'salespersons', 'payments', 'trucks', 'drivers', 'approvals', 'ledger'];
             subviews.forEach(sv => {{
                 const el = document.getElementById('fleet-section-' + sv);
                 if (el) {{
@@ -3598,6 +3916,170 @@ async def dashboard_view(request: Request):
                     }}
                 }}
             }});
+        }}
+
+        function renderOperationsOverview(overview, user) {{
+            if (!overview) return;
+            const kpis = overview.kpis || {{}};
+
+            // 1. KPI Cards
+            const elActiveTrips = document.getElementById('ov-kpi-active-trips');
+            if (elActiveTrips) elActiveTrips.textContent = kpis.active_ongoing_trips ?? 0;
+
+            const elTransit = document.getElementById('ov-kpi-transit-trips');
+            if (elTransit) elTransit.textContent = `${{kpis.in_transit_trips ?? 0}} in transit`;
+
+            const elPendingApp = document.getElementById('ov-kpi-pending-approvals');
+            if (elPendingApp) elPendingApp.textContent = kpis.pending_trip_approvals ?? 0;
+
+            const elShortfallSub = document.getElementById('ov-kpi-shortfall-sub');
+            if (elShortfallSub) elShortfallSub.textContent = `${{kpis.pending_approvals_shortfall ?? 0}} shortfalls, ${{kpis.pending_quotes_count ?? 0}} quotes`;
+
+            const elTrucksReady = document.getElementById('ov-kpi-trucks-ready');
+            if (elTrucksReady) elTrucksReady.textContent = kpis.trucks_active ?? 0;
+
+            const elTrucksTotal = document.getElementById('ov-kpi-trucks-total');
+            if (elTrucksTotal) elTrucksTotal.textContent = `of ${{kpis.trucks_total ?? 0}} trucks (${{kpis.trucks_maintenance ?? 0}} maint)`;
+
+            const elDriversActive = document.getElementById('ov-kpi-drivers-active');
+            if (elDriversActive) elDriversActive.textContent = kpis.drivers_active ?? 0;
+
+            const elDriversTotal = document.getElementById('ov-kpi-drivers-total');
+            if (elDriversTotal) elDriversTotal.textContent = `of ${{kpis.drivers_total ?? 0}} on roster`;
+
+            // Role-gated Card 5
+            const slot5Title = document.getElementById('ov-kpi-slot5-title');
+            const slot5Icon = document.getElementById('ov-kpi-slot5-icon');
+            const slot5Val = document.getElementById('ov-kpi-slot5-val');
+            const slot5Sub = document.getElementById('ov-kpi-slot5-sub');
+
+            if (kpis.sales_pipeline && slot5Title && slot5Val) {{
+                slot5Title.textContent = 'Sales Pipeline';
+                if (slot5Icon) slot5Icon.textContent = '📈';
+                slot5Val.className = 'text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono truncate';
+                slot5Val.textContent = '$' + Number(kpis.sales_pipeline.total_invoiced_value || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                if (slot5Sub) slot5Sub.textContent = `${{kpis.sales_pipeline.orders_count || 0}} orders (${{kpis.sales_pipeline.completed_deliveries || 0}} delivered)`;
+            }} else if (kpis.sales_rep_balance && slot5Title && slot5Val) {{
+                slot5Title.textContent = 'Sales Rep Debt';
+                if (slot5Icon) slot5Icon.textContent = '💳';
+                const debt = Number(kpis.sales_rep_balance.total_outstanding_debt || 0);
+                slot5Val.className = `text-2xl sm:text-3xl font-extrabold mt-1 font-mono truncate ${{debt > 0 ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-500 dark:text-emerald-400'}}`;
+                slot5Val.textContent = '$' + debt.toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                if (slot5Sub) slot5Sub.textContent = `${{kpis.sales_rep_balance.reps_in_debt || 0}} in debt (${{kpis.sales_rep_balance.high_alert_count || 0}} high alert)`;
+            }} else if (slot5Title && slot5Val) {{
+                slot5Title.textContent = 'Fleet Readiness';
+                if (slot5Icon) slot5Icon.textContent = '🚚';
+                slot5Val.className = 'text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1 font-mono truncate';
+                slot5Val.textContent = `${{kpis.trucks_active ?? 0}}/${{kpis.trucks_total ?? 0}}`;
+                if (slot5Sub) slot5Sub.textContent = 'Commercial vehicles ready';
+            }}
+
+            const elBottlenecks = document.getElementById('ov-kpi-bottlenecks');
+            if (elBottlenecks) elBottlenecks.textContent = kpis.pending_bottlenecks_count ?? 0;
+
+            // 2. Alerts Container
+            const alertsBadge = document.getElementById('ov-alerts-count-badge');
+            if (alertsBadge) {{
+                const count = (overview.alerts || []).length;
+                alertsBadge.textContent = `${{count}} active`;
+                alertsBadge.className = count > 0 
+                    ? 'bg-amber-100 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[10px] font-bold px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-500/30'
+                    : 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-500/30';
+            }}
+
+            const alertsList = document.getElementById('ov-alerts-list');
+            if (alertsList) {{
+                if (!overview.alerts || overview.alerts.length === 0) {{
+                    alertsList.innerHTML = `
+                        <div class="py-10 text-center">
+                            <div class="text-3xl mb-2">🎉</div>
+                            <div class="text-sm font-extrabold text-slate-800 dark:text-zinc-200">All Operations Clear</div>
+                            <p class="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-sm mx-auto">No pending exceptions, dispatch bottlenecks, or high-risk balances requiring attention.</p>
+                        </div>
+                    `;
+                }} else {{
+                    alertsList.innerHTML = overview.alerts.map(a => {{
+                        let sevBorder = 'border-amber-200 dark:border-amber-500/30 bg-amber-500/5';
+                        let sevBadge = 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        let sevIcon = '⚠️';
+
+                        if (a.severity === 'urgent') {{
+                            sevBorder = 'border-rose-200 dark:border-rose-500/30 bg-rose-500/5';
+                            sevBadge = 'bg-rose-500/10 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-500/30 font-bold';
+                            sevIcon = '🚨';
+                        }} else if (a.severity === 'info') {{
+                            sevBorder = 'border-blue-200 dark:border-blue-500/30 bg-blue-500/5';
+                            sevBadge = 'bg-blue-500/10 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                            sevIcon = 'ℹ️';
+                        }}
+
+                        let actionBtnHtml = '';
+                        if (a.can_action && !overview.is_read_only) {{
+                            if (a.modal_target === 'clearPaymentModal') {{
+                                actionBtnHtml = `<button onclick="openClearPaymentModal()" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs whitespace-nowrap cursor-pointer shrink-0">${{a.action_label}} →</button>`;
+                            }} else if (a.target_subview) {{
+                                actionBtnHtml = `<button onclick="switchFleetSubView('${{a.target_subview}}')" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 dark:bg-zinc-100 hover:bg-slate-800 dark:hover:bg-zinc-200 text-white dark:text-slate-900 transition shadow-xs whitespace-nowrap cursor-pointer shrink-0">${{a.action_label}} →</button>`;
+                            }}
+                        }} else if (overview.is_read_only) {{
+                            actionBtnHtml = `<span class="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold px-2 py-1 bg-slate-100 dark:bg-[#121216] rounded-lg border border-slate-200 dark:border-zinc-800 whitespace-nowrap">Read-Only</span>`;
+                        }}
+
+                        return `
+                            <div class="pt-3 first:pt-0">
+                                <div class="p-3.5 sm:p-4 rounded-xl border ${{sevBorder}} flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:shadow-xs transition">
+                                    <div class="flex items-start gap-3">
+                                        <div class="text-xl sm:text-2xl shrink-0 mt-0.5">${{sevIcon}}</div>
+                                        <div>
+                                            <div class="flex items-center gap-2 flex-wrap">
+                                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-zinc-100">${{a.title}}</span>
+                                                <span class="text-[10px] px-2 py-0.5 rounded-full border ${{sevBadge}} font-mono">${{a.category}}</span>
+                                            </div>
+                                            <p class="text-xs text-slate-600 dark:text-zinc-400 mt-1 leading-relaxed">${{a.description}}</p>
+                                        </div>
+                                    </div>
+                                    <div class="self-end sm:self-center">
+                                        ${{actionBtnHtml}}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }}).join('');
+                }}
+            }}
+
+            // 3. Activity Stream
+            const actList = document.getElementById('ov-activity-list');
+            if (actList) {{
+                if (!overview.recent_activity || overview.recent_activity.length === 0) {{
+                    actList.innerHTML = `
+                        <div class="p-6 text-center text-slate-400 dark:text-zinc-500 text-xs">
+                            No recent operational activities logged.
+                        </div>
+                    `;
+                }} else {{
+                    actList.innerHTML = overview.recent_activity.map(act => `
+                        <div class="p-3 sm:p-3.5 bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800/80 rounded-xl hover:border-slate-300 dark:hover:border-zinc-700 transition">
+                            <div class="flex items-center justify-between gap-2 mb-1.5">
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded border ${{act.badge_class}} font-mono uppercase tracking-wider">
+                                    ${{act.category}}
+                                </span>
+                                <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-mono">
+                                    ${{act.timestamp}}
+                                </span>
+                            </div>
+                            <div class="text-xs font-bold text-slate-900 dark:text-zinc-100">
+                                ${{act.title}}
+                            </div>
+                            <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 line-clamp-2">
+                                ${{act.description}}
+                            </div>
+                            <div class="mt-2 pt-1.5 border-t border-slate-200/60 dark:border-zinc-800/60 flex items-center justify-between text-[10px] text-slate-400 dark:text-zinc-500">
+                                <span>Actor: <strong class="text-slate-700 dark:text-zinc-300 font-medium">${{act.actor}}</strong></span>
+                            </div>
+                        </div>
+                    `).join('');
+                }}
+            }}
         }}
 
         function filterByITAdmin(adminName) {{
@@ -3718,7 +4200,10 @@ async def dashboard_view(request: Request):
                 if (data.it) renderIT(data.it);
                 if (data.projects) renderProjects(data.projects);
                 if (data.logistics) renderLogistics(data.logistics);
-                if (data.fleet) renderFleet(data.fleet);
+                if (data.fleet) {{
+                    renderFleet(data.fleet);
+                    switchFleetSubView(currentFleetSubView);
+                }}
 
                 const allowed = (data.user && data.user.allowed_domains) || initialAllowedDomains;
                 let hash = window.location.hash.replace('#', '');
@@ -4133,6 +4618,9 @@ async def dashboard_view(request: Request):
 
         function renderFleet(fleet) {{
             if (!fleet) return;
+            // 0. Operations Overview
+            if (fleet.overview) renderOperationsOverview(fleet.overview, currentUser);
+
             // 1. Top Stats Cards
             document.getElementById('fleet-stat-trips').textContent = fleet.stats.total_trips;
             document.getElementById('fleet-stat-sales-val').textContent = '$' + Number(fleet.stats.total_sales_value).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}) + ' ERP Sales';
