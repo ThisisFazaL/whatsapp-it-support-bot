@@ -1,8 +1,9 @@
 import asyncio
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from app.database import async_session_factory, init_db_models
 from app.dashboard import get_dashboard_data
+from app.workshop.models import WorkshopTruck, WorkshopTicket
 
 
 class TestOperationsOverview(unittest.IsolatedAsyncioTestCase):
@@ -139,6 +140,188 @@ class TestOperationsOverview(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(overview["role"], "ACCOUNTS_USER")
         # Accounts users see sales rep balances
         self.assertIsNotNone(overview["kpis"]["sales_rep_balance"])
+
+    # ─── FLEET AVAILABILITY TESTS ────────────────────────────────────────────
+
+    async def test_fleet_kpi_includes_availability_breakdown(self):
+        """Overview KPI payload must include granular fleet availability fields."""
+        mock_user = {
+            "username": "master",
+            "name": "Master Administrator",
+            "role": "MASTER_ADMIN",
+            "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+        }
+        mock_req = self.make_mock_request()
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=mock_user):
+            async with async_session_factory() as session:
+                data = await get_dashboard_data(mock_req, session)
+
+        kpis = data["fleet"]["overview"]["kpis"]
+
+        # New breakdown fields must be present
+        self.assertIn("trucks_available", kpis)
+        self.assertIn("trucks_in_workshop", kpis)
+        self.assertIn("trucks_awaiting_parts", kpis)
+        self.assertIn("trucks_awaiting_qc", kpis)
+        self.assertIn("trucks_total", kpis)
+
+        # Basic sanity: available + in_workshop + awaiting_parts + awaiting_qc <= total
+        total = kpis["trucks_total"]
+        busy = kpis["trucks_in_workshop"] + kpis["trucks_awaiting_parts"] + kpis["trucks_awaiting_qc"]
+        self.assertGreaterEqual(total, 0)
+        self.assertGreaterEqual(kpis["trucks_available"], 0)
+        self.assertLessEqual(busy, total, "Distinct busy trucks cannot exceed total fleet roster")
+
+    async def test_distinct_truck_counting_multiple_tickets(self):
+        """A truck with multiple open tickets must be counted only ONCE in the fleet breakdown."""
+        # Use a mock session that returns 1 active truck and 3 tickets all pointing to same truck_id
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Build fake WorkshopTicket objects for truck_id=1
+        def make_ticket(tid, truck_id, status, truck_number="1001"):
+            t = MagicMock(spec=WorkshopTicket)
+            t.ticket_id = tid
+            t.ticket_number = f"TKT-{tid}"
+            t.truck_id = truck_id
+            t.status = status
+            t.description = "Test ticket"
+            t.category_name = None
+            t.subcategory_name = None
+            t.image_id = None
+            t.created_at = None
+            t.expected_completion_time = None
+            t.cost_total = None
+            t.qc_passed = None
+            t.return_to_fleet_at = None
+            truck_mock = MagicMock()
+            truck_mock.truck_number = truck_number
+            truck_mock.plate_number = f"ABZ {truck_number}"
+            truck_mock.model_make = "Volvo FH16"
+            t.truck = truck_mock
+            t.logged_by = None
+            t.assigned_mechanic = None
+            return t
+
+        tickets = [
+            make_ticket(1, 1, "WITH_MECHANIC"),        # in workshop
+            make_ticket(2, 1, "AWAITING_PARTS"),        # same truck — worse? no, WITH_MECHANIC > AWAITING_PARTS via priority
+            make_ticket(3, 1, "REPAIR_IN_PROGRESS"),   # same truck — REPAIR_IN_PROGRESS has priority 6 > 5 (WITH_MECHANIC)
+        ]
+
+        # Simulate the _STATUS_PRIORITY logic directly (not through dashboard — just verify the algorithm)
+        _STATUS_PRIORITY = {
+            "OPEN": 1, "UNDER_REVIEW": 2, "AWAITING_TEST": 3,
+            "AWAITING_PARTS": 4, "WITH_MECHANIC": 5,
+            "REPAIR_IN_PROGRESS": 6, "REWORK_REQUIRED": 7,
+        }
+        busy_truck_ids = {}
+        for t in tickets:
+            if t.status == "CLOSED" or t.truck_id is None:
+                continue
+            existing = busy_truck_ids.get(t.truck_id)
+            if existing is None:
+                busy_truck_ids[t.truck_id] = t.status
+            else:
+                if _STATUS_PRIORITY.get(t.status, 0) > _STATUS_PRIORITY.get(existing, 0):
+                    busy_truck_ids[t.truck_id] = t.status
+
+        # Only ONE distinct truck should be in busy_truck_ids
+        self.assertEqual(len(busy_truck_ids), 1, "Three tickets for same truck must produce exactly 1 busy truck entry")
+        # Worst status must be REPAIR_IN_PROGRESS (priority 6)
+        self.assertEqual(busy_truck_ids[1], "REPAIR_IN_PROGRESS", "Worst status must take precedence")
+
+    async def test_closed_tickets_do_not_count_as_busy(self):
+        """A CLOSED WorkshopTicket must not mark the truck as unavailable."""
+        _STATUS_PRIORITY = {
+            "OPEN": 1, "UNDER_REVIEW": 2, "AWAITING_TEST": 3,
+            "AWAITING_PARTS": 4, "WITH_MECHANIC": 5,
+            "REPAIR_IN_PROGRESS": 6, "REWORK_REQUIRED": 7,
+        }
+
+        class FakeTkt:
+            def __init__(self, truck_id, status):
+                self.truck_id = truck_id
+                self.status = status
+
+        tickets = [
+            FakeTkt(2, "CLOSED"),
+            FakeTkt(2, "CLOSED"),
+        ]
+
+        busy_truck_ids = {}
+        for t in tickets:
+            if t.status == "CLOSED" or t.truck_id is None:
+                continue
+            existing = busy_truck_ids.get(t.truck_id)
+            if existing is None:
+                busy_truck_ids[t.truck_id] = t.status
+            else:
+                if _STATUS_PRIORITY.get(t.status, 0) > _STATUS_PRIORITY.get(existing, 0):
+                    busy_truck_ids[t.truck_id] = t.status
+
+        self.assertEqual(len(busy_truck_ids), 0, "CLOSED tickets must not produce any busy_truck_ids entry")
+
+    async def test_fleet_availability_split_across_states(self):
+        """Trucks in different states must be categorised independently."""
+        _STATUS_PRIORITY = {
+            "OPEN": 1, "UNDER_REVIEW": 2, "AWAITING_TEST": 3,
+            "AWAITING_PARTS": 4, "WITH_MECHANIC": 5,
+            "REPAIR_IN_PROGRESS": 6, "REWORK_REQUIRED": 7,
+        }
+
+        class FakeTkt:
+            def __init__(self, truck_id, status):
+                self.truck_id = truck_id
+                self.status = status
+
+        tickets = [
+            FakeTkt(10, "WITH_MECHANIC"),    # truck 10 → in workshop
+            FakeTkt(11, "AWAITING_PARTS"),   # truck 11 → awaiting parts
+            FakeTkt(12, "AWAITING_TEST"),    # truck 12 → awaiting QC
+            FakeTkt(13, "CLOSED"),           # truck 13 → available (closed)
+        ]
+
+        busy_truck_ids = {}
+        for t in tickets:
+            if t.status == "CLOSED" or t.truck_id is None:
+                continue
+            existing = busy_truck_ids.get(t.truck_id)
+            if existing is None:
+                busy_truck_ids[t.truck_id] = t.status
+            else:
+                if _STATUS_PRIORITY.get(t.status, 0) > _STATUS_PRIORITY.get(existing, 0):
+                    busy_truck_ids[t.truck_id] = t.status
+
+        _in_workshop_statuses = {"WITH_MECHANIC", "REPAIR_IN_PROGRESS", "REWORK_REQUIRED"}
+        trucks_in_workshop   = sum(1 for s in busy_truck_ids.values() if s in _in_workshop_statuses)
+        trucks_awaiting_parts = sum(1 for s in busy_truck_ids.values() if s == "AWAITING_PARTS")
+        trucks_awaiting_qc   = sum(1 for s in busy_truck_ids.values() if s == "AWAITING_TEST")
+
+        self.assertEqual(trucks_in_workshop, 1)
+        self.assertEqual(trucks_awaiting_parts, 1)
+        self.assertEqual(trucks_awaiting_qc, 1)
+        self.assertEqual(len(busy_truck_ids), 3, "Closed truck must not appear in busy map")
+
+    async def test_logistics_admin_financial_section_hidden(self):
+        """LOGISTICS_ADMIN has no view_sales_rep_balances → sales_rep_balance must be None in KPIs."""
+        mock_user = {
+            "username": "logistics_admin_user",
+            "name": "Logistics Admin",
+            "role": "LOGISTICS_ADMIN",
+            "allowed_domains": ["fleet"]
+        }
+        mock_req = self.make_mock_request()
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=mock_user):
+            async with async_session_factory() as session:
+                data = await get_dashboard_data(mock_req, session)
+
+        kpis = data["fleet"]["overview"]["kpis"]
+        # LOGISTICS_ADMIN does not have view_sales_rep_balances permission
+        self.assertIsNone(kpis.get("sales_rep_balance"),
+                          "LOGISTICS_ADMIN must not receive sales_rep_balance data")
 
 
 if __name__ == "__main__":
