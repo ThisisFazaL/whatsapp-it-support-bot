@@ -12,24 +12,43 @@ from app.database import (
     SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus,
     FleetTripApproval, FleetPendingLedger, FleetTripRequest, FleetCustomerSchedule,
     FleetEmergencyExpense, SalesRepPayment, AuditLog, FleetRouteRule, SystemSetting,
-    get_sales_rep_pending_balance
+    WebUser, UserCustomPermission, get_sales_rep_pending_balance
 )
 from app.workshop.models import (
     WorkshopTicket, WorkshopTruck, WorkshopStaff, WorkshopPartsRequest
 )
 from app.auth import (
     authenticate_user, create_session_token, get_current_user_from_request,
-    COOKIE_NAME, SESSION_MAX_AGE, USERS_DB
+    COOKIE_NAME, SESSION_MAX_AGE, USERS_DB,
+    require_permission, user_has_permission, get_effective_permissions,
+    ALL_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS, set_user_custom_permission,
+    USER_CUSTOM_PERMISSIONS_CACHE
 )
 from app.services.config_service import (
     get_fuel_price, get_meal_rate, get_accommodation_rate, get_expense_budget_pct, get_van_minimum_surcharge,
-    get_all_cached_city_rules, update_system_setting, update_city_rule, recalculate_all_city_minimums
+    get_all_cached_city_rules, update_system_setting, update_city_rule, recalculate_all_city_minimums,
+    update_meal_rate, update_accommodation_rate
 )
 
 logger = logging.getLogger("dashboard")
 router = APIRouter()
 
 IT_SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
+
+def get_client_ip(request: Request) -> str:
+    """Extracts client IP address safely from headers or connection."""
+    try:
+        if hasattr(request, "headers"):
+            forwarded = request.headers.get("x-forwarded-for")
+            if isinstance(forwarded, str) and forwarded.strip():
+                return forwarded.split(",")[0].strip()
+        if hasattr(request, "client") and request.client:
+            host = getattr(request.client, "host", None)
+            if isinstance(host, str) and host.strip():
+                return host.strip()
+    except Exception:
+        pass
+    return "127.0.0.1"
 
 def format_duration(seconds: float) -> str:
     """Formats time duration in seconds to clean string (e.g. 1h 25m)."""
@@ -265,31 +284,63 @@ async def api_get_settings(request: Request):
 
 
 @router.post("/api/v2/config/update-fuel")
+@router.post("/api/v2/config/fuel-price")
 async def api_update_fuel(request: Request, db: AsyncSession = Depends(get_db)):
     """Updates active fuel price and optionally auto-recalculates all 45 city minimums."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "ACCOUNTS_USER"):
-        raise HTTPException(status_code=403, detail="Permission denied. Admin or Manager role required.")
+    require_permission(user, "manage_fuel_price")
     
     body = await request.json()
-    new_price = float(body.get("fuel_price", 1.55))
+    new_price = float(body.get("fuel_price") or body.get("fuel_price_usd") or 1.55)
     recalc = bool(body.get("recalculate_cities", False))
     uname = user.get("name", "Admin")
+    urole = user.get("role", "FLEET_ADMIN")
+    old_price = get_fuel_price()
 
     if recalc:
         res = await recalculate_all_city_minimums(db, new_price, updated_by=uname)
+        audit = AuditLog(
+            username=uname,
+            user_role=urole,
+            action="UPDATE_FUEL_PRICE",
+            module="CONFIG",
+            permission_used="manage_fuel_price",
+            entity_id="fuel_price_usd",
+            previous_value={"fuel_price": old_price},
+            new_value={"fuel_price": new_price, "recalculate_cities": True},
+            remarks=f"Fuel price updated to ${new_price:.2f}/L with city recalculation",
+            ip_address=get_client_ip(request),
+            created_at=datetime.datetime.utcnow()
+        )
+        db.add(audit)
+        await db.commit()
         return res
     else:
         await update_system_setting(db, "fuel_price_usd", new_price, changed_by=uname, reason=f"Fuel price updated to ${new_price:.2f}/L")
+        audit = AuditLog(
+            username=uname,
+            user_role=urole,
+            action="UPDATE_FUEL_PRICE",
+            module="CONFIG",
+            permission_used="manage_fuel_price",
+            entity_id="fuel_price_usd",
+            previous_value={"fuel_price": old_price},
+            new_value={"fuel_price": new_price, "recalculate_cities": False},
+            remarks=f"Fuel price updated to ${new_price:.2f}/L without city recalculation",
+            ip_address=get_client_ip(request),
+            created_at=datetime.datetime.utcnow()
+        )
+        db.add(audit)
+        await db.commit()
         return {"status": "success", "fuel_price": new_price}
 
 
 @router.post("/api/v2/config/update-city-minimum")
+@router.post("/api/v2/config/city-rules/save")
 async def api_update_city_min(request: Request, db: AsyncSession = Depends(get_db)):
     """Updates minimum sales and van minimum for a specific city."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "ACCOUNTS_USER"):
-        raise HTTPException(status_code=403, detail="Permission denied.")
+    require_permission(user, "manage_city_minimums")
     
     body = await request.json()
     city_key = body.get("city_key", "").strip().lower()
@@ -298,15 +349,67 @@ async def api_update_city_min(request: Request, db: AsyncSession = Depends(get_d
     uname = user.get("name", "Admin")
 
     ok = await update_city_rule(db, city_key, min_sales, van_min, updated_by=uname)
-    return {"status": "success" if ok else "not_found", "city_key": city_key}
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"City corridor '{city_key}' not found.")
+
+    audit = AuditLog(
+        username=uname,
+        user_role=user.get("role", "FLEET_ADMIN"),
+        action="UPDATE_CITY_MINIMUM",
+        module="CONFIG",
+        permission_used="manage_city_minimums",
+        entity_id=city_key,
+        previous_value={"city_key": city_key},
+        new_value={"min_sales": min_sales, "van_min": van_min},
+        remarks=f"Updated minimum sales thresholds for {city_key}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    return {"status": "success", "city_key": city_key, "min_sales": min_sales, "van_min": van_min}
+
+
+@router.post("/api/v2/config/update-meal-rate")
+async def api_update_meal_rate(request: Request, db: AsyncSession = Depends(get_db)):
+    """Updates meal rate allowance per qualifying meal."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_meal_rate")
+    
+    body = await request.json()
+    rate = float(body.get("meal_rate") if "meal_rate" in body else (body.get("meal_rate_usd") or 0.0))
+    if rate < 0:
+        raise HTTPException(status_code=400, detail="Meal rate cannot be negative.")
+    
+    reason = str(body.get("reason") or "Meal allowance rate updated").strip()
+    uname = user.get("name", "Admin")
+    await update_meal_rate(db, rate, updated_by=uname, reason=reason)
+    return {"status": "success", "meal_rate_usd": rate}
+
+
+@router.post("/api/v2/config/update-accommodation-rate")
+async def api_update_accommodation_rate(request: Request, db: AsyncSession = Depends(get_db)):
+    """Updates nightly accommodation allowance rate."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_accommodation_rate")
+    
+    body = await request.json()
+    rate = float(body.get("accommodation_rate") if "accommodation_rate" in body else (body.get("accommodation_rate_usd") or 0.0))
+    if rate < 0:
+        raise HTTPException(status_code=400, detail="Accommodation rate cannot be negative.")
+    
+    reason = str(body.get("reason") or "Accommodation allowance rate updated").strip()
+    uname = user.get("name", "Admin")
+    await update_accommodation_rate(db, rate, updated_by=uname, reason=reason)
+    return {"status": "success", "accommodation_rate_usd": rate}
 
 
 @router.post("/api/v2/finance/clear-sales-rep-payment")
+@router.post("/api/v2/finance/clear-payment")
 async def api_clear_sales_rep_payment(request: Request, db: AsyncSession = Depends(get_db)):
     """Clears pending sales rep shortfall debt with audit trail and ledger offsetting."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "ACCOUNTS_USER", "FLEET_ADMIN", "SALES_ADMIN"):
-        raise HTTPException(status_code=403, detail="Permission denied. Accounts or Admin role required.")
+    require_permission(user, "clear_sales_rep_debt")
     
     body = await request.json()
     phone = body.get("salesperson_phone", "").replace("+", "").strip()
@@ -320,8 +423,13 @@ async def api_clear_sales_rep_payment(request: Request, db: AsyncSession = Depen
         raise HTTPException(status_code=400, detail="Cleared amount must be greater than zero.")
 
     current_balance = await get_sales_rep_pending_balance(db, phone)
+    if current_balance <= 0:
+        raise HTTPException(status_code=400, detail="Sales representative has no outstanding shortfall debt to clear.")
+    if cleared_amount > current_balance:
+        raise HTTPException(status_code=400, detail=f"Cleared amount (${cleared_amount:.2f}) cannot exceed current debt (${current_balance:.2f}).")
+
     remaining_balance = round(current_balance - cleared_amount, 2)
-    uname = user.get("name", "Accounts")
+    uname = user.get("name", "Officer")
 
     # 1. Record payment clearance
     payment_rec = SalesRepPayment(
@@ -350,16 +458,18 @@ async def api_clear_sales_rep_payment(request: Request, db: AsyncSession = Depen
     )
     db.add(ledger_entry)
 
-    # 3. Add Audit Log
+    # 3. Add Audit Log with permission_used and client IP
     audit = AuditLog(
         username=uname,
-        user_role=user.get("role", "ACCOUNTS_USER"),
+        user_role=user.get("role", "FLEET_ADMIN"),
         action="CLEAR_SALES_REP_DEBT",
         module="FINANCE",
+        permission_used="clear_sales_rep_debt",
         entity_id=phone,
         previous_value={"balance": current_balance},
         new_value={"cleared": cleared_amount, "remaining": remaining_balance, "method": payment_method, "ref": reference},
         remarks=remarks,
+        ip_address=get_client_ip(request),
         created_at=datetime.datetime.utcnow()
     )
     db.add(audit)
@@ -377,8 +487,7 @@ async def api_clear_sales_rep_payment(request: Request, db: AsyncSession = Depen
 async def api_get_audit_logs(request: Request, db: AsyncSession = Depends(get_db)):
     """Returns recent audit logs across finance, config, and fleet operations."""
     user = get_current_user_from_request(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    require_permission(user, "view_audit_logs")
     
     stmt = select(AuditLog).order_by(AuditLog.id.desc()).limit(100)
     res = await db.execute(stmt)
@@ -391,6 +500,7 @@ async def api_get_audit_logs(request: Request, db: AsyncSession = Depends(get_db
             "user_role": l.user_role or "--",
             "action": l.action,
             "module": l.module,
+            "permission_used": getattr(l, "permission_used", None) or "--",
             "entity_id": l.entity_id or "--",
             "previous_value": l.previous_value,
             "new_value": l.new_value,
@@ -404,30 +514,35 @@ async def api_get_audit_logs(request: Request, db: AsyncSession = Depends(get_db
 async def api_update_operational_params(request: Request, db: AsyncSession = Depends(get_db)):
     """Updates global rates: meal allowance, accommodation rate, expense budget %, van surcharge."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "ACCOUNTS_USER"):
-        raise HTTPException(status_code=403, detail="Permission denied. Admin, Manager, or Accounts role required.")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    
     body = await request.json()
     uname = user.get("name", "Admin")
-
     updated = {}
+
     meal_rate = body.get("meal_rate_usd") if "meal_rate_usd" in body else body.get("meal_rate")
     if meal_rate is not None:
+        require_permission(user, "manage_meal_rate")
         val = round(float(meal_rate), 2)
         await update_system_setting(db, "meal_rate_usd", val, changed_by=uname, reason="Updated meal rate allowance")
         updated["meal_rate_usd"] = val
 
     accom_rate = body.get("accommodation_rate_usd") if "accommodation_rate_usd" in body else body.get("accommodation_rate")
     if accom_rate is not None:
+        require_permission(user, "manage_accommodation_rate")
         val = round(float(accom_rate), 2)
         await update_system_setting(db, "accommodation_rate_usd", val, changed_by=uname, reason="Updated accommodation rate allowance")
         updated["accommodation_rate_usd"] = val
 
     if "expense_budget_pct" in body:
+        require_permission(user, "manage_fuel_price")
         val = round(float(body["expense_budget_pct"]), 4)
         await update_system_setting(db, "expense_budget_pct", val, changed_by=uname, reason="Updated expense budget pct")
         updated["expense_budget_pct"] = val
 
     if "van_minimum_surcharge" in body:
+        require_permission(user, "manage_city_minimums")
         val = round(float(body["van_minimum_surcharge"]), 2)
         await update_system_setting(db, "van_minimum_surcharge", val, changed_by=uname, reason="Updated van surcharge")
         updated["van_minimum_surcharge"] = val
@@ -435,12 +550,276 @@ async def api_update_operational_params(request: Request, db: AsyncSession = Dep
     return {"status": "success", "updated": updated}
 
 
+# -------------------------------------------------------------
+# User Management & RBAC Administration (MASTER_ADMIN only)
+# -------------------------------------------------------------
+@router.get("/api/v2/admin/users")
+async def api_get_users(request: Request, db: AsyncSession = Depends(get_db)):
+    """Returns all users with roles, inherited permissions, custom overrides, and effective permissions."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    # Fetch from web_users
+    stmt = select(WebUser).order_by(WebUser.id.asc())
+    web_users = (await db.execute(stmt)).scalars().all()
+    
+    # Fetch all custom permissions
+    stmt_perms = select(UserCustomPermission)
+    all_custom = (await db.execute(stmt_perms)).scalars().all()
+    custom_by_user = {}
+    for cp in all_custom:
+        if cp.user_id not in custom_by_user:
+            custom_by_user[cp.user_id] = []
+        custom_by_user[cp.user_id].append({
+            "permission_key": cp.permission_key,
+            "is_granted": cp.is_granted,
+            "granted_by": cp.granted_by,
+            "granted_at": cp.granted_at.strftime("%Y-%m-%d %H:%M") if cp.granted_at else "",
+            "reason": cp.reason or ""
+        })
+
+    result = []
+    seen_usernames = set()
+    for wu in web_users:
+        u_clean = wu.username.lower()
+        seen_usernames.add(u_clean)
+        custom_dict = {
+            p["permission_key"]: p["is_granted"] for p in custom_by_user.get(wu.id, [])
+        }
+        # overlay with in-memory cache if any
+        cached = USER_CUSTOM_PERMISSIONS_CACHE.get(u_clean, {})
+        for k, v in cached.items():
+            if k not in custom_dict:
+                custom_dict[k] = v
+
+        u_dict = {
+            "username": wu.username,
+            "role": wu.role,
+            "custom_permissions": custom_dict
+        }
+        inherited = list(ROLE_DEFAULT_PERMISSIONS.get(wu.role, set()))
+        custom_granted = [k for k, v in custom_dict.items() if v]
+        custom_revoked = [k for k, v in custom_dict.items() if not v]
+        effective = list(get_effective_permissions(u_dict))
+
+        result.append({
+            "id": wu.id,
+            "username": wu.username,
+            "full_name": wu.full_name,
+            "role": wu.role,
+            "email": wu.email or "",
+            "phone": wu.phone or "",
+            "is_active": wu.is_active,
+            "inherited_permissions": inherited,
+            "custom_granted_permissions": custom_granted,
+            "custom_revoked_permissions": custom_revoked,
+            "effective_permissions": effective,
+            "custom_details": custom_by_user.get(wu.id, []),
+            "updated_at": wu.updated_at.strftime("%Y-%m-%d %H:%M") if wu.updated_at else ""
+        })
+
+    # Also include any USERS_DB users not in web_users
+    for uname, udata in USERS_DB.items():
+        if uname.lower() not in seen_usernames:
+            inherited = list(ROLE_DEFAULT_PERMISSIONS.get(udata["role"], set()))
+            cached_custom = USER_CUSTOM_PERMISSIONS_CACHE.get(uname.lower(), {})
+            custom_granted = [k for k, v in cached_custom.items() if v]
+            custom_revoked = [k for k, v in cached_custom.items() if not v]
+            u_dict = {"username": uname, "role": udata["role"], "custom_permissions": cached_custom}
+            effective = list(get_effective_permissions(u_dict))
+            result.append({
+                "id": None,
+                "username": uname,
+                "full_name": udata["name"],
+                "role": udata["role"],
+                "email": "",
+                "phone": "",
+                "is_active": True,
+                "inherited_permissions": inherited,
+                "custom_granted_permissions": custom_granted,
+                "custom_revoked_permissions": custom_revoked,
+                "effective_permissions": effective,
+                "custom_details": [],
+                "updated_at": ""
+            })
+
+    return {
+        "status": "success",
+        "users": result,
+        "all_permissions": ALL_PERMISSIONS,
+        "role_default_permissions": {r: list(p) for r, p in ROLE_DEFAULT_PERMISSIONS.items()}
+    }
+
+
+@router.post("/api/v2/admin/users/save")
+async def api_save_user(request: Request, db: AsyncSession = Depends(get_db)):
+    """Creates or updates a user role, name, active status (MASTER_ADMIN only)."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    body = await request.json()
+    username = body.get("username", "").strip().lower()
+    full_name = body.get("full_name", "").strip()
+    role = body.get("role", "").strip()
+    is_active = bool(body.get("is_active", True))
+    reason = str(body.get("reason", "")).strip()
+
+    if not username or not role:
+        raise HTTPException(status_code=400, detail="Username and Role are required.")
+    if role not in ROLE_DEFAULT_PERMISSIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid role '{role}'.")
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required for user account modifications.")
+
+    stmt = select(WebUser).where(WebUser.username == username)
+    w_user = (await db.execute(stmt)).scalars().first()
+    old_role = w_user.role if w_user else (USERS_DB.get(username, {}).get("role", "--"))
+
+    if w_user:
+        w_user.full_name = full_name or w_user.full_name
+        w_user.role = role
+        w_user.is_active = is_active
+        w_user.updated_at = datetime.datetime.utcnow()
+    else:
+        w_user = WebUser(
+            username=username,
+            password_hash="TempPassword@2026!",
+            full_name=full_name or username.title(),
+            role=role,
+            is_active=is_active,
+            created_at=datetime.datetime.utcnow(),
+            updated_at=datetime.datetime.utcnow()
+        )
+        db.add(w_user)
+
+    # Sync USERS_DB in memory
+    if username in USERS_DB:
+        USERS_DB[username]["role"] = role
+        if full_name:
+            USERS_DB[username]["name"] = full_name
+
+    audit = AuditLog(
+        username=user.get("name", "Admin"),
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action="CHANGE_USER_ROLE",
+        module="AUTH",
+        permission_used="manage_user_permissions",
+        entity_id=username,
+        previous_value={"role": old_role},
+        new_value={"role": role, "active": is_active},
+        remarks=reason,
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(w_user)
+
+    return {"status": "success", "username": username, "role": role, "is_active": is_active}
+
+
+@router.post("/api/v2/admin/users/permissions")
+async def api_toggle_user_permission(request: Request, db: AsyncSession = Depends(get_db)):
+    """Grants or revokes a custom delegated permission for a specific user (MASTER_ADMIN only)."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    body = await request.json()
+    target_username = body.get("username", "").strip().lower()
+    permission_key = body.get("permission_key", "").strip()
+    is_granted = bool(body.get("is_granted", True))
+    reason = str(body.get("reason", "")).strip()
+
+    if not target_username or not permission_key:
+        raise HTTPException(status_code=400, detail="Username and permission_key are required.")
+    if permission_key not in ALL_PERMISSIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid permission key '{permission_key}'.")
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required for permission grant or revocation.")
+
+    # Find or create web_user
+    stmt = select(WebUser).where(WebUser.username == target_username)
+    w_user = (await db.execute(stmt)).scalars().first()
+    if not w_user:
+        if target_username in USERS_DB:
+            u_data = USERS_DB[target_username]
+            w_user = WebUser(
+                username=target_username,
+                password_hash=u_data["password"],
+                full_name=u_data["name"],
+                role=u_data["role"],
+                is_active=True
+            )
+            db.add(w_user)
+            await db.flush()
+        else:
+            raise HTTPException(status_code=404, detail=f"User '{target_username}' not found.")
+
+    stmt_perm = select(UserCustomPermission).where(
+        UserCustomPermission.user_id == w_user.id,
+        UserCustomPermission.permission_key == permission_key
+    )
+    perm_record = (await db.execute(stmt_perm)).scalars().first()
+    old_state = perm_record.is_granted if perm_record else None
+
+    if perm_record:
+        perm_record.is_granted = is_granted
+        perm_record.granted_by = user.get("name", "Admin")
+        perm_record.granted_at = datetime.datetime.utcnow()
+        perm_record.reason = reason
+    else:
+        perm_record = UserCustomPermission(
+            user_id=w_user.id,
+            permission_key=permission_key,
+            is_granted=is_granted,
+            granted_by=user.get("name", "Admin"),
+            granted_at=datetime.datetime.utcnow(),
+            reason=reason
+        )
+        db.add(perm_record)
+
+    set_user_custom_permission(target_username, permission_key, is_granted)
+
+    action = "GRANT_USER_PERMISSION" if is_granted else "REVOKE_USER_PERMISSION"
+    audit = AuditLog(
+        username=user.get("name", "Admin"),
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action=action,
+        module="AUTH",
+        permission_used="manage_user_permissions",
+        entity_id=f"{target_username}:{permission_key}",
+        previous_value={"is_granted": old_state},
+        new_value={"is_granted": is_granted},
+        remarks=reason,
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    u_dict = {
+        "username": target_username,
+        "role": w_user.role,
+        "custom_permissions": USER_CUSTOM_PERMISSIONS_CACHE.get(target_username, {})
+    }
+    effective = list(get_effective_permissions(u_dict))
+
+    return {
+        "status": "success",
+        "username": target_username,
+        "permission_key": permission_key,
+        "is_granted": is_granted,
+        "action": action,
+        "effective_permissions": effective
+    }
+
+
+
 @router.post("/api/v2/fleet/trucks/save")
 async def api_save_truck(request: Request, db: AsyncSession = Depends(get_db)):
     """Creates or updates a commercial truck in the fleet database."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "LOGISTICS_ADMIN"):
-        raise HTTPException(status_code=403, detail="Permission denied. Fleet or Logistics role required.")
+    require_permission(user, "manage_trucks")
     
     body = await request.json()
     truck_id = body.get("truck_id")
@@ -491,10 +870,12 @@ async def api_save_truck(request: Request, db: AsyncSession = Depends(get_db)):
         user_role=user.get("role", "FLEET_ADMIN"),
         action=action,
         module="FLEET_MANAGEMENT",
+        permission_used="manage_trucks",
         entity_id=plate_number,
         previous_value=prev_vals,
         new_value={"truck_number": truck_number, "plate_number": plate_number, "model": model_make, "active": is_active},
         remarks=f"{action} by {uname}",
+        ip_address=get_client_ip(request),
         created_at=datetime.datetime.utcnow()
     )
     db.add(audit)
@@ -519,8 +900,7 @@ async def api_save_truck(request: Request, db: AsyncSession = Depends(get_db)):
 async def api_save_driver(request: Request, db: AsyncSession = Depends(get_db)):
     """Creates or updates a commercial driver in staff and employee directories."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "FLEET_ADMIN", "LOGISTICS_MANAGER", "LOGISTICS_ADMIN"):
-        raise HTTPException(status_code=403, detail="Permission denied. Fleet or Logistics role required.")
+    require_permission(user, "manage_drivers")
     
     body = await request.json()
     staff_id = body.get("staff_id")
@@ -585,10 +965,12 @@ async def api_save_driver(request: Request, db: AsyncSession = Depends(get_db)):
         user_role=user.get("role", "FLEET_ADMIN"),
         action=action,
         module="FLEET_MANAGEMENT",
+        permission_used="manage_drivers",
         entity_id=phone,
         previous_value=prev_vals,
         new_value={"full_name": full_name, "phone": phone, "role": role, "active": is_active},
         remarks=f"{action} by {uname}",
+        ip_address=get_client_ip(request),
         created_at=datetime.datetime.utcnow()
     )
     db.add(audit)
@@ -611,8 +993,10 @@ async def api_save_driver(request: Request, db: AsyncSession = Depends(get_db)):
 async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db)):
     """Creates or updates a sales representative in the employee directory."""
     user = get_current_user_from_request(request)
-    if not user or user.get("role") not in ("MASTER_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "FLEET_ADMIN", "LOGISTICS_MANAGER"):
-        raise HTTPException(status_code=403, detail="Permission denied. Sales, Accounts, Logistics, or Admin role required.")
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if not (user_has_permission(user, "manage_sales_pipeline") or user_has_permission(user, "manage_trucks")):
+        raise HTTPException(status_code=403, detail="Permission denied. Sales or fleet management permission required.")
     
     body = await request.json()
     emp_id = body.get("employee_id")
@@ -661,15 +1045,18 @@ async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db
         prev_vals = None
         action = "ADD_SALES_REP"
 
+    perm_used = "manage_sales_pipeline" if user_has_permission(user, "manage_sales_pipeline") else "manage_trucks"
     audit = AuditLog(
         username=uname,
         user_role=user.get("role", "SALES_ADMIN"),
         action=action,
         module="SALES_MANAGEMENT",
+        permission_used=perm_used,
         entity_id=phone,
         previous_value=prev_vals,
         new_value={"full_name": full_name, "phone": phone, "email": email, "active": is_active},
         remarks=f"{action} by {uname}",
+        ip_address=get_client_ip(request),
         created_at=datetime.datetime.utcnow()
     )
     db.add(audit)
@@ -1299,7 +1686,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "username": user["username"],
             "name": user["name"],
             "role": user["role"],
-            "allowed_domains": allowed
+            "allowed_domains": allowed,
+            "effective_permissions": list(user.get("effective_permissions", [])),
+            "custom_permissions": user.get("custom_permissions", {})
         },
         "master_kpis": master_kpis,
         "it": it_payload,
@@ -1338,6 +1727,16 @@ async def dashboard_view(request: Request):
     # Construct Dynamic Role-Based Sidebar Navigation
     user_role = user.get("role", "LOGISTICS_USER")
     user_name = user.get("name", "User")
+
+    can_manage_fuel = user_has_permission(user, "manage_fuel_price")
+    can_manage_city = user_has_permission(user, "manage_city_minimums")
+    can_clear_debt = user_has_permission(user, "clear_sales_rep_debt")
+    can_view_audit = user_has_permission(user, "view_audit_logs")
+    can_manage_users = user_has_permission(user, "manage_user_permissions")
+    can_manage_trucks = user_has_permission(user, "manage_trucks")
+    can_manage_drivers = user_has_permission(user, "manage_drivers")
+    can_view_balances = user_has_permission(user, "view_sales_rep_balances")
+
     sidebar_links = []
     sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Dashboards</div>')
 
@@ -1354,19 +1753,28 @@ async def dashboard_view(request: Request):
         sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>🚛</span> Operations Execution</button>')
 
     sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Operations & Fleet</div>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛣️</span> 7-Stage Trips Pipeline</button>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🚚</span> 39 Commercial Trucks</button>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👤</span> 21 Commercial Drivers</button>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📍</span> 45 Delivery Corridors & Stops</button>')
+    if "fleet" in allowed:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛣️</span> 7-Stage Trips Pipeline</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🚚</span> 39 Commercial Trucks</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👤</span> 21 Commercial Drivers</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📍</span> 45 Delivery Corridors & Stops</button>')
 
     sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👥</span> Sales Rep Debt Ledger</button>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>💳</span> Cleared Payments History</button>')
-    sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📜</span> Shortfall Recovery Ledger</button>')
+    if can_view_balances:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👥</span> Sales Rep Debt Ledger</button>')
+    if can_view_balances or can_clear_debt:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>💳</span> Cleared Payments History</button>')
+    if "fleet" in allowed:
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📜</span> Shortfall Recovery Ledger</button>')
 
-    sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
-    sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>⚙️</span> Edit Fuel & City Minimums</button>')
-    sidebar_links.append('<button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛡️</span> System Audit Logs</button>')
+    if can_manage_fuel or can_manage_city or can_view_audit or can_manage_users:
+        sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
+        if can_manage_fuel or can_manage_city:
+            sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>⚙️</span> Edit Fuel & City Minimums</button>')
+        if can_manage_users:
+            sidebar_links.append('<button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👥</span> User & Role Permissions</button>')
+        if can_view_audit:
+            sidebar_links.append('<button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛡️</span> System Audit Logs</button>')
 
     sidebar_markup = "\n".join(sidebar_links)
 
@@ -1878,15 +2286,26 @@ async def dashboard_view(request: Request):
                     </div>
                     <!-- Quick Management Action Buttons -->
                     <div class="flex flex-wrap items-center gap-2 sm:gap-2.5">
+                        {"" if not (can_manage_fuel or can_manage_city) else """
                         <button onclick="openCityConfigModal()" class="bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-blue-400/40 shadow-xs cursor-pointer">
                             <span>⚙️</span> Edit Fuel & City Minimums
                         </button>
+                        """}
+                        {"" if not can_clear_debt else """
                         <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-emerald-400/40 shadow-xs cursor-pointer">
                             <span>💳</span> Clear Sales Rep Debt
                         </button>
+                        """}
+                        {"" if not can_manage_users else """
+                        <button onclick="openUserManagementModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-indigo-400/40 shadow-xs cursor-pointer">
+                            <span>👥</span> User Permissions
+                        </button>
+                        """}
+                        {"" if not can_view_audit else """
                         <button onclick="openAuditLogsModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700 shadow-xs cursor-pointer">
                             <span>🛡️</span> Audit Logs
                         </button>
+                        """}
                     </div>
                 </div>
 
@@ -2030,12 +2449,16 @@ async def dashboard_view(request: Request):
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative with instant clearance action</p>
                     </div>
                     <div class="flex items-center gap-2.5">
+                        {"" if not (user_has_permission(user, "manage_sales_pipeline") or can_manage_trucks) else """
                         <button onclick="openAddSalesRepModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
                             <span>+</span> Add Sales Rep
                         </button>
+                        """}
+                        {"" if not can_clear_debt else """
                         <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
                             <span>💳</span> Clear Debt Payment
                         </button>
+                        """}
                         <div class="text-right">
                             <span class="text-xs font-bold text-slate-500 dark:text-zinc-400">Total Pending: </span>
                             <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
@@ -2056,9 +2479,11 @@ async def dashboard_view(request: Request):
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Official accounting verification and payment offset audit history</p>
                     </div>
+                    {"" if not can_clear_debt else """
                     <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto">
                         <span>+</span> Record New Clearance
                     </button>
+                    """}
                 </div>
 
                 <div class="overflow-x-auto">
@@ -2736,7 +3161,333 @@ async def dashboard_view(request: Request):
         </div>
     </div>
 
+    <!-- Modal 7: User Management & Granular Permissions (MASTER_ADMIN only) -->
+    <div id="userManagementModal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
+        <div class="bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <!-- Modal Header -->
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216]">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
+                        👥
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-extrabold text-slate-900 dark:text-zinc-100">User Management & Granular Permissions</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium">Manage user accounts, roles, and delegated permission overrides</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="loadUsersList()" class="p-2 rounded-xl text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-800 text-xs font-bold transition flex items-center gap-1 cursor-pointer">
+                        <span>🔄</span> Refresh
+                    </button>
+                    <button onclick="closeUserManagementModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-200/60 dark:hover:bg-zinc-800 transition cursor-pointer">
+                        ✕
+                    </button>
+                </div>
+            </div>
+
+            <!-- Modal Content (Scrollable) -->
+            <div class="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1">
+                <!-- User Accounts Overview Table -->
+                <div class="border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
+                    <div class="p-3.5 bg-slate-50/75 dark:bg-[#121216] border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-800 dark:text-zinc-200">Registered Accounts & Roles</span>
+                        <span id="user-mgmt-count" class="text-[11px] text-slate-500 font-medium">Loading...</span>
+                    </div>
+                    <div class="max-h-[30vh] overflow-y-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-slate-100 dark:bg-[#14141a] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-4 py-2.5">User</th>
+                                    <th class="px-4 py-2.5">Role</th>
+                                    <th class="px-4 py-2.5">Status</th>
+                                    <th class="px-4 py-2.5">Custom Overrides</th>
+                                    <th class="px-4 py-2.5 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="user-mgmt-tbody" class="divide-y divide-slate-200 dark:divide-zinc-800 text-slate-700 dark:text-zinc-200">
+                                <tr><td colspan="5" class="p-4 text-center text-slate-400">Loading accounts...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Selected User Permission Configuration Panel -->
+                <div id="user-mgmt-detail-panel" class="hidden bg-slate-50/60 dark:bg-[#121216]/60 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 sm:p-5 space-y-5">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-zinc-800 pb-3">
+                        <div>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2.5 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-500/30">
+                                Account Configuration
+                            </span>
+                            <h4 class="text-base font-extrabold text-slate-900 dark:text-zinc-100 mt-1" id="selected-user-header">--</h4>
+                        </div>
+                        <!-- Role change and active toggle form -->
+                        <div class="flex flex-wrap items-center gap-2">
+                            <select id="selected-user-role" class="bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-zinc-100">
+                                <option value="MASTER_ADMIN">MASTER_ADMIN</option>
+                                <option value="FLEET_ADMIN">FLEET_ADMIN</option>
+                                <option value="SALES_ADMIN">SALES_ADMIN</option>
+                                <option value="ACCOUNTS_USER">ACCOUNTS_USER</option>
+                                <option value="LOGISTICS_MANAGER">LOGISTICS_MANAGER</option>
+                                <option value="LOGISTICS_ADMIN">LOGISTICS_ADMIN</option>
+                                <option value="IT_ADMIN">IT_ADMIN</option>
+                                <option value="PROJECTS_ADMIN">PROJECTS_ADMIN</option>
+                                <option value="EXECUTIVE_OBSERVER">EXECUTIVE_OBSERVER</option>
+                            </select>
+                            <label class="flex items-center gap-1.5 text-xs font-bold text-slate-700 dark:text-zinc-300">
+                                <input type="checkbox" id="selected-user-active" class="w-4 h-4 rounded text-blue-600">
+                                Active
+                            </label>
+                            <button onclick="saveSelectedUserRole()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs">
+                                Update Role
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Granular Permission Overrides Matrix -->
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <h5 class="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-zinc-300">
+                                Granular Permission Overrides (Delegation Engine)
+                            </h5>
+                            <span class="text-[11px] text-slate-500 italic">Overrides take precedence over role defaults</span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5" id="user-perms-matrix">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <div id="user-mgmt-feedback" class="text-xs font-bold hidden"></div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between">
+                <span class="text-[11px] text-slate-500 dark:text-zinc-400">All permission changes are recorded in System Audit Logs</span>
+                <button onclick="closeUserManagementModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // =============================================================
+        // RBAC & PERMISSION HELPERS
+        // =============================================================
+        let currentUser = null;
+        function hasPermission(permKey) {{
+            if (!currentUser) return false;
+            if (currentUser.role === 'MASTER_ADMIN') return true;
+            return (currentUser.effective_permissions || []).includes(permKey);
+        }}
+
+        // =============================================================
+        // MODAL 7: USER MANAGEMENT & GRANULAR PERMISSIONS
+        // =============================================================
+        let loadedUsersData = null;
+        let selectedMgmtUsername = null;
+
+        function openUserManagementModal() {{
+            const modal = document.getElementById('userManagementModal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            loadUsersList();
+        }}
+
+        function closeUserManagementModal() {{
+            const modal = document.getElementById('userManagementModal');
+            if (modal) modal.classList.add('hidden');
+        }}
+
+        async function loadUsersList() {{
+            const tbody = document.getElementById('user-mgmt-tbody');
+            const countEl = document.getElementById('user-mgmt-count');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-slate-400">Loading user accounts...</td></tr>';
+
+            try {{
+                const res = await fetch('/api/v2/admin/users');
+                if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+                const data = await res.json();
+                loadedUsersData = data;
+
+                if (countEl) countEl.textContent = `${{data.users.length}} Accounts`;
+
+                tbody.innerHTML = data.users.map(u => {{
+                    const overridesCount = (u.custom_granted_permissions.length + u.custom_revoked_permissions.length);
+                    const overridesBadge = overridesCount > 0
+                        ? `<span class="bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-300 dark:border-indigo-500/30">+${{u.custom_granted_permissions.length}} / -${{u.custom_revoked_permissions.length}} Overrides</span>`
+                        : `<span class="text-slate-400 text-[11px]">Role Default</span>`;
+
+                    const statusBadge = u.is_active
+                        ? '<span class="text-emerald-600 font-bold text-[11px]">Active</span>'
+                        : '<span class="text-rose-600 font-bold text-[11px]">Inactive</span>';
+
+                    return `
+                        <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
+                            <td class="px-4 py-2.5">
+                                <div class="font-bold text-slate-900 dark:text-zinc-100">${{u.username}}</div>
+                                <div class="text-[11px] text-slate-500">${{u.full_name || '--'}}</div>
+                            </td>
+                            <td class="px-4 py-2.5">
+                                <span class="bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 px-2 py-0.5 rounded text-[11px] font-mono font-bold">${{u.role}}</span>
+                            </td>
+                            <td class="px-4 py-2.5">${{statusBadge}}</td>
+                            <td class="px-4 py-2.5">${{overridesBadge}}</td>
+                            <td class="px-4 py-2.5 text-right">
+                                <button onclick="selectUserForEdit('${{u.username}}')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
+                                    Manage
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }}).join('');
+
+                if (selectedMgmtUsername) {{
+                    selectUserForEdit(selectedMgmtUsername);
+                }}
+            }} catch (err) {{
+                tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-rose-500 font-bold">Failed to load users: ${{err.message}}</td></tr>`;
+            }}
+        }}
+
+        function selectUserForEdit(uname) {{
+            if (!loadedUsersData || !loadedUsersData.users) return;
+            const u = loadedUsersData.users.find(x => x.username.toLowerCase() === uname.toLowerCase());
+            if (!u) return;
+
+            selectedMgmtUsername = u.username;
+            const panel = document.getElementById('user-mgmt-detail-panel');
+            if (panel) panel.classList.remove('hidden');
+
+            const header = document.getElementById('selected-user-header');
+            if (header) header.textContent = `${{u.username}} (${{u.full_name || u.role}})`;
+
+            const roleSelect = document.getElementById('selected-user-role');
+            if (roleSelect) roleSelect.value = u.role;
+
+            const activeCheck = document.getElementById('selected-user-active');
+            if (activeCheck) activeCheck.checked = u.is_active;
+
+            const matrix = document.getElementById('user-perms-matrix');
+            if (!matrix) return;
+
+            const allPerms = loadedUsersData.all_permissions || [];
+            const inherited = new Set(u.inherited_permissions || []);
+            const customGranted = new Set(u.custom_granted_permissions || []);
+            const customRevoked = new Set(u.custom_revoked_permissions || []);
+
+            matrix.innerHTML = allPerms.map(p => {{
+                let statusLabel = '';
+                let statusClass = '';
+                let isEffective = false;
+
+                if (customGranted.has(p)) {{
+                    statusLabel = 'Explicitly Granted (Override)';
+                    statusClass = 'text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-500/20 border-emerald-300 dark:border-emerald-500/30';
+                    isEffective = true;
+                }} else if (customRevoked.has(p)) {{
+                    statusLabel = 'Explicitly Revoked (Override)';
+                    statusClass = 'text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-500/20 border-rose-300 dark:border-rose-500/30';
+                    isEffective = false;
+                }} else if (inherited.has(p)) {{
+                    statusLabel = 'Inherited from Role';
+                    statusClass = 'text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-500/20 border-blue-300 dark:border-blue-500/30';
+                    isEffective = true;
+                }} else {{
+                    statusLabel = 'Denied (Role Default)';
+                    statusClass = 'text-slate-600 dark:text-zinc-400 bg-slate-100 dark:bg-zinc-800 border-slate-300 dark:border-zinc-700';
+                    isEffective = false;
+                }}
+
+                const btnAction = isEffective
+                    ? `<button onclick="toggleUserPermissionSubmit('${{u.username}}', '${{p}}', false)" class="bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/50 font-bold px-2.5 py-1 rounded-lg text-[10px] transition cursor-pointer">Revoke</button>`
+                    : `<button onclick="toggleUserPermissionSubmit('${{u.username}}', '${{p}}', true)" class="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/50 font-bold px-2.5 py-1 rounded-lg text-[10px] transition cursor-pointer">Grant</button>`;
+
+                return `
+                    <div class="bg-white dark:bg-[#181820] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between gap-2 shadow-xs">
+                        <div class="overflow-hidden">
+                            <div class="text-xs font-mono font-bold text-slate-800 dark:text-zinc-200 truncate">${{p}}</div>
+                            <div class="mt-1 inline-flex items-center text-[9px] font-bold px-2 py-0.5 rounded-full border ${{statusClass}}">
+                                ${{statusLabel}}
+                            </div>
+                        </div>
+                        <div>
+                            ${{btnAction}}
+                        </div>
+                    </div>
+                `;
+            }}).join('');
+        }}
+
+        async function saveSelectedUserRole() {{
+            if (!selectedMgmtUsername) return;
+            const roleSelect = document.getElementById('selected-user-role');
+            const activeCheck = document.getElementById('selected-user-active');
+            if (!roleSelect || !activeCheck) return;
+
+            const newRole = roleSelect.value;
+            const isActive = activeCheck.checked;
+            const reason = prompt(`Enter reason for updating role of '${{selectedMgmtUsername}}' to ${{newRole}}:`);
+            if (!reason || !reason.trim()) {{
+                alert('A reason is mandatory for user role updates.');
+                return;
+            }}
+
+            try {{
+                const res = await fetch('/api/v2/admin/users/save', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        username: selectedMgmtUsername,
+                        role: newRole,
+                        is_active: isActive,
+                        reason: reason.trim()
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Updated ${{selectedMgmtUsername}} to ${{newRole}}!`);
+                    await loadUsersList();
+                }} else {{
+                    alert(data.detail || 'Failed to update user role.');
+                }}
+            }} catch (err) {{
+                alert(`Error: ${{err.message}}`);
+            }}
+        }}
+
+        async function toggleUserPermissionSubmit(username, permissionKey, isGranted) {{
+            const actionWord = isGranted ? 'grant' : 'revoke';
+            const reason = prompt(`Reason to ${{actionWord}} '${{permissionKey}}' for ${{username}}:`);
+            if (!reason || !reason.trim()) {{
+                alert('A reason is mandatory for permission overrides.');
+                return;
+            }}
+
+            try {{
+                const res = await fetch('/api/v2/admin/users/permissions', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        username: username,
+                        permission_key: permissionKey,
+                        is_granted: isGranted,
+                        reason: reason.trim()
+                    }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Permission ${{permissionKey}} ${{actionWord}}ed for ${{username}}!`);
+                    await loadUsersList();
+                }} else {{
+                    alert(data.detail || `Failed to ${{actionWord}} permission.`);
+                }}
+            }} catch (err) {{
+                alert(`Error: ${{err.message}}`);
+            }}
+        }}
+
         let cachedData = null;
         let isRefreshing = false;
         const initialAllowedDomains = {allowed_domains_json};
@@ -2956,6 +3707,7 @@ async def dashboard_view(request: Request):
                 cachedData = data;
 
                 if (data.user) {{
+                    currentUser = data.user;
                     const uName = document.getElementById('userDisplayName');
                     if (uName) uName.textContent = data.user.name;
                     const uRole = document.getElementById('userRoleBadge');
@@ -3433,7 +4185,7 @@ async def dashboard_view(request: Request):
                                     <span>Accrued: <strong class="text-rose-600 dark:text-rose-400 font-mono">$${{sp.total_shortfalls.toFixed(2)}}</strong></span>
                                     <span>Recovered: <strong class="text-emerald-600 dark:text-emerald-400 font-mono">$${{sp.total_recovered.toFixed(2)}}</strong></span>
                                 </div>
-                                ${{sp.net_balance > 0 ? `
+                                ${{sp.net_balance > 0 && hasPermission('clear_sales_rep_debt') ? `
                                     <button onclick="openClearPaymentModal('${{sp.name}}', '${{sp.phone}}', ${{sp.net_balance}})" class="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center justify-center gap-1 shadow-xs cursor-pointer">
                                         <span>💳</span> Clear Debt Settlement
                                     </button>
@@ -3944,6 +4696,24 @@ async def dashboard_view(request: Request):
                 if (cachedData.fleet.route_rules) {{
                     renderModalCityRules(cachedData.fleet.route_rules);
                 }}
+
+                // Granular permission gating for controls
+                const canFuel = hasPermission('manage_fuel_price');
+                const canCity = hasPermission('manage_city_minimums');
+                const canMeal = hasPermission('manage_meal_rate');
+                const canAccom = hasPermission('manage_accommodation_rate');
+
+                const fpBtn = document.getElementById('modal-save-fuel-btn');
+                if (fpInput) fpInput.disabled = !canFuel;
+                if (fpBtn) fpBtn.style.display = canFuel ? '' : 'none';
+
+                if (mealInput) mealInput.disabled = !canMeal;
+                if (accomInput) accomInput.disabled = !canAccom;
+                if (budgetInput) budgetInput.disabled = !canFuel;
+                if (vanInput) vanInput.disabled = !canCity;
+
+                const opsBtn = document.getElementById('modal-save-ops-btn');
+                if (opsBtn) opsBtn.style.display = (canMeal || canAccom || canFuel || canCity) ? '' : 'none';
             }}
             modal.classList.remove('hidden');
         }}
@@ -3979,6 +4749,8 @@ async def dashboard_view(request: Request):
                 return;
             }}
 
+            const canEditCity = hasPermission('manage_city_minimums');
+
             tbody.innerHTML = filtered.map(c => `
                 <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
                     <td class="px-4 py-2.5 font-bold text-slate-900 dark:text-zinc-100 capitalize">📍 ${{c.key}}</td>
@@ -3987,25 +4759,31 @@ async def dashboard_view(request: Request):
                     <td class="px-4 py-2.5">
                         <div class="relative w-28">
                             <span class="absolute left-2 top-1 text-slate-400 text-xs">$</span>
-                            <input type="number" step="0.01" id="min-input-${{c.key}}" value="${{Number(c.min_sales || 0).toFixed(2)}}" class="w-full pl-5 pr-2 py-1 bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-mono font-bold text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <input type="number" step="0.01" id="min-input-${{c.key}}" value="${{Number(c.min_sales || 0).toFixed(2)}}" ${{canEditCity ? '' : 'readonly disabled'}} class="w-full pl-5 pr-2 py-1 bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-mono font-bold text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                     </td>
                     <td class="px-4 py-2.5">
                         <div class="relative w-28">
                             <span class="absolute left-2 top-1 text-slate-400 text-xs">$</span>
-                            <input type="number" step="0.01" id="van-input-${{c.key}}" value="${{Number(c.van_min || 0).toFixed(2)}}" class="w-full pl-5 pr-2 py-1 bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-mono font-bold text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <input type="number" step="0.01" id="van-input-${{c.key}}" value="${{Number(c.van_min || 0).toFixed(2)}}" ${{canEditCity ? '' : 'readonly disabled'}} class="w-full pl-5 pr-2 py-1 bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-lg text-xs font-mono font-bold text-slate-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-blue-500">
                         </div>
                     </td>
                     <td class="px-4 py-2.5 text-right">
+                        ${{canEditCity ? `
                         <button onclick="saveCityMin('${{c.key}}')" id="btn-save-${{c.key}}" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
                             Save
                         </button>
+                        ` : '<span class="text-slate-400 text-[11px] font-medium">Read-Only</span>'}}
                     </td>
                 </tr>
             `).join('');
         }}
 
         async function saveFuelPrice() {{
+            if (!hasPermission('manage_fuel_price')) {{
+                alert('Permission denied: You do not have permission to change fuel prices.');
+                return;
+            }}
             const fpInput = document.getElementById('modal-fuel-price');
             const btn = document.getElementById('modal-save-fuel-btn');
             const feedback = document.getElementById('fuel-update-feedback');
@@ -4047,6 +4825,10 @@ async def dashboard_view(request: Request):
         }}
 
         async function saveCityMin(cityKey) {{
+            if (!hasPermission('manage_city_minimums')) {{
+                alert('Permission denied: You do not have permission to update city minimum sales.');
+                return;
+            }}
             const minInput = document.getElementById('min-input-' + cityKey);
             const vanInput = document.getElementById('van-input-' + cityKey);
             const btn = document.getElementById('btn-save-' + cityKey);
@@ -4106,6 +4888,10 @@ async def dashboard_view(request: Request):
         }}
 
         function openClearPaymentModal(repName = '', repPhone = '', balance = 0) {{
+            if (!hasPermission('clear_sales_rep_debt')) {{
+                alert('Permission denied: You do not have permission to clear sales rep debt.');
+                return;
+            }}
             const modal = document.getElementById('clearPaymentModal');
             if (!modal) return;
             const selectEl = document.getElementById('modal-pay-salesperson');
@@ -4290,6 +5076,10 @@ async def dashboard_view(request: Request):
         // MODAL 1B: OPERATIONAL RATES & SURCHARGES
         // =============================================================
         async function saveOperationalParams() {{
+            if (!hasPermission('manage_meal_rate') && !hasPermission('manage_accommodation_rate') && !hasPermission('manage_fuel_price') && !hasPermission('manage_city_minimums')) {{
+                alert('Permission denied: You do not have permission to edit operational rates.');
+                return;
+            }}
             const mealInput = document.getElementById('modal-meal-rate');
             const accomInput = document.getElementById('modal-accom-rate');
             const budgetInput = document.getElementById('modal-budget-pct');

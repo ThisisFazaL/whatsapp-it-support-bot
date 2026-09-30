@@ -204,8 +204,20 @@ class TestMasterDataManagement(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any(l.action == "ADD_SALES_REP" for l in logs))
             self.assertTrue(any(l.action == "UPDATE_SALES_REP" for l in logs))
 
-    @patch("app.dashboard.get_current_user_from_request", return_value={"name": "Zayn Accounts", "role": "ACCOUNTS_USER"})
+    @patch("app.dashboard.get_current_user_from_request", return_value={"name": "Sujit (Fleet Admin)", "username": "sujit", "role": "FLEET_ADMIN", "custom_permissions": {"clear_sales_rep_debt": True}})
     async def test_clear_sales_rep_payment_and_audit(self, mock_user):
+        # 0. Seed initial debt
+        async with async_session_factory() as session:
+            init_debt = FleetPendingLedger(
+                salesperson_phone="263772111222",
+                salesperson_name="Panashe Mazai",
+                entry_type="UNRECOVERED_SHORTFALL",
+                amount=100.00,
+                notes="Initial test shortfall"
+            )
+            session.add(init_debt)
+            await session.commit()
+
         # 1. Record debt clearance
         req = self.make_mock_request({
             "salesperson_phone": "263772111222",

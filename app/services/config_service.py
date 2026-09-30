@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from app.database import (
-    SystemSetting, SystemSettingHistory, FleetRouteRule, WebUser, AuditLog
+    SystemSetting, SystemSettingHistory, FleetRouteRule, WebUser, AuditLog, UserCustomPermission
 )
 
 logger = logging.getLogger("config_service")
@@ -170,6 +170,34 @@ async def load_settings_into_cache(session: AsyncSession):
 
         sync_legacy_services()
         logger.info(f"Loaded {len(settings)} system settings and {len(rules)} route rules into memory cache.")
+
+        # Synchronize roles and user custom permissions from database into auth memory cache
+        try:
+            from app.auth import load_all_user_custom_permissions, sync_db_roles_to_users_db
+
+            # 1. Sync roles from active WebUser records into runtime USERS_DB
+            stmt_roles = select(WebUser.username, WebUser.role).where(WebUser.is_active == True)
+            res_roles = await session.execute(stmt_roles)
+            roles_map = {uname.strip().lower(): role for uname, role in res_roles.all()}
+            if roles_map:
+                sync_db_roles_to_users_db(roles_map)
+                logger.info(f"Synchronized database roles for {len(roles_map)} active user(s) into runtime auth.")
+
+            # 2. Sync user custom permissions from database into auth memory cache
+            stmt_perms = select(WebUser.username, UserCustomPermission.permission_key, UserCustomPermission.is_granted).join(
+                UserCustomPermission, WebUser.id == UserCustomPermission.user_id
+            )
+            res_perms = await session.execute(stmt_perms)
+            perms_map = {}
+            for uname, pkey, is_g in res_perms.all():
+                u = uname.strip().lower()
+                if u not in perms_map:
+                    perms_map[u] = {}
+                perms_map[u][pkey] = is_g
+            load_all_user_custom_permissions(perms_map)
+            logger.info(f"Loaded delegated permissions for {len(perms_map)} user(s) into memory cache.")
+        except Exception as perm_err:
+            logger.warning(f"Note on user custom permissions/roles load: {perm_err}")
     except Exception as e:
         logger.warning(f"Failed to load settings into cache: {e}")
 
@@ -437,5 +465,61 @@ async def seed_config_and_routes(session: AsyncSession):
         await session.commit()
         logger.info("Seeded initial web users from USERS_DB.")
 
-    # Load cache
+    # Load cache (generic settings, rules, active web user roles, and all user custom permissions)
     await load_settings_into_cache(session)
+
+
+async def update_meal_rate(
+    session: AsyncSession,
+    new_meal_rate: float,
+    updated_by: str = "Admin",
+    reason: str = "Meal allowance rate updated"
+) -> bool:
+    """Updates meal rate allowance with history and audit logging."""
+    val = round(float(new_meal_rate), 2)
+    old_rate = get_meal_rate()
+    await update_system_setting(
+        session, "meal_rate_usd", val, changed_by=updated_by, reason=reason
+    )
+    audit = AuditLog(
+        username=updated_by,
+        action="UPDATE_MEAL_RATE",
+        module="CONFIG",
+        permission_used="manage_meal_rate",
+        entity_id="meal_rate_usd",
+        previous_value={"meal_rate_usd": old_rate},
+        new_value={"meal_rate_usd": val},
+        remarks=reason,
+        created_at=datetime.datetime.utcnow()
+    )
+    session.add(audit)
+    await session.commit()
+    return True
+
+
+async def update_accommodation_rate(
+    session: AsyncSession,
+    new_accom_rate: float,
+    updated_by: str = "Admin",
+    reason: str = "Accommodation allowance rate updated"
+) -> bool:
+    """Updates accommodation allowance rate with history and audit logging."""
+    val = round(float(new_accom_rate), 2)
+    old_rate = get_accommodation_rate()
+    await update_system_setting(
+        session, "accommodation_rate_usd", val, changed_by=updated_by, reason=reason
+    )
+    audit = AuditLog(
+        username=updated_by,
+        action="UPDATE_ACCOMMODATION_RATE",
+        module="CONFIG",
+        permission_used="manage_accommodation_rate",
+        entity_id="accommodation_rate_usd",
+        previous_value={"accommodation_rate_usd": old_rate},
+        new_value={"accommodation_rate_usd": val},
+        remarks=reason,
+        created_at=datetime.datetime.utcnow()
+    )
+    session.add(audit)
+    await session.commit()
+    return True

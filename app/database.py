@@ -2,7 +2,7 @@ import datetime
 import json
 from typing import AsyncGenerator, Optional, List, Dict, Any
 from sqlalchemy import (
-    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float
+    Column, Integer, String, Text, Boolean, DateTime, ForeignKey, JSON, Float, UniqueConstraint
 )
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship, selectinload
@@ -383,6 +383,18 @@ class WebUser(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
+class UserCustomPermission(Base):
+    __tablename__ = "user_custom_permissions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("web_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission_key = Column(String(100), nullable=False, index=True)
+    is_granted = Column(Boolean, nullable=False, default=True)
+    granted_by = Column(String(100), nullable=False)
+    granted_at = Column(DateTime, default=datetime.datetime.utcnow)
+    reason = Column(Text, nullable=True)
+
+    __table_args__ = (UniqueConstraint("user_id", "permission_key", name="uq_user_permission"),)
+
 class SystemSetting(Base):
     __tablename__ = "system_settings"
     key = Column(String(100), primary_key=True)  # e.g. "fuel_price_usd", "meal_rate_usd", "accommodation_rate_usd", "expense_budget_pct"
@@ -442,6 +454,7 @@ class AuditLog(Base):
     user_role = Column(String(50), nullable=True)
     action = Column(String(50), nullable=False, index=True)  # UPDATE_FUEL_PRICE, CLEAR_PAYMENT, UPDATE_ROUTE, etc.
     module = Column(String(50), nullable=False, index=True)  # CONFIG, FINANCE, FLEET, MASTER_DATA, AUTH
+    permission_used = Column(String(100), nullable=True)
     entity_id = Column(String(100), nullable=True)
     previous_value = Column(JSON, nullable=True)
     new_value = Column(JSON, nullable=True)
@@ -476,8 +489,13 @@ async def init_db_models():
     global engine, async_session_factory
     if "sqlite" in settings.database_url:
         try:
+            from sqlalchemy import text
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                try:
+                    await conn.execute(text("ALTER TABLE audit_logs ADD COLUMN permission_used VARCHAR(100)"))
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Schema verification note: {e}")
     else:
@@ -694,6 +712,21 @@ async def init_db_models():
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_web_users_username ON web_users(username)"))
 
                 await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS user_custom_permissions (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES web_users(id) ON DELETE CASCADE,
+                        permission_key VARCHAR(100) NOT NULL,
+                        is_granted BOOLEAN NOT NULL DEFAULT TRUE,
+                        granted_by VARCHAR(100) NOT NULL,
+                        granted_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
+                        reason TEXT,
+                        CONSTRAINT uq_user_permission UNIQUE(user_id, permission_key)
+                    )
+                """))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ucp_user ON user_custom_permissions(user_id)"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ucp_key ON user_custom_permissions(permission_key)"))
+
+                await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS system_settings (
                         key VARCHAR(100) PRIMARY KEY,
                         category VARCHAR(50) NOT NULL DEFAULT 'GENERAL',
@@ -763,6 +796,7 @@ async def init_db_models():
                         user_role VARCHAR(50),
                         action VARCHAR(50) NOT NULL,
                         module VARCHAR(50) NOT NULL,
+                        permission_used VARCHAR(100),
                         entity_id VARCHAR(100),
                         previous_value JSONB,
                         new_value JSONB,
@@ -774,6 +808,7 @@ async def init_db_models():
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_username ON audit_logs(username)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_module ON audit_logs(module)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_created_at ON audit_logs(created_at)"))
+                await conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS permission_used VARCHAR(100)"))
         except Exception as e:
             print(f"Database table init note: {e}")
             
