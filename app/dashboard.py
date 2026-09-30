@@ -1803,9 +1803,27 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
 
         # 7. Recent Operational Activity Feed (Audit logs + Real operational events)
         recent_activity_list = []
-        audit_stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(10)
+        audit_stmt = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(100)
         raw_audits = (await db.execute(audit_stmt)).scalars().all()
-        for idx, al in enumerate(raw_audits):
+
+        audit_records = []
+        for al in raw_audits:
+            audit_records.append({
+                "id": al.id,
+                "timestamp": al.created_at.strftime("%Y-%m-%d %H:%M:%S") if al.created_at else "",
+                "date_only": al.created_at.strftime("%Y-%m-%d") if al.created_at else "",
+                "username": al.username or "System",
+                "user_role": al.user_role or "--",
+                "action": al.action,
+                "module": al.module,
+                "permission_used": al.permission_used or "--",
+                "entity_id": al.entity_id or "--",
+                "previous_value": al.previous_value,
+                "new_value": al.new_value,
+                "remarks": al.remarks or "",
+            })
+
+        for idx, al in enumerate(raw_audits[:10]):
             cat = "CONFIG"
             badge = "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30"
             if "PAYMENT" in al.action or "CLEAR" in al.action:
@@ -1854,6 +1872,97 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         recent_activity_list.sort(key=lambda x: x["timestamp"], reverse=True)
         recent_activity_list = recent_activity_list[:10]
 
+        # 8. Real Historical Operations & Financial Analytics
+        tot_sales = sum(tr.trip_sales_value or 0.0 for tr in raw_trips)
+        tot_trans = sum(tr.transport_charge or 0.0 for tr in raw_trips)
+        tot_allow = sum(tr.total_allowance or 0.0 for tr in raw_trips)
+        tot_meals = sum(tr.food_allowance or 0.0 for tr in raw_trips)
+        tot_accom = sum(tr.accommodation_allowance or 0.0 for tr in raw_trips)
+        tot_tolls = sum(tr.toll_cost or 0.0 for tr in raw_trips)
+
+        emerg_stmt = select(FleetEmergencyExpense).order_by(FleetEmergencyExpense.created_at.desc())
+        emerg_entries = (await db.execute(emerg_stmt)).scalars().all()
+        tot_emerg_fuel = sum(e.amount or 0.0 for e in emerg_entries if (e.charge_type or "").upper() == "EMERGENCY_FUEL")
+        tot_emerg_other = sum(e.amount or 0.0 for e in emerg_entries if (e.charge_type or "").upper() != "EMERGENCY_FUEL")
+        tot_opex = tot_allow + tot_emerg_fuel + tot_emerg_other
+        net_margin = tot_sales - tot_opex
+
+        trips_count_total = len(raw_trips)
+        trips_completed = sum(1 for tr in raw_trips if (tr.status or "").upper() in ("CLOSED", "SETTLED", "RETURNED", "BALANCED"))
+        trips_pending = sum(1 for tr in raw_trips if (tr.status or "").upper() in (
+            "CREATED", "QUOTED", "APPROVED", "PENDING_ASSIGNMENT", "ASSIGNED", "ALLOWANCE_APPROVED", "TRANSFERRED", "LOADED", "IN_TRANSIT", "ACTIVE", "RETURNING", "OFFLOADED"
+        ))
+        trips_cancelled = sum(1 for tr in raw_trips if (tr.status or "").upper() in ("CANCELLED", "REJECTED"))
+
+        # City & Route Aggregations
+        city_stats = {}
+        route_stats = {}
+        for tr in raw_trips:
+            c = tr.destination_city or "Unknown"
+            r = tr.route or c or "Unassigned"
+            s = tr.trip_sales_value or 0.0
+            o = tr.total_allowance or 0.0
+            t = tr.transport_charge or 0.0
+
+            if c not in city_stats:
+                city_stats[c] = {"city": c, "trips": 0, "sales": 0.0, "opex": 0.0, "transport": 0.0}
+            city_stats[c]["trips"] += 1
+            city_stats[c]["sales"] = round(city_stats[c]["sales"] + s, 2)
+            city_stats[c]["opex"] = round(city_stats[c]["opex"] + o, 2)
+            city_stats[c]["transport"] = round(city_stats[c]["transport"] + t, 2)
+
+            if r not in route_stats:
+                route_stats[r] = {"route": r, "city": c, "trips": 0, "sales": 0.0, "opex": 0.0, "transport": 0.0}
+            route_stats[r]["trips"] += 1
+            route_stats[r]["sales"] = round(route_stats[r]["sales"] + s, 2)
+            route_stats[r]["opex"] = round(route_stats[r]["opex"] + o, 2)
+            route_stats[r]["transport"] = round(route_stats[r]["transport"] + t, 2)
+
+        top_cities = sorted(city_stats.values(), key=lambda x: x["trips"], reverse=True)
+        top_routes = sorted(route_stats.values(), key=lambda x: x["sales"], reverse=True)
+
+        avg_rev = round(tot_sales / trips_count_total, 2) if trips_count_total > 0 else 0.0
+        avg_exp = round(tot_opex / trips_count_total, 2) if trips_count_total > 0 else 0.0
+        avg_alw = round(tot_allow / trips_count_total, 2) if trips_count_total > 0 else 0.0
+
+        shortfall_tot = fleet_stats.get("total_outstanding_backlog", 0.0) + fleet_stats.get("total_recovered", 0.0)
+        recovered_tot = fleet_stats.get("total_recovered", 0.0)
+        rec_rate = round((recovered_tot / shortfall_tot * 100), 1) if shortfall_tot > 0 else 100.0
+
+        cleared_tot = sum(p["cleared_amount"] for p in payments_list)
+        debt_tot = fleet_stats.get("total_outstanding_backlog", 0.0)
+        fleet_util = round((active_trips_count / trucks_available * 100), 1) if trucks_available > 0 else 0.0
+        ws_impact = trucks_total - trucks_available
+
+        operations_analytics = {
+            "total_sales": round(tot_sales, 2),
+            "total_transport_charges": round(tot_trans, 2),
+            "total_allowances": round(tot_allow, 2),
+            "total_meals": round(tot_meals, 2),
+            "total_accommodation": round(tot_accom, 2),
+            "total_tolls": round(tot_tolls, 2),
+            "total_emergency_fuel": round(tot_emerg_fuel, 2),
+            "total_emergency_other": round(tot_emerg_other, 2),
+            "total_operational_expenses": round(tot_opex, 2),
+            "net_amount": round(net_margin, 2),
+            "trips_total": trips_count_total,
+            "trips_completed": trips_completed,
+            "trips_pending": trips_pending,
+            "trips_cancelled": trips_cancelled,
+            "avg_revenue_per_trip": avg_rev,
+            "avg_opex_per_trip": avg_exp,
+            "avg_allowance_per_trip": avg_alw,
+            "fleet_utilization_pct": fleet_util,
+            "workshop_impact_count": ws_impact,
+            "shortfall_total": round(shortfall_tot, 2),
+            "recovery_total": round(recovered_tot, 2),
+            "recovery_rate_pct": rec_rate,
+            "cleared_payments_total": round(cleared_tot, 2),
+            "outstanding_debt_total": round(debt_tot, 2),
+            "cities": top_cities,
+            "routes": top_routes
+        }
+
         fleet_payload = {
             "stats": fleet_stats,
             "salespersons": salespersons_list,
@@ -1862,6 +1971,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "trips": trips_list,
             "payments": payments_list,
             "ledger": ledger_records,
+            "audit_logs": audit_records,
+            "analytics": operations_analytics,
             "cities": sorted(list(cities_set)),
             "route_rules": get_all_cached_city_rules(),
             "fuel_price": get_fuel_price(),
@@ -1894,6 +2005,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 },
                 "alerts": operations_alerts,
                 "recent_activity": recent_activity_list,
+                "analytics": operations_analytics,
+                "audit_logs": audit_records[:15],
                 "role": user.get("role"),
                 "is_read_only": is_observer
             }
@@ -1962,13 +2075,13 @@ async def dashboard_view(request: Request):
     # Generate navigation tab buttons based on allowed domains
     tabs_html = []
     if "fleet" in allowed:
-        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🚚</span> Commercial Fleet Operations</button>')
+        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">Commercial Fleet</button>')
     if "it" in allowed:
-        tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>💻</span> IT Support</button>')
+        tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">IT Support</button>')
     if "projects" in allowed:
-        tabs_html.append('<button id="btn-tab-projects" onclick="switchDomain(\'projects\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🏗️</span> Building Projects</button>')
+        tabs_html.append('<button id="btn-tab-projects" onclick="switchDomain(\'projects\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">Building Projects</button>')
     if "logistics" in allowed:
-        tabs_html.append('<button id="btn-tab-logistics" onclick="switchDomain(\'logistics\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"><span>🔧</span> Workshop Fleet</button>')
+        tabs_html.append('<button id="btn-tab-logistics" onclick="switchDomain(\'logistics\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">Workshop Fleet</button>')
 
     nav_tabs_markup = "\n".join(tabs_html)
     allowed_domains_json = str(allowed).replace("'", '"')
@@ -1990,43 +2103,43 @@ async def dashboard_view(request: Request):
     sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Dashboards</div>')
 
     if "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'overview\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>⚡</span> Operations Overview</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'overview\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Operations Overview</button>')
 
     if user_role == "MASTER_ADMIN":
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>👑</span> Master Admin Dashboard</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Master Admin Dashboard</button>')
 
     if user_role in ("MASTER_ADMIN", "ACCOUNTS_USER") or "accounts" in allowed or "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>💼</span> Accounts & Finance</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Accounts & Finance</button>')
 
     if user_role in ("MASTER_ADMIN", "LOGISTICS_MANAGER") or "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>📈</span> Logistics Manager Hub</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Logistics Manager Hub</button>')
 
     if "logistics" in allowed or "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5"><span>🚛</span> Operations Execution</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-zinc-200 hover:bg-blue-50 dark:hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400 transition flex items-center gap-2.5">Operations Execution</button>')
 
     sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Operations & Fleet</div>')
     if "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛣️</span> 7-Stage Trips Pipeline</button>')
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🚚</span> 39 Commercial Trucks</button>')
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👤</span> 21 Commercial Drivers</button>')
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📍</span> 45 Delivery Corridors & Stops</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trips\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Trip Pipeline</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'trucks\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Fleet Vehicles</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Commercial Drivers</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Delivery Corridors</button>')
 
     sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
     if can_view_balances:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👥</span> Sales Rep Debt Ledger</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Sales Representative Balances</button>')
     if can_view_balances or can_clear_debt:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>💳</span> Cleared Payments History</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Payment History</button>')
     if "fleet" in allowed:
-        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>📜</span> Shortfall Recovery Ledger</button>')
+        sidebar_links.append('<button onclick="switchDomain(\'fleet\'); switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Financial Audit Log</button>')
 
     if can_manage_fuel or can_manage_city or can_view_audit or can_manage_users:
         sidebar_links.append('<div class="px-4 pt-4 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
         if can_manage_fuel or can_manage_city:
-            sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>⚙️</span> Edit Fuel & City Minimums</button>')
+            sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Fuel & City Rates</button>')
         if can_manage_users:
-            sidebar_links.append('<button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>👥</span> User & Role Permissions</button>')
+            sidebar_links.append('<button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">User Permissions</button>')
         if can_view_audit:
-            sidebar_links.append('<button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5"><span>🛡️</span> System Audit Logs</button>')
+            sidebar_links.append('<button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">System Audit Logs</button>')
 
     sidebar_markup = "\n".join(sidebar_links)
 
@@ -2531,31 +2644,31 @@ async def dashboard_view(request: Request):
                 <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800/80 dark:border-zinc-800/80 pb-4 mb-5">
                     <div>
                         <div class="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 border border-blue-400/30 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase mb-1.5">
-                            ⚡ Commercial Fleet & Logistics Operations
+                            Commercial Fleet & Logistics Operations
                         </div>
                         <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Fleet & Commercial Command Center</h2>
-                        <p class="text-xs text-slate-400 mt-1">Full 7-Stage Trip Pipeline, 39 Commercial Trucks, 21 Drivers, 45 Zimbabwe Corridors & Financial Debt Ledgers</p>
+                        <p class="text-xs text-slate-400 mt-1">Trip Pipeline, Fleet Vehicles, Commercial Drivers, Zimbabwe Corridors & Financial Debt Ledgers</p>
                     </div>
                     <!-- Quick Management Action Buttons -->
                     <div class="flex flex-wrap items-center gap-2 sm:gap-2.5">
                         {"" if not (can_manage_fuel or can_manage_city) else """
                         <button onclick="openCityConfigModal()" class="bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-blue-400/40 shadow-xs cursor-pointer">
-                            <span>⚙️</span> Edit Fuel & City Minimums
+                            Fuel & City Rates
                         </button>
                         """}
                         {"" if not can_clear_debt else """
                         <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-emerald-400/40 shadow-xs cursor-pointer">
-                            <span>💳</span> Clear Sales Rep Debt
+                            Clear Sales Rep Debt
                         </button>
                         """}
                         {"" if not can_manage_users else """
                         <button onclick="openUserManagementModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-indigo-400/40 shadow-xs cursor-pointer">
-                            <span>👥</span> User Permissions
+                            User Permissions
                         </button>
                         """}
                         {"" if not can_view_audit else """
                         <button onclick="openAuditLogsModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700 shadow-xs cursor-pointer">
-                            <span>🛡️</span> Audit Logs
+                            Audit Logs
                         </button>
                         """}
                     </div>
@@ -2564,74 +2677,73 @@ async def dashboard_view(request: Request):
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Active Tasks</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-amber-400 mt-1" id="master-active-ops">0</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-amber-400 mt-1 font-mono" id="master-active-ops">0</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Pending approvals</div>
                     </div>
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Clearance Rate</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1" id="master-res-rate">100%</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1 font-mono" id="master-res-rate">100%</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Approved vs dispatched</div>
                     </div>
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Transport Billed</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1" id="master-transport-revenue">$0.00</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1 font-mono" id="master-transport-revenue">$0.00</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Shortfall recovery charges</div>
                     </div>
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Salesperson Debt Backlog</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1" id="master-financial-backlog">$0.00</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1 font-mono" id="master-financial-backlog">$0.00</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Pending shortfall recovery</div>
                     </div>
                 </div>
             </div>
 
-            <!-- Fleet Operational Sub-View Navigation Pills -->
-            <div class="flex items-center gap-1.5 p-1.5 bg-slate-100 dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 overflow-x-auto no-scrollbar scroll-smooth">
-                <button onclick="switchFleetSubView('overview')" id="fleet-btn-overview" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-blue-600 text-white shadow-md">
-                    <span>⚡</span> Operations Overview
-                </button>
-                <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>🛣️</span> 7-Stage Trips Pipeline
-                </button>
-                <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>👥</span> Sales Rep Debt Ledger
-                </button>
-                <button onclick="switchFleetSubView('payments')" id="fleet-btn-payments" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>💳</span> Cleared Payments History
-                </button>
-                <button onclick="switchFleetSubView('trucks')" id="fleet-btn-trucks" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>🚚</span> 39 Commercial Trucks
-                </button>
-                <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>👤</span> 21 Commercial Drivers
-                </button>
-                <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>📋</span> Shortfall Approvals
-                </button>
-                <button onclick="switchFleetSubView('ledger')" id="fleet-btn-ledger" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>📜</span> Financial Audit Ledger
-                </button>
-                <button onclick="switchFleetSubView('all')" id="fleet-btn-all" class="fleet-subview-btn px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer bg-white dark:bg-[#121216] text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800">
-                    <span>🌐</span> All Operations
-                </button>
+            <!-- Compact Fleet Workspace Navigation Bar -->
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-white dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xs">
+                <div class="flex items-center gap-2.5">
+                    <span class="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Workspace:</span>
+                    <select id="fleet-view-selector" onchange="switchFleetSubView(this.value)" class="bg-slate-100 dark:bg-zinc-800/90 text-slate-900 dark:text-zinc-100 text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 dark:border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500">
+                        <option value="overview">Operations Overview</option>
+                        <option value="trips">Trip Pipeline</option>
+                        <option value="salespersons">Sales Representative Balances</option>
+                        <option value="payments">Payment History</option>
+                        <option value="trucks">Fleet Vehicles</option>
+                        <option value="drivers">Commercial Drivers</option>
+                        <option value="approvals">Trip Approvals</option>
+                        <option value="ledger">Financial Audit Log</option>
+                        <option value="all">Consolidated View</option>
+                    </select>
+                </div>
+                <!-- Compact Fast-Nav Pills (Desktop) -->
+                <div class="hidden md:flex items-center gap-1 overflow-x-auto no-scrollbar" id="fleet-fast-nav">
+                    <button onclick="switchFleetSubView('overview')" id="fleet-btn-overview" data-view="overview" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">Overview</button>
+                    <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" data-view="trips" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Trips</button>
+                    <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" data-view="salespersons" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Sales Reps</button>
+                    <button onclick="switchFleetSubView('payments')" id="fleet-btn-payments" data-view="payments" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Payments</button>
+                    <button onclick="switchFleetSubView('trucks')" id="fleet-btn-trucks" data-view="trucks" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Vehicles</button>
+                    <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" data-view="drivers" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Drivers</button>
+                    <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" data-view="approvals" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Approvals</button>
+                    <button onclick="switchFleetSubView('ledger')" id="fleet-btn-ledger" data-view="ledger" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Audit Log</button>
+                    <button onclick="switchFleetSubView('all')" id="fleet-btn-all" data-view="all" class="fleet-quick-pill px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">All</button>
+                </div>
             </div>
 
             <!-- SUBVIEW 0: OPERATIONS OVERVIEW -->
-            <div id="fleet-section-overview" class="fleet-subview-panel space-y-5 transition-all duration-200" style="display: block;">
+            <div id="fleet-section-overview" class="fleet-subview-panel space-y-6 transition-all duration-200" style="display: block;">
 
                 <!-- ═══ TIER 1: ACTION REQUIRED ═══ -->
                 <div>
                     <div class="flex items-center gap-2 mb-3">
-                        <span class="text-[10px] font-black uppercase tracking-widest text-rose-600 dark:text-rose-400">⚡ Action Required</span>
+                        <span class="text-[10px] font-black uppercase tracking-widest text-rose-600 dark:text-rose-400">Action Required</span>
                         <span id="ov-alerts-count-badge" class="bg-amber-100 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/30">0 active</span>
                     </div>
-                    <!-- ACTION REQUIRED: two urgent KPI pills + alert list -->
+                    <!-- Urgent KPI pills + alert list -->
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
                         <!-- Pending Approvals -->
                         <div class="bg-white dark:bg-[#0a0a0d] border border-amber-200/60 dark:border-amber-500/20 rounded-2xl p-4 shadow-xs hover:shadow-md transition">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Trip Approvals</span>
-                                <span class="text-xs">📋</span>
+                                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold">QUEUE</span>
                             </div>
                             <div class="text-2xl sm:text-3xl font-extrabold text-amber-500 dark:text-amber-400 mt-1 font-mono" id="ov-kpi-pending-approvals">0</div>
                             <div class="text-[11px] text-amber-600 dark:text-amber-400 mt-0.5 font-medium truncate" id="ov-kpi-shortfall-sub">0 shortfalls</div>
@@ -2640,7 +2752,7 @@ async def dashboard_view(request: Request):
                         <div class="bg-white dark:bg-[#0a0a0d] border border-rose-200/60 dark:border-rose-500/20 rounded-2xl p-4 shadow-xs hover:shadow-md transition">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">Action Queue</span>
-                                <span class="text-xs">⚠️</span>
+                                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-600 dark:text-rose-400 font-bold">URGENT</span>
                             </div>
                             <div class="text-2xl sm:text-3xl font-extrabold text-rose-600 dark:text-rose-400 mt-1 font-mono" id="ov-kpi-bottlenecks">0</div>
                             <div class="text-[11px] text-rose-600 dark:text-rose-400 mt-0.5 font-semibold truncate">Priority exceptions</div>
@@ -2649,7 +2761,7 @@ async def dashboard_view(request: Request):
                         <div class="col-span-2 bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs hover:shadow-md transition" id="ov-kpi-card-slot5">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500" id="ov-kpi-slot5-title">Commercial Balance</span>
-                                <span class="text-xs" id="ov-kpi-slot5-icon">💳</span>
+                                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 font-bold" id="ov-kpi-slot5-icon">BALANCE</span>
                             </div>
                             <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1 font-mono truncate" id="ov-kpi-slot5-val">$0.00</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-slot5-sub">Outstanding Rep Debt</div>
@@ -2666,26 +2778,40 @@ async def dashboard_view(request: Request):
                 <!-- ═══ TIER 2: TODAY'S OPERATIONS ═══ -->
                 <div>
                     <div class="flex items-center gap-2 mb-3">
-                        <span class="text-[10px] font-black uppercase tracking-widest text-blue-600 dark:text-blue-400">🛣️ Today's Operations</span>
+                        <span class="text-[10px] font-black uppercase tracking-widest text-blue-600 dark:text-blue-400">Today's Operations</span>
                     </div>
-                    <div class="grid grid-cols-2 md:grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
                         <!-- Active Trips -->
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active Trips</span>
-                                <span class="text-xs">🛣️</span>
                             </div>
                             <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="ov-kpi-active-trips">0</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-transit-trips">0 in transit</div>
                         </div>
-                        <!-- Drivers -->
+                        <!-- Driver Roster -->
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Driver Roster</span>
-                                <span class="text-xs">👤</span>
                             </div>
                             <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1 font-mono" id="ov-kpi-drivers-active">0</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate" id="ov-kpi-drivers-total">of 0 on roster</div>
+                        </div>
+                        <!-- Completed Trips -->
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Trips Completed</span>
+                            </div>
+                            <div class="text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono" id="ov-kpi-completed-trips">0</div>
+                            <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Successfully settled</div>
+                        </div>
+                        <!-- Average Revenue per Trip -->
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Avg Revenue / Trip</span>
+                            </div>
+                            <div class="text-2xl sm:text-3xl font-extrabold text-slate-800 dark:text-zinc-100 mt-1 font-mono truncate" id="ov-kpi-avg-revenue">$0.00</div>
+                            <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Manifest revenue mean</div>
                         </div>
                     </div>
                 </div>
@@ -2693,7 +2819,7 @@ async def dashboard_view(request: Request):
                 <!-- ═══ TIER 3: FLEET STATUS ═══ -->
                 <div>
                     <div class="flex items-center gap-2 mb-3">
-                        <span class="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-400">🚚 Fleet Status</span>
+                        <span class="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-400">Fleet Status</span>
                         <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-medium">Live from workshop tickets</span>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
@@ -2732,29 +2858,212 @@ async def dashboard_view(request: Request):
                     </div>
                 </div>
 
-                <!-- ═══ TIER 4 + 5: FINANCIAL EXCEPTIONS & RECENT ACTIVITY (two-column) ═══ -->
-                <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
-                    <!-- FINANCIAL EXCEPTIONS (hidden if no balances access — JS will hide) -->
-                    <div class="lg:col-span-5 space-y-3" id="ov-financial-section">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-[10px] font-black uppercase tracking-widest text-purple-600 dark:text-purple-400">💳 Financial Exceptions</span>
+                <!-- ═══ TIER 4: FINANCIAL OVERVIEW ═══ -->
+                <div>
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="text-[10px] font-black uppercase tracking-widest text-indigo-600 dark:text-indigo-400">Financial Overview</span>
+                        <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-medium">Trip manifests, billings & ledger totals</span>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Sales Value</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-1 truncate" id="ov-fin-total-sales">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Across all trips</div>
                         </div>
-                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3" id="ov-financial-body">
-                            <div class="text-center py-6 text-slate-400 dark:text-zinc-500 text-xs">Loading financial data...</div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Transport Charges</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-blue-600 dark:text-blue-400 font-mono mt-1 truncate" id="ov-fin-transport-charges">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Direct shortfall fees</div>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Opex</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-orange-600 dark:text-orange-400 font-mono mt-1 truncate" id="ov-fin-total-opex">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Allowances & fuel</div>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Net Position</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-indigo-600 dark:text-indigo-400 font-mono mt-1 truncate" id="ov-fin-net-margin">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Sales less opex</div>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Outstanding Debt</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-rose-600 dark:text-rose-400 font-mono mt-1 truncate" id="ov-fin-debt-backlog">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Pending recovery</div>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Cleared Payments</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-teal-600 dark:text-teal-400 font-mono mt-1 truncate" id="ov-fin-cleared-payments">$0.00</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Accounts settled</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ TIER 5: OPERATIONAL EXPENSES ═══ -->
+                <div>
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="text-[10px] font-black uppercase tracking-widest text-orange-600 dark:text-orange-400">Operational Expenses</span>
+                        <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-medium">Allowances breakdown & roadside incidents</span>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <!-- Driver Allowances Summary -->
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-2.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-slate-700 dark:text-zinc-300">Driver Allowances</span>
+                                <span class="text-xs font-extrabold font-mono text-slate-900 dark:text-zinc-100" id="ov-exp-total-allowances">$0.00</span>
+                            </div>
+                            <div class="space-y-1.5 pt-1 text-[11px] text-slate-500 dark:text-zinc-400">
+                                <div class="flex items-center justify-between">
+                                    <span>Meals</span>
+                                    <strong class="font-mono text-slate-700 dark:text-zinc-200" id="ov-exp-meals">$0.00</strong>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <span>Accommodation</span>
+                                    <strong class="font-mono text-slate-700 dark:text-zinc-200" id="ov-exp-accommodation">$0.00</strong>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <span>Toll Fees</span>
+                                    <strong class="font-mono text-slate-700 dark:text-zinc-200" id="ov-exp-tolls">$0.00</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Emergency Incidents -->
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-2.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold text-slate-700 dark:text-zinc-300">Emergency & Incident Expenses</span>
+                                <span class="text-xs font-extrabold font-mono text-rose-600 dark:text-rose-400" id="ov-exp-total-emergency">$0.00</span>
+                            </div>
+                            <div class="space-y-1.5 pt-1 text-[11px] text-slate-500 dark:text-zinc-400">
+                                <div class="flex items-center justify-between">
+                                    <span>Emergency Fuel</span>
+                                    <strong class="font-mono text-slate-700 dark:text-zinc-200" id="ov-exp-emergency-fuel">$0.00</strong>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <span>Breakdowns & Other</span>
+                                    <strong class="font-mono text-slate-700 dark:text-zinc-200" id="ov-exp-emergency-other">$0.00</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Cost per Trip Metrics -->
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-2.5">
+                            <div class="text-xs font-bold text-slate-700 dark:text-zinc-300">Averages per Trip</div>
+                            <div class="space-y-2 pt-1 text-[11px] text-slate-500 dark:text-zinc-400">
+                                <div class="flex items-center justify-between">
+                                    <span>Avg Opex / Trip</span>
+                                    <strong class="font-mono text-orange-600 dark:text-orange-400" id="ov-exp-avg-opex">$0.00</strong>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <span>Avg Allowance / Trip</span>
+                                    <strong class="font-mono text-indigo-600 dark:text-indigo-400" id="ov-exp-avg-allowance">$0.00</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Recovery & Deficit Ratio -->
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-2.5">
+                            <div class="text-xs font-bold text-slate-700 dark:text-zinc-300">Shortfall Recovery Rate</div>
+                            <div class="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-1" id="ov-rev-recovery-rate">100%</div>
+                            <div class="text-[11px] text-slate-500 dark:text-zinc-400">
+                                Total Shortfall: <strong class="font-mono text-slate-700 dark:text-zinc-200" id="ov-rev-shortfall-total">$0.00</strong><br>
+                                Total Recovered: <strong class="font-mono text-emerald-600 dark:text-emerald-400" id="ov-rev-recovered-total">$0.00</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ TIER 6 & 7: ROUTE / CITY PERFORMANCE & FLEET WORKSHOP IMPACT (two columns) ═══ -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    <!-- Top Destinations & Routes (7 cols) -->
+                    <div class="lg:col-span-7 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-zinc-400">Route & City Performance</span>
+                            <span class="text-[10px] text-slate-400 font-medium">Historical trip volume</span>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-xs min-w-[420px]">
+                                    <thead class="bg-slate-50 dark:bg-[#121216] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                                        <tr>
+                                            <th class="px-4 py-2.5">Destination City</th>
+                                            <th class="px-4 py-2.5 text-center">Trips</th>
+                                            <th class="px-4 py-2.5 text-right">Sales Value</th>
+                                            <th class="px-4 py-2.5 text-right">Allowances</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="ov-top-cities-body" class="divide-y divide-slate-100 dark:divide-zinc-850/60 text-slate-700 dark:text-zinc-200">
+                                        <tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">Loading destinations...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- RECENT ACTIVITY -->
-                    <div class="lg:col-span-7 space-y-3">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-zinc-400">📜 Recent Activity</span>
+                    <!-- Fleet & Workshop Impact (5 cols) -->
+                    <div class="lg:col-span-5 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-zinc-400">Fleet & Workshop Performance</span>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
+                            <div>
+                                <div class="flex items-center justify-between text-xs mb-1">
+                                    <span class="text-slate-600 dark:text-zinc-400 font-bold">Fleet Utilization</span>
+                                    <span class="font-extrabold font-mono text-blue-600 dark:text-blue-400" id="ov-perf-utilization">0%</span>
+                                </div>
+                                <div class="w-full bg-slate-100 dark:bg-zinc-800 rounded-full h-2 overflow-hidden">
+                                    <div id="ov-perf-util-bar" class="bg-blue-600 h-2 rounded-full" style="width: 0%"></div>
+                                </div>
+                                <div class="text-[10px] text-slate-400 mt-1">Active dispatched trips relative to field-ready trucks</div>
+                            </div>
+                            <div class="pt-2 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+                                <span class="text-xs text-slate-600 dark:text-zinc-400">Vehicles in Workshop</span>
+                                <span class="text-sm font-extrabold text-orange-500 font-mono" id="ov-perf-ws-impact">0 trucks</span>
+                            </div>
+                            <div class="pt-2 border-t border-slate-100 dark:border-zinc-800/60" id="ov-financial-section">
+                                <div class="text-xs font-bold text-slate-700 dark:text-zinc-300 mb-2">Financial Exceptions Summary</div>
+                                <div id="ov-financial-body" class="space-y-1.5 text-xs">
+                                    <div class="text-center py-2 text-slate-400 text-xs">Loading financial exceptions...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ TIER 8 & 9: RECENT OPERATIONS ACTIVITY & RECENT AUDIT (two columns) ═══ -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+                    <!-- Recent Activity Feed (6 cols) -->
+                    <div class="lg:col-span-6 space-y-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-zinc-400">Recent Operations Activity</span>
                             <span class="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
                                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Live
                             </span>
                         </div>
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
-                            <div id="ov-activity-list" class="p-4 sm:p-5 space-y-3 max-h-[540px] overflow-y-auto no-scrollbar">
+                            <div id="ov-activity-list" class="p-4 space-y-3 max-h-[460px] overflow-y-auto no-scrollbar">
                                 <div class="text-center py-8 text-slate-400 dark:text-zinc-500 text-xs">Loading recent activity...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tier 10: Recent Financial Audit Trail (6 cols) -->
+                    <div class="lg:col-span-6 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-zinc-400">Financial Audit Log</span>
+                            <button onclick="switchFleetSubView('ledger')" class="text-[11px] font-bold text-blue-600 hover:text-blue-500 cursor-pointer">View Full Ledger →</button>
+                        </div>
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-xs min-w-[420px]">
+                                    <thead class="bg-slate-50 dark:bg-[#121216] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                                        <tr>
+                                            <th class="px-4 py-2.5">Time</th>
+                                            <th class="px-4 py-2.5">Actor</th>
+                                            <th class="px-4 py-2.5">Event</th>
+                                            <th class="px-4 py-2.5">Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="ov-recent-audit-body" class="divide-y divide-slate-100 dark:divide-zinc-850/60 text-slate-700 dark:text-zinc-200">
+                                        <tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">Loading audit trail...</td></tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -2817,7 +3126,7 @@ async def dashboard_view(request: Request):
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
                     <div>
                         <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
-                            <span>👥</span> Salesperson Outstanding Balance & Recovery Audit
+                            Sales Representative Balances
                         </h2>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative with instant clearance action</p>
                     </div>
@@ -2829,7 +3138,7 @@ async def dashboard_view(request: Request):
                         """}
                         {"" if not can_clear_debt else """
                         <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
-                            <span>💳</span> Clear Debt Payment
+                            Clear Debt Payment
                         </button>
                         """}
                         <div class="text-right">
@@ -2848,7 +3157,7 @@ async def dashboard_view(request: Request):
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div>
                         <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
-                            <span>💳</span> Cleared Sales Rep Debt Settlements
+                            Payment History
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Official accounting verification and payment offset audit history</p>
                     </div>
@@ -2882,17 +3191,17 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- SUBVIEW 4: 39 COMMERCIAL TRUCKS FLEET -->
+            <!-- SUBVIEW 4: FLEET VEHICLES -->
             <div id="fleet-section-trucks" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div>
                         <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
-                            <span>🚚</span> 39 Commercial Trucks Fleet Master
+                            Fleet Vehicles
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verified commercial delivery vehicles registered in Tagoneswa database</p>
                     </div>
                     <div class="flex items-center gap-2 w-full sm:w-auto">
-                        <input type="text" id="trucks-search" placeholder="🔍 Search Truck #, Plate, Model..." oninput="filterTrucksTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="trucks-search" placeholder="Search Truck #, Plate, Model..." oninput="filterTrucksTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         <button onclick="openAddTruckModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer whitespace-nowrap">
                             <span>+</span> Add Truck
                         </button>
@@ -2922,17 +3231,17 @@ async def dashboard_view(request: Request):
                 </div>
             </div>
 
-            <!-- SUBVIEW 5: 21 COMMERCIAL DRIVERS -->
+            <!-- SUBVIEW 5: COMMERCIAL DRIVERS -->
             <div id="fleet-section-drivers" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div>
                         <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
-                            <span>👤</span> 21 Commercial Drivers Roster
+                            Commercial Drivers
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verified commercial drivers registered in Tagoneswa database</p>
                     </div>
                     <div class="flex items-center gap-2 w-full sm:w-auto">
-                        <input type="text" id="drivers-search" placeholder="🔍 Search Driver Name, Phone..." oninput="filterDriversTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="drivers-search" placeholder="Search Driver Name, Phone..." oninput="filterDriversTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         <button onclick="openAddDriverModal()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer whitespace-nowrap">
                             <span>+</span> Add Driver
                         </button>
@@ -3053,20 +3362,29 @@ async def dashboard_view(request: Request):
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
                             <div class="inline-flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider mb-1">
-                                🛡️ Anti-Cheating & Parity Guard
+                                Anti-Cheating & Parity Guard
                             </div>
                             <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">
-                                Daily Recovery & Shortfall Audit Ledger
+                                Financial Audit Log & Recovery Ledger
                             </h3>
-                            <p class="text-[11px] text-slate-500 dark:text-zinc-400">Cross-verifies customer charges, debt records, and accounts clearances</p>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400">Verifies system actions, rate edits, customer charges, debt records, and accounts clearances</p>
                         </div>
 
-                        <!-- Date Filters -->
-                        <div class="flex items-center gap-1 bg-white dark:bg-[#121216] p-1 rounded-xl border border-slate-300 dark:border-zinc-750 self-start md:self-auto">
-                            <button onclick="setAuditTimeframe('ALL')" id="timeframe-btn-ALL" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 text-white transition cursor-pointer">All Dates</button>
-                            <button onclick="setAuditTimeframe('TODAY')" id="timeframe-btn-TODAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Today</button>
-                            <button onclick="setAuditTimeframe('YESTERDAY')" id="timeframe-btn-YESTERDAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Yesterday</button>
-                            <button onclick="setAuditTimeframe('WEEK')" id="timeframe-btn-WEEK" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Last 7 Days</button>
+                        <!-- Date & Mode Filters -->
+                        <div class="flex flex-wrap items-center gap-2 self-start md:self-auto">
+                            <!-- Mode Selector -->
+                            <div class="flex items-center gap-1 bg-white dark:bg-[#121216] p-1 rounded-xl border border-slate-300 dark:border-zinc-750">
+                                <button onclick="setAuditMode('TRAIL')" id="audit-mode-btn-TRAIL" class="audit-mode-btn px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-600 text-white transition cursor-pointer">System Audit Trail</button>
+                                <button onclick="setAuditMode('SHORTFALL')" id="audit-mode-btn-SHORTFALL" class="audit-mode-btn px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Debt Ledger Entries</button>
+                            </div>
+
+                            <!-- Date Filters -->
+                            <div class="flex items-center gap-1 bg-white dark:bg-[#121216] p-1 rounded-xl border border-slate-300 dark:border-zinc-750">
+                                <button onclick="setAuditTimeframe('ALL')" id="timeframe-btn-ALL" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 text-white transition cursor-pointer">All Dates</button>
+                                <button onclick="setAuditTimeframe('TODAY')" id="timeframe-btn-TODAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Today</button>
+                                <button onclick="setAuditTimeframe('YESTERDAY')" id="timeframe-btn-YESTERDAY" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Yesterday</button>
+                                <button onclick="setAuditTimeframe('WEEK')" id="timeframe-btn-WEEK" class="audit-tf-btn px-3 py-1 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">Last 7 Days</button>
+                            </div>
                         </div>
                     </div>
 
@@ -3098,14 +3416,13 @@ async def dashboard_view(request: Request):
                 <!-- Ledger Audit Table -->
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs min-w-[760px]">
-                        <thead class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
+                        <thead id="fleet-ledger-table-head" class="bg-slate-100/75 dark:bg-[#0e0e12] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800">
                             <tr>
-                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Date</th>
-                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Salesperson</th>
-                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Trip Ref</th>
-                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Transaction Type</th>
-                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Amount</th>
-                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Audit Details & Notes</th>
+                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Timestamp</th>
+                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Actor</th>
+                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Event / Action</th>
+                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Module / Ref</th>
+                                <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Details & Remarks</th>
                             </tr>
                         </thead>
                         <tbody id="fleet-ledger-table-body" class="divide-y divide-slate-200 dark:divide-zinc-850 text-slate-700 dark:text-zinc-200"></tbody>
@@ -3980,6 +4297,19 @@ async def dashboard_view(request: Request):
         let currentFleetSubView = 'overview';
         function switchFleetSubView(viewId) {{
             currentFleetSubView = viewId;
+            const sel = document.getElementById('fleet-view-selector');
+            if (sel && sel.value !== viewId) sel.value = viewId;
+
+            document.querySelectorAll('.fleet-quick-pill').forEach(btn => {{
+                if (btn.getAttribute('data-view') === viewId) {{
+                    btn.classList.add('bg-blue-600', 'text-white', 'shadow-xs');
+                    btn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+                }} else {{
+                    btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs');
+                    btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+                }}
+            }});
+
             document.querySelectorAll('.fleet-subview-btn').forEach(btn => {{
                 btn.classList.remove('bg-blue-600', 'text-white', 'shadow-md');
                 btn.classList.add('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
@@ -4006,8 +4336,9 @@ async def dashboard_view(request: Request):
         function renderOperationsOverview(overview, user) {{
             if (!overview) return;
             const kpis = overview.kpis || {{}};
+            const an = overview.analytics || {{}};
 
-            // ── TIER 1 KPIs ──────────────────────────────────────────────
+            // ── TIER 1: ACTION REQUIRED ──────────────────────────────────
             const elPendingApp = document.getElementById('ov-kpi-pending-approvals');
             if (elPendingApp) elPendingApp.textContent = kpis.pending_trip_approvals ?? 0;
 
@@ -4017,7 +4348,7 @@ async def dashboard_view(request: Request):
             const elBottlenecks = document.getElementById('ov-kpi-bottlenecks');
             if (elBottlenecks) elBottlenecks.textContent = kpis.pending_bottlenecks_count ?? 0;
 
-            // Role-gated Card 5 (action-required tier)
+            // Role-gated Card 5
             const slot5Title = document.getElementById('ov-kpi-slot5-title');
             const slot5Icon  = document.getElementById('ov-kpi-slot5-icon');
             const slot5Val   = document.getElementById('ov-kpi-slot5-val');
@@ -4025,20 +4356,20 @@ async def dashboard_view(request: Request):
 
             if (kpis.sales_pipeline && slot5Title && slot5Val) {{
                 slot5Title.textContent = 'Sales Pipeline';
-                if (slot5Icon) slot5Icon.textContent = '📈';
+                if (slot5Icon) slot5Icon.textContent = 'PIPELINE';
                 slot5Val.className = 'text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono truncate';
                 slot5Val.textContent = '$' + Number(kpis.sales_pipeline.total_invoiced_value || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
                 if (slot5Sub) slot5Sub.textContent = `${{kpis.sales_pipeline.orders_count || 0}} orders (${{kpis.sales_pipeline.completed_deliveries || 0}} delivered)`;
             }} else if (kpis.sales_rep_balance && slot5Title && slot5Val) {{
                 slot5Title.textContent = 'Sales Rep Debt';
-                if (slot5Icon) slot5Icon.textContent = '💳';
+                if (slot5Icon) slot5Icon.textContent = 'DEBT';
                 const debt = Number(kpis.sales_rep_balance.total_outstanding_debt || 0);
                 slot5Val.className = `text-2xl sm:text-3xl font-extrabold mt-1 font-mono truncate ${{debt > 0 ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-500 dark:text-emerald-400'}}`;
                 slot5Val.textContent = '$' + debt.toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
                 if (slot5Sub) slot5Sub.textContent = `${{kpis.sales_rep_balance.reps_in_debt || 0}} in debt (${{kpis.sales_rep_balance.high_alert_count || 0}} high alert)`;
             }} else if (slot5Title && slot5Val) {{
                 slot5Title.textContent = 'Fleet Available';
-                if (slot5Icon) slot5Icon.textContent = '🚚';
+                if (slot5Icon) slot5Icon.textContent = 'FLEET';
                 slot5Val.className = 'text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono truncate';
                 slot5Val.textContent = `${{kpis.trucks_available ?? 0}}/${{kpis.trucks_total ?? 0}}`;
                 if (slot5Sub) slot5Sub.textContent = 'Commercial vehicles field-ready';
@@ -4059,8 +4390,7 @@ async def dashboard_view(request: Request):
             if (alertsList) {{
                 if (!overview.alerts || overview.alerts.length === 0) {{
                     alertsList.innerHTML = `
-                        <div class="py-10 text-center">
-                            <div class="text-3xl mb-2">🎉</div>
+                        <div class="py-8 text-center">
                             <div class="text-sm font-extrabold text-slate-800 dark:text-zinc-200">All Operations Clear</div>
                             <p class="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-sm mx-auto">No pending exceptions, dispatch bottlenecks, or high-risk balances requiring attention.</p>
                         </div>
@@ -4069,15 +4399,12 @@ async def dashboard_view(request: Request):
                     alertsList.innerHTML = overview.alerts.map(a => {{
                         let sevBorder = 'border-amber-200 dark:border-amber-500/30 bg-amber-500/5';
                         let sevBadge  = 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
-                        let sevIcon   = '⚠️';
                         if (a.severity === 'urgent') {{
                             sevBorder = 'border-rose-200 dark:border-rose-500/30 bg-rose-500/5';
                             sevBadge  = 'bg-rose-500/10 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-500/30 font-bold';
-                            sevIcon   = '🚨';
                         }} else if (a.severity === 'info') {{
                             sevBorder = 'border-blue-200 dark:border-blue-500/30 bg-blue-500/5';
                             sevBadge  = 'bg-blue-500/10 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
-                            sevIcon   = 'ℹ️';
                         }}
                         let actionBtnHtml = '';
                         if (a.can_action && !overview.is_read_only) {{
@@ -4093,7 +4420,6 @@ async def dashboard_view(request: Request):
                             <div class="pt-3 first:pt-0">
                                 <div class="p-3.5 sm:p-4 rounded-xl border ${{sevBorder}} flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:shadow-xs transition">
                                     <div class="flex items-start gap-3">
-                                        <div class="text-xl sm:text-2xl shrink-0 mt-0.5">${{sevIcon}}</div>
                                         <div>
                                             <div class="flex items-center gap-2 flex-wrap">
                                                 <span class="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-zinc-100">${{a.title}}</span>
@@ -4123,6 +4449,12 @@ async def dashboard_view(request: Request):
             const elDriversTotal = document.getElementById('ov-kpi-drivers-total');
             if (elDriversTotal) elDriversTotal.textContent = `of ${{kpis.drivers_total ?? 0}} on roster`;
 
+            const elCompletedTrips = document.getElementById('ov-kpi-completed-trips');
+            if (elCompletedTrips) elCompletedTrips.textContent = an.trips_completed ?? 0;
+
+            const elAvgRev = document.getElementById('ov-kpi-avg-revenue');
+            if (elAvgRev) elAvgRev.textContent = '$' + (an.avg_revenue_per_trip || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+
             // ── TIER 3: FLEET STATUS ──────────────────────────────────────
             const elTrucksReady = document.getElementById('ov-kpi-trucks-ready');
             if (elTrucksReady) elTrucksReady.textContent = kpis.trucks_available ?? 0;
@@ -4139,14 +4471,39 @@ async def dashboard_view(request: Request):
             const elTrucksTotal = document.getElementById('ov-kpi-trucks-total');
             if (elTrucksTotal) elTrucksTotal.textContent = kpis.trucks_total ?? 0;
 
-            // ── TIER 4: FINANCIAL EXCEPTIONS ─────────────────────────────
+            // ── TIER 4: FINANCIAL OVERVIEW ─────────────────────────────────
+            const setTxt = (id, val) => {{ const el = document.getElementById(id); if (el) el.textContent = val; }};
+            setTxt('ov-fin-total-sales', '$' + (an.total_sales || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-fin-transport-charges', '$' + (an.total_transport_charges || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-fin-total-opex', '$' + (an.total_operational_expenses || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-fin-net-margin', '$' + (an.net_amount || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-fin-debt-backlog', '$' + (an.outstanding_debt_total || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-fin-cleared-payments', '$' + (an.cleared_payments_total || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+
+            // ── TIER 5: OPERATIONAL EXPENSES ──────────────────────────────
+            setTxt('ov-exp-total-allowances', '$' + (an.total_allowances || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-meals', '$' + (an.total_meals || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-accommodation', '$' + (an.total_accommodation || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-tolls', '$' + (an.total_tolls || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            const totalEmerg = (an.total_emergency_fuel || 0) + (an.total_emergency_other || 0);
+            setTxt('ov-exp-total-emergency', '$' + totalEmerg.toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-emergency-fuel', '$' + (an.total_emergency_fuel || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-emergency-other', '$' + (an.total_emergency_other || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-avg-opex', '$' + (an.avg_opex_per_trip || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-exp-avg-allowance', '$' + (an.avg_allowance_per_trip || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+
+            // ── TIER 6: SALES & REVENUE ANALYSIS ──────────────────────────
+            setTxt('ov-rev-recovery-rate', (an.recovery_rate_pct ?? 100) + '%');
+            setTxt('ov-rev-shortfall-total', '$' + (an.shortfall_total || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+            setTxt('ov-rev-recovered-total', '$' + (an.recovery_total || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}));
+
             const finSection = document.getElementById('ov-financial-section');
             const finBody    = document.getElementById('ov-financial-body');
             if (finSection && finBody) {{
                 const bal = kpis.sales_rep_balance;
                 const pip = kpis.sales_pipeline;
                 if (!bal && !pip) {{
-                    finSection.style.display = 'none';  // no financial access — hide entirely
+                    finSection.style.display = 'none';
                 }} else {{
                     finSection.style.display = '';
                     let rows = '';
@@ -4154,50 +4511,99 @@ async def dashboard_view(request: Request):
                         const debt = Number(bal.total_outstanding_debt || 0);
                         const debtColor = debt > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400';
                         rows += `
-                            <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-800/60 last:border-0">
-                                <span class="text-xs text-slate-600 dark:text-zinc-400">Outstanding Rep Debt</span>
-                                <span class="text-sm font-extrabold font-mono ${{debtColor}}">$${{debt.toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}})}}</span>
+                            <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-zinc-800/60 last:border-0">
+                                <span class="text-slate-600 dark:text-zinc-400 font-medium">Outstanding Rep Debt</span>
+                                <span class="font-extrabold font-mono ${{debtColor}}">$${{debt.toLocaleString('en-US',{{minimumFractionDigits:2,maximumFractionDigits:2}})}}</span>
                             </div>
-                            <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-zinc-800/60 last:border-0">
-                                <span class="text-xs text-slate-600 dark:text-zinc-400">Reps in Debt</span>
-                                <span class="text-sm font-bold text-slate-800 dark:text-zinc-200">${{bal.reps_in_debt ?? 0}}</span>
+                            <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-zinc-800/60 last:border-0">
+                                <span class="text-slate-600 dark:text-zinc-400 font-medium">Reps in Debt</span>
+                                <span class="font-bold text-slate-800 dark:text-zinc-200">${{bal.reps_in_debt ?? 0}}</span>
                             </div>
-                            <div class="flex items-center justify-between py-2 last:border-0">
-                                <span class="text-xs text-slate-600 dark:text-zinc-400">High Alert</span>
-                                <span class="text-sm font-bold ${{(bal.reps_high_alert||0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-zinc-500'}}">${{bal.reps_high_alert ?? 0}} rep(s)</span>
+                            <div class="flex items-center justify-between py-1.5 last:border-0">
+                                <span class="text-slate-600 dark:text-zinc-400 font-medium">High Alert</span>
+                                <span class="font-bold ${{(bal.reps_high_alert||0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-zinc-500'}}">${{bal.reps_high_alert ?? 0}} rep(s)</span>
                             </div>
                         `;
                     }}
                     if (pip) {{
                         rows += `
-                            <div class="flex items-center justify-between py-2 border-t border-slate-100 dark:border-zinc-800/60">
-                                <span class="text-xs text-slate-600 dark:text-zinc-400">Schedule Variances</span>
-                                <span class="text-sm font-bold ${{(pip.variance_collection||0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-zinc-500'}}">${{pip.variance_collection ?? 0}}</span>
+                            <div class="flex items-center justify-between py-1.5 border-t border-slate-100 dark:border-zinc-800/60">
+                                <span class="text-slate-600 dark:text-zinc-400 font-medium">Schedule Variances</span>
+                                <span class="font-bold ${{(pip.variance_collection||0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-zinc-500'}}">${{pip.variance_collection ?? 0}}</span>
                             </div>
                         `;
                     }}
-                    finBody.innerHTML = rows || '<div class="text-xs text-slate-400 dark:text-zinc-500 text-center py-4">No financial exceptions.</div>';
+                    finBody.innerHTML = rows || '<div class="text-xs text-slate-400 dark:text-zinc-500 text-center py-2">No financial exceptions.</div>';
                 }}
             }}
 
-            // ── TIER 5: RECENT ACTIVITY ───────────────────────────────────
+            // ── TIER 7: ROUTE / CITY PERFORMANCE ──────────────────────────
+            const topCitiesBody = document.getElementById('ov-top-cities-body');
+            if (topCitiesBody) {{
+                const cities = an.cities || [];
+                if (cities.length === 0) {{
+                    topCitiesBody.innerHTML = '<tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">No city delivery records found.</td></tr>';
+                }} else {{
+                    topCitiesBody.innerHTML = cities.slice(0, 6).map(c => `
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#14141c] transition">
+                            <td class="px-4 py-2 font-bold text-slate-900 dark:text-zinc-100 capitalize">${{c.city}}</td>
+                            <td class="px-4 py-2 text-center font-mono text-slate-700 dark:text-zinc-300">${{c.trips}}</td>
+                            <td class="px-4 py-2 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">$${{(c.sales || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</td>
+                            <td class="px-4 py-2 text-right font-mono text-slate-600 dark:text-zinc-300">$${{(c.opex || 0).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}})}}</td>
+                        </tr>
+                    `).join('');
+                }}
+            }}
+
+            // ── TIER 8: FLEET & WORKSHOP PERFORMANCE ─────────────────────
+            const utilPct = an.fleet_utilization_pct ?? 0;
+            setTxt('ov-perf-utilization', utilPct + '%');
+            const utilBar = document.getElementById('ov-perf-util-bar');
+            if (utilBar) utilBar.style.width = Math.min(100, Math.max(0, utilPct)) + '%';
+            setTxt('ov-perf-ws-impact', (an.workshop_impact_count ?? 0) + ' trucks');
+
+            // ── TIER 9: RECENT OPERATIONS ACTIVITY ────────────────────────
             const actList = document.getElementById('ov-activity-list');
             if (actList) {{
                 if (!overview.recent_activity || overview.recent_activity.length === 0) {{
                     actList.innerHTML = `<div class="p-6 text-center text-slate-400 dark:text-zinc-500 text-xs">No recent operational activities logged.</div>`;
                 }} else {{
-                    actList.innerHTML = overview.recent_activity.map(act => `
-                        <div class="p-3 sm:p-3.5 bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800/80 rounded-xl hover:border-slate-300 dark:hover:border-zinc-700 transition">
-                            <div class="flex items-center justify-between gap-2 mb-1.5">
+                    actList.innerHTML = overview.recent_activity.slice(0, 10).map(act => `
+                        <div class="p-3 bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800/80 rounded-xl hover:border-slate-300 dark:hover:border-zinc-700 transition">
+                            <div class="flex items-center justify-between gap-2 mb-1">
                                 <span class="text-[10px] font-bold px-2 py-0.5 rounded border ${{act.badge_class}} font-mono uppercase tracking-wider">${{act.category}}</span>
                                 <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-mono">${{act.timestamp}}</span>
                             </div>
                             <div class="text-xs font-bold text-slate-900 dark:text-zinc-100">${{act.title}}</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 line-clamp-2">${{act.description}}</div>
-                            <div class="mt-2 pt-1.5 border-t border-slate-200/60 dark:border-zinc-800/60 text-[10px] text-slate-400 dark:text-zinc-500">
+                            <div class="mt-1.5 pt-1 border-t border-slate-200/60 dark:border-zinc-800/60 text-[10px] text-slate-400 dark:text-zinc-500">
                                 Actor: <strong class="text-slate-700 dark:text-zinc-300 font-medium">${{act.actor}}</strong>
                             </div>
                         </div>
+                    `).join('');
+                }}
+            }}
+
+            // ── TIER 10: RECENT FINANCIAL AUDIT TRAIL ──────────────────────
+            const auditBody = document.getElementById('ov-recent-audit-body');
+            if (auditBody) {{
+                const audits = overview.audit_logs || [];
+                if (audits.length === 0) {{
+                    auditBody.innerHTML = '<tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">No financial audit records recorded.</td></tr>';
+                }} else {{
+                    auditBody.innerHTML = audits.slice(0, 8).map(al => `
+                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#14141c] transition">
+                            <td class="px-4 py-2 font-mono text-[11px] text-slate-500 whitespace-nowrap">${{al.timestamp}}</td>
+                            <td class="px-4 py-2 font-bold text-slate-800 dark:text-zinc-200 whitespace-nowrap">${{al.username}}</td>
+                            <td class="px-4 py-2 whitespace-nowrap">
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30">
+                                    ${{(al.action || '').replace(/_/g, ' ')}}
+                                </span>
+                            </td>
+                            <td class="px-4 py-2 text-slate-600 dark:text-zinc-300 truncate max-w-xs" title="${{al.remarks || al.module}}">
+                                ${{al.remarks || `${{al.module}} (${{al.entity_id || ''}})`}}
+                            </td>
+                        </tr>
                     `).join('');
                 }}
             }}
@@ -4826,11 +5232,53 @@ async def dashboard_view(request: Request):
             if (fleet.route_rules) renderModalCityRules(fleet.route_rules);
         }}
 
-        function filterLedgerTable(resetPage = false) {{
-            if (!cachedData || !cachedData.fleet || !cachedData.fleet.ledger) return;
-            if (resetPage) ledgerPage = 1;
+        let currentAuditMode = 'TRAIL';
 
-            const entries = cachedData.fleet.ledger;
+        function setAuditMode(mode) {{
+            currentAuditMode = mode;
+            ledgerPage = 1;
+            document.querySelectorAll('.audit-mode-btn').forEach(btn => {{
+                btn.classList.remove('bg-blue-600', 'text-white');
+                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:text-slate-900', 'dark:hover:text-white');
+            }});
+            const activeBtn = document.getElementById('audit-mode-btn-' + mode);
+            if (activeBtn) {{
+                activeBtn.classList.add('bg-blue-600', 'text-white');
+                activeBtn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:text-slate-900', 'dark:hover:text-white');
+            }}
+            const thead = document.getElementById('fleet-ledger-table-head');
+            if (thead) {{
+                if (mode === 'TRAIL') {{
+                    thead.innerHTML = `
+                        <tr>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Timestamp</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Actor</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Event / Action</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Module / Ref</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Details & Remarks</th>
+                        </tr>
+                    `;
+                }} else {{
+                    thead.innerHTML = `
+                        <tr>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Date</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Salesperson</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Trip Ref</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Transaction Type</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Amount</th>
+                            <th class="px-4 sm:px-5 py-3 whitespace-nowrap">Audit Details & Notes</th>
+                        </tr>
+                    `;
+                }}
+            }}
+            if (cachedData && cachedData.fleet) {{
+                filterLedgerTable(true);
+            }}
+        }}
+
+        function filterLedgerTable(resetPage = false) {{
+            if (!cachedData || !cachedData.fleet) return;
+            if (resetPage) ledgerPage = 1;
 
             const todayStr = new Date().toISOString().substring(0, 10);
             const yesterdayObj = new Date();
@@ -4839,70 +5287,112 @@ async def dashboard_view(request: Request):
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-            let filtered = entries.filter(e => {{
-                if (currentAuditTimeframe === 'TODAY') {{
-                    return e.date_only === todayStr;
-                }} else if (currentAuditTimeframe === 'YESTERDAY') {{
-                    return e.date_only === yesterdayStr;
-                }} else if (currentAuditTimeframe === 'WEEK') {{
-                    return new Date(e.date_only) >= sevenDaysAgo;
-                }}
+            const isMatchingTimeframe = (dateOnly) => {{
+                if (currentAuditTimeframe === 'TODAY') return dateOnly === todayStr;
+                if (currentAuditTimeframe === 'YESTERDAY') return dateOnly === yesterdayStr;
+                if (currentAuditTimeframe === 'WEEK') return new Date(dateOnly) >= sevenDaysAgo;
                 return true;
-            }});
+            }};
 
-            // Calculate daily audit metrics
+            // Metrics from ledger & approvals
+            const rawLedger = cachedData.fleet.ledger || [];
             let paidTotal = 0;
             let deferredTotal = 0;
             let recoveredTotal = 0;
             let alertCount = 0;
 
-            filtered.forEach(e => {{
-                if (e.is_recovery) {{
-                    recoveredTotal += Math.abs(e.amount);
-                }} else {{
-                    deferredTotal += e.amount;
+            rawLedger.forEach(e => {{
+                if (isMatchingTimeframe(e.date_only)) {{
+                    if (e.is_recovery) recoveredTotal += Math.abs(e.amount);
+                    else deferredTotal += e.amount;
                 }}
             }});
 
-            // Count alerts across approvals matching current timeframe
             if (cachedData.fleet.records) {{
                 cachedData.fleet.records.forEach(r => {{
-                    let inTf = true;
-                    if (currentAuditTimeframe === 'TODAY') inTf = (r.date_only === todayStr);
-                    else if (currentAuditTimeframe === 'YESTERDAY') inTf = (r.date_only === yesterdayStr);
-                    else if (currentAuditTimeframe === 'WEEK') inTf = (new Date(r.date_only) >= sevenDaysAgo);
-
-                    if (inTf) {{
+                    if (isMatchingTimeframe(r.date_only)) {{
                         paidTotal += (r.amount_charged_to_customer || 0);
                         if (!r.is_clean) alertCount += r.audit_flags.length;
                     }}
                 }});
             }}
 
-            document.getElementById('audit-stat-customer-paid').textContent = '$' + paidTotal.toFixed(2);
-            document.getElementById('audit-stat-deferred').textContent = '$' + deferredTotal.toFixed(2);
-            document.getElementById('audit-stat-recovered').textContent = '$' + recoveredTotal.toFixed(2);
+            const elPaid = document.getElementById('audit-stat-customer-paid');
+            if (elPaid) elPaid.textContent = '$' + paidTotal.toFixed(2);
+            const elDef = document.getElementById('audit-stat-deferred');
+            if (elDef) elDef.textContent = '$' + deferredTotal.toFixed(2);
+            const elRec = document.getElementById('audit-stat-recovered');
+            if (elRec) elRec.textContent = '$' + recoveredTotal.toFixed(2);
             const alertEl = document.getElementById('audit-stat-flags');
             const alertNote = document.getElementById('audit-stat-flags-note');
-            alertEl.textContent = alertCount;
-            if (alertCount > 0) {{
-                alertEl.className = 'text-base sm:text-lg font-extrabold text-red-600 dark:text-red-400 font-mono mt-0.5';
-                alertNote.innerHTML = '<span class="text-red-600 dark:text-red-400 font-bold">⚠️ Discrepancy Found</span>';
-            }} else {{
-                alertEl.className = 'text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5';
-                alertNote.innerHTML = '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">100% Math Match</span>';
+            if (alertEl) {{
+                alertEl.textContent = alertCount;
+                if (alertCount > 0) {{
+                    alertEl.className = 'text-base sm:text-lg font-extrabold text-red-600 dark:text-red-400 font-mono mt-0.5';
+                    if (alertNote) alertNote.innerHTML = '<span class="text-red-600 dark:text-red-400 font-bold">Discrepancy Found</span>';
+                }} else {{
+                    alertEl.className = 'text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5';
+                    if (alertNote) alertNote.innerHTML = '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">100% Math Match</span>';
+                }}
             }}
 
-            // Pagination Slicing (15 per page)
-            const totalPages = Math.max(1, Math.ceil(filtered.length / ledgerPageSize));
-            if (ledgerPage > totalPages) ledgerPage = totalPages;
-            const startIndex = (ledgerPage - 1) * ledgerPageSize;
-            const pagedRecords = filtered.slice(startIndex, startIndex + ledgerPageSize);
-
             const tbody = document.getElementById('fleet-ledger-table-body');
-            if (tbody) {{
+            if (!tbody) return;
+
+            if (currentAuditMode === 'TRAIL') {{
+                const audits = cachedData.fleet.audit_logs || [];
+                const filteredAudits = audits.filter(al => isMatchingTimeframe(al.date_only));
+                const totalPages = Math.max(1, Math.ceil(filteredAudits.length / ledgerPageSize));
+                if (ledgerPage > totalPages) ledgerPage = totalPages;
+                const startIndex = (ledgerPage - 1) * ledgerPageSize;
+                const paged = filteredAudits.slice(startIndex, startIndex + ledgerPageSize);
+
+                if (filteredAudits.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-slate-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe.</td></tr>';
+                }} else {{
+                    tbody.innerHTML = paged.map(al => {{
+                        let catBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                        if ((al.action || '').includes('PAYMENT') || (al.action || '').includes('CLEAR')) {{
+                            catBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                        }} else if ((al.action || '').includes('USER') || (al.action || '').includes('PERMISSION')) {{
+                            catBadge = 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30';
+                        }} else if ((al.action || '').includes('FUEL') || (al.action || '').includes('RATE')) {{
+                            catBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        }}
+
+                        return `
+                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
+                                <td class="px-4 sm:px-5 py-3 text-slate-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${{al.timestamp}}</td>
+                                <td class="px-4 sm:px-5 py-3 whitespace-nowrap">
+                                    <strong class="text-slate-900 dark:text-zinc-100">${{al.username}}</strong><br>
+                                    <small class="text-slate-400 dark:text-zinc-500 font-mono">${{al.user_role}}</small>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 whitespace-nowrap">
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${{catBadge}} font-mono">
+                                        ${{(al.action || '').replace(/_/g, ' ')}}
+                                    </span>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 font-mono text-slate-700 dark:text-zinc-300 text-xs whitespace-nowrap">
+                                    ${{al.module}} <span class="text-slate-400 dark:text-zinc-500">${{al.entity_id || ''}}</span>
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 text-slate-600 dark:text-zinc-300">
+                                    ${{al.remarks || '--'}}
+                                </td>
+                            </tr>
+                        `;
+                    }}).join('');
+                }}
+                renderPaginationControls('ledger-pagination-info', 'ledger-pagination-controls', ledgerPage, filteredAudits.length, ledgerPageSize, 'changeLedgerPage');
+            }} else {{
+                // Shortfall Ledger Entries mode
+                const filtered = rawLedger.filter(e => isMatchingTimeframe(e.date_only));
+                const totalPages = Math.max(1, Math.ceil(filtered.length / ledgerPageSize));
+                if (ledgerPage > totalPages) ledgerPage = totalPages;
+                const startIndex = (ledgerPage - 1) * ledgerPageSize;
+                const pagedRecords = filtered.slice(startIndex, startIndex + ledgerPageSize);
+
                 if (filtered.length === 0) {{
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No ledger transactions in this timeframe.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-slate-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe.</td></tr>';
                 }} else {{
                     tbody.innerHTML = pagedRecords.map(e => {{
                         const isRec = e.is_recovery;
@@ -4924,9 +5414,8 @@ async def dashboard_view(request: Request):
                         `;
                     }}).join('');
                 }}
+                renderPaginationControls('ledger-pagination-info', 'ledger-pagination-controls', ledgerPage, filtered.length, ledgerPageSize, 'changeLedgerPage');
             }}
-
-            renderPaginationControls('ledger-pagination-info', 'ledger-pagination-controls', ledgerPage, filtered.length, ledgerPageSize, 'changeLedgerPage');
         }}
 
         function filterFleetApprovalsTable(resetPage = false) {{
@@ -5336,9 +5825,23 @@ async def dashboard_view(request: Request):
         let modalCityRulesCache = [];
         function renderModalCityRules(rules) {{
             if (!rules) return;
-            modalCityRulesCache = Object.keys(rules).map(k => {{
-                return {{ key: k, ...rules[k] }};
-            }});
+            if (Array.isArray(rules)) {{
+                modalCityRulesCache = rules.map(c => ({{
+                    key: c.city_key || c.key || '',
+                    city_name: c.city_name || c.city_key || c.key || '',
+                    route: c.route || c.corridor || '--',
+                    distance_km: c.distance_km,
+                    min_sales: c.min_sales || 0,
+                    van_min: c.van_min || 0,
+                    ...c
+                }}));
+            }} else {{
+                modalCityRulesCache = Object.keys(rules).map(k => ({{
+                    key: k,
+                    city_name: rules[k].city_name || k,
+                    ...rules[k]
+                }}));
+            }}
             filterCityRulesModal();
         }}
 
@@ -5348,7 +5851,9 @@ async def dashboard_view(request: Request):
             if (!tbody) return;
 
             let filtered = modalCityRulesCache.filter(c => {{
-                return !q || c.key.toLowerCase().includes(q) || (c.route && c.route.toLowerCase().includes(q));
+                const name = (c.city_name || c.key || '').toLowerCase();
+                const route = (c.route || '').toLowerCase();
+                return !q || name.includes(q) || route.includes(q);
             }});
 
             const countEl = document.getElementById('modal-city-count');
@@ -5361,11 +5866,18 @@ async def dashboard_view(request: Request):
 
             const canEditCity = hasPermission('manage_city_minimums');
 
-            tbody.innerHTML = filtered.map(c => `
+            tbody.innerHTML = filtered.map(c => {{
+                const cityName = c.city_name || c.key || '--';
+                const distVal = Number(c.distance_km);
+                const distDisplay = (distVal && distVal > 0)
+                    ? `${{distVal.toFixed(0)}} km`
+                    : '<span class="text-slate-400 dark:text-zinc-500 italic text-[11px]">Not configured</span>';
+
+                return `
                 <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
-                    <td class="px-4 py-2.5 font-bold text-slate-900 dark:text-zinc-100 capitalize">📍 ${{c.key}}</td>
+                    <td class="px-4 py-2.5 font-bold text-slate-900 dark:text-zinc-100 capitalize">${{cityName}}</td>
                     <td class="px-4 py-2.5 text-[11px] text-slate-500 dark:text-zinc-400">${{c.route || '--'}}</td>
-                    <td class="px-4 py-2.5 font-mono text-xs text-slate-700 dark:text-zinc-300">${{c.distance_km || 0}} km</td>
+                    <td class="px-4 py-2.5 font-mono text-xs text-slate-700 dark:text-zinc-300">${{distDisplay}}</td>
                     <td class="px-4 py-2.5">
                         <div class="relative w-28">
                             <span class="absolute left-2 top-1 text-slate-400 text-xs">$</span>
@@ -5386,7 +5898,8 @@ async def dashboard_view(request: Request):
                         ` : '<span class="text-slate-400 text-[11px] font-medium">Read-Only</span>'}}
                     </td>
                 </tr>
-            `).join('');
+                `;
+            }}).join('');
         }}
 
         async function saveFuelPrice() {{

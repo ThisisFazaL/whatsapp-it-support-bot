@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
 from app.database import async_session_factory, init_db_models
-from app.dashboard import get_dashboard_data
+from app.dashboard import get_dashboard_data, dashboard_view
 from app.workshop.models import WorkshopTruck, WorkshopTicket
 
 
@@ -322,6 +322,125 @@ class TestOperationsOverview(unittest.IsolatedAsyncioTestCase):
         # LOGISTICS_ADMIN does not have view_sales_rep_balances permission
         self.assertIsNone(kpis.get("sales_rep_balance"),
                           "LOGISTICS_ADMIN must not receive sales_rep_balance data")
+
+    async def test_operations_analytics_payload_and_metrics(self):
+        """Operations analytics must compute live financial & operational breakdown."""
+        mock_user = {
+            "username": "master",
+            "name": "Master Administrator",
+            "role": "MASTER_ADMIN",
+            "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+        }
+        mock_req = self.make_mock_request()
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=mock_user):
+            async with async_session_factory() as session:
+                data = await get_dashboard_data(mock_req, session)
+
+        fleet = data["fleet"]
+        self.assertIn("analytics", fleet)
+        self.assertIn("analytics", fleet["overview"])
+        analytics = fleet["analytics"]
+
+        required_metrics = [
+            "total_sales", "total_transport_charges", "total_allowances",
+            "total_meals", "total_accommodation", "total_tolls",
+            "total_emergency_fuel", "total_emergency_other",
+            "total_operational_expenses", "net_amount", "trips_total",
+            "trips_completed", "avg_revenue_per_trip", "avg_opex_per_trip",
+            "avg_allowance_per_trip", "fleet_utilization_pct",
+            "workshop_impact_count", "recovery_rate_pct",
+            "cleared_payments_total", "outstanding_debt_total",
+            "cities", "routes"
+        ]
+        for metric in required_metrics:
+            self.assertIn(metric, analytics)
+
+        # Operational expenses sanity check: total_operational_expenses = total_allowances + total_emergency_fuel + total_emergency_other
+        calculated_opex = round(analytics["total_allowances"] + analytics["total_emergency_fuel"] + analytics["total_emergency_other"], 2)
+        self.assertEqual(analytics["total_operational_expenses"], calculated_opex)
+
+        # Net amount sanity check: net_amount = total_sales - total_operational_expenses
+        calculated_net = round(analytics["total_sales"] - analytics["total_operational_expenses"], 2)
+        self.assertEqual(analytics["net_amount"], calculated_net)
+
+    async def test_audit_logs_payload(self):
+        """Audit logs must be extracted from the database and included in the fleet payload."""
+        mock_user = {
+            "username": "master",
+            "name": "Master Administrator",
+            "role": "MASTER_ADMIN",
+            "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+        }
+        mock_req = self.make_mock_request()
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=mock_user):
+            async with async_session_factory() as session:
+                data = await get_dashboard_data(mock_req, session)
+
+        self.assertIn("audit_logs", data["fleet"])
+        self.assertIn("audit_logs", data["fleet"]["overview"])
+        audit_logs = data["fleet"]["audit_logs"]
+        self.assertIsInstance(audit_logs, list)
+        for entry in audit_logs:
+            self.assertIn("id", entry)
+            self.assertIn("timestamp", entry)
+            self.assertIn("username", entry)
+            self.assertIn("user_role", entry)
+            self.assertIn("action", entry)
+
+    async def test_dashboard_view_html_structure(self):
+        """Dashboard HTML must feature the workspace selector, no horizontal subnav bar, and all 10 overview sections."""
+        mock_user = {
+            "username": "master",
+            "name": "Master Administrator",
+            "role": "MASTER_ADMIN",
+            "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+        }
+        mock_req = self.make_mock_request()
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=mock_user):
+            resp = await dashboard_view(mock_req)
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.body.decode("utf-8")
+
+        # 1. Old horizontal sub-nav bar must NOT be present
+        self.assertNotIn("7-Stage Trips Pipeline", html)
+        self.assertNotIn("Sales Rep Debt Ledger", html)
+        self.assertNotIn("Cleared Payments History", html)
+        self.assertNotIn("39 Commercial Trucks", html)
+        self.assertNotIn("21 Commercial Drivers", html)
+
+        # 2. Modern compact workspace selector & quick nav must be present
+        self.assertIn('id="fleet-view-selector"', html)
+        self.assertIn('fleet-quick-pill', html)
+
+        # 3. Operations Overview 10-tier elements must be present
+        expected_ids = [
+            "fleet-section-overview",
+            "ov-alerts-list",
+            "ov-kpi-pending-approvals",
+            "ov-kpi-bottlenecks",
+            "ov-kpi-active-trips",
+            "ov-kpi-trucks-ready",
+            "ov-kpi-trucks-in-workshop",
+            "ov-kpi-trucks-awaiting-parts",
+            "ov-fin-total-sales",
+            "ov-fin-net-margin",
+            "ov-fin-total-opex",
+            "ov-kpi-avg-revenue",
+            "ov-top-cities-body",
+            "ov-perf-util-bar",
+            "ov-activity-list",
+            "ov-recent-audit-body"
+        ]
+        for el_id in expected_ids:
+            self.assertIn(f'id="{el_id}"', html, f"Missing expected HTML element id: {el_id}")
+
+        # 4. Financial Audit Log view controls must be present
+        self.assertIn('id="audit-mode-btn-TRAIL"', html)
+        self.assertIn('id="timeframe-btn-ALL"', html)
 
 
 if __name__ == "__main__":
