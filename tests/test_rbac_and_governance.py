@@ -33,7 +33,9 @@ from app.dashboard import (
     api_toggle_user_permission,
     api_save_truck,
     api_save_driver,
-    api_save_sales_rep
+    api_save_sales_rep,
+    dashboard_view,
+    get_dashboard_data
 )
 
 
@@ -342,6 +344,51 @@ class TestRBACAndGovernance(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(revoke_res["status"], "success")
             self.assertFalse(revoke_res["is_granted"])
             self.assertNotIn("manage_city_minimums", revoke_res["effective_permissions"])
+
+    # -------------------------------------------------------------
+    # 8. Analytics Visibility Strictly Restricted to MASTER_ADMIN
+    # -------------------------------------------------------------
+    async def test_analytics_restricted_to_master_admin_only(self):
+        # 1. Master Admin gets analytics in HTML & JSON API
+        master_user = {"name": "Master", "username": "master", "role": "MASTER_ADMIN", "allowed_domains": ["fleet"], "custom_permissions": {}}
+        with patch("app.dashboard.get_current_user_from_request", return_value=master_user):
+            req = self.make_mock_request({})
+            html_resp = await dashboard_view(req)
+            self.assertIn('id="fleet-section-analytics"', html_resp.body.decode())
+            self.assertIn('id="fleet-btn-analytics"', html_resp.body.decode())
+            
+            async with async_session_factory() as session:
+                api_data = await get_dashboard_data(req, session)
+                fleet_data = api_data.get("fleet", {})
+                self.assertIn("analytics", fleet_data)
+                self.assertNotEqual(fleet_data["analytics"], {})
+
+        # 2. Sales Admin is denied analytics in HTML & JSON API
+        sales_admin_user = {"name": "Sales Admin", "username": "everjoy", "role": "SALES_ADMIN", "allowed_domains": ["fleet"], "custom_permissions": {}}
+        with patch("app.dashboard.get_current_user_from_request", return_value=sales_admin_user):
+            req = self.make_mock_request({})
+            html_resp = await dashboard_view(req)
+            self.assertNotIn('id="fleet-section-analytics"', html_resp.body.decode())
+            self.assertNotIn('id="fleet-btn-analytics"', html_resp.body.decode())
+            self.assertNotIn('value="analytics"', html_resp.body.decode())
+            
+            async with async_session_factory() as session:
+                api_data = await get_dashboard_data(req, session)
+                fleet_data = api_data.get("fleet", {})
+                self.assertEqual(fleet_data.get("analytics"), {})
+
+        # 3. Fleet Admin is denied analytics in HTML & JSON API
+        fleet_admin_user = {"name": "Fleet Admin", "username": "sujit", "role": "FLEET_ADMIN", "allowed_domains": ["fleet"], "custom_permissions": {}}
+        with patch("app.dashboard.get_current_user_from_request", return_value=fleet_admin_user):
+            req = self.make_mock_request({})
+            html_resp = await dashboard_view(req)
+            self.assertNotIn('id="fleet-section-analytics"', html_resp.body.decode())
+            self.assertNotIn('id="fleet-btn-analytics"', html_resp.body.decode())
+            
+            async with async_session_factory() as session:
+                api_data = await get_dashboard_data(req, session)
+                fleet_data = api_data.get("fleet", {})
+                self.assertEqual(fleet_data.get("analytics"), {})
 
 
 if __name__ == "__main__":

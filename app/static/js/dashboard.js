@@ -396,6 +396,9 @@ function escapeJsAttr(val) {
             if (!canViewBalances && (viewId === 'payments' || viewId === 'ledger')) {
                 viewId = 'overview';
             }
+            if (window.currentUserRole !== 'MASTER_ADMIN' && viewId === 'analytics') {
+                viewId = 'overview';
+            }
             currentFleetSubView = viewId;
             const sel = document.getElementById('fleet-view-selector');
             if (sel && sel.value !== viewId) sel.value = viewId;
@@ -424,7 +427,9 @@ function escapeJsAttr(val) {
             subviews.forEach(sv => {
                 const el = document.getElementById('fleet-section-' + sv);
                 if (el) {
-                    if (viewId === 'all' || viewId === sv) {
+                    if (sv === 'analytics' && window.currentUserRole !== 'MASTER_ADMIN') {
+                        el.style.display = 'none';
+                    } else if (viewId === 'all' || viewId === sv) {
                         el.style.display = 'block';
                     } else {
                         el.style.display = 'none';
@@ -432,7 +437,7 @@ function escapeJsAttr(val) {
                 }
             });
 
-            if ((viewId === 'analytics' || viewId === 'all') && window.lastFleetAnalytics) {
+            if (window.currentUserRole === 'MASTER_ADMIN' && (viewId === 'analytics' || viewId === 'all') && window.lastFleetAnalytics) {
                 requestAnimationFrame(() => {
                     setTimeout(() => {
                         renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
@@ -1178,6 +1183,7 @@ function escapeJsAttr(val) {
         window.renderSalesTrendLineChart = renderSalesTrendLineChart;
 
         function renderAnalyticsSection(an, stats) {
+            if (window.currentUserRole !== 'MASTER_ADMIN') return;
             if (!an && !stats) return;
             an = an || {};
             stats = stats || {};
@@ -1624,13 +1630,14 @@ function escapeJsAttr(val) {
                         <!-- Group 3: Analytics & Insights -->
                         <div>
                             <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-                                Analytics & Insights
+                                ${window.currentUserRole === 'MASTER_ADMIN' ? 'Analytics & Insights' : 'View Mode'}
                             </div>
                             <div class="space-y-0.5">
+                                ${window.currentUserRole === 'MASTER_ADMIN' ? `
                                 <button onclick="switchFleetSubView('analytics'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
                                     <span class="flex items-center gap-2">Data Analytics</span>
                                     <span class="text-[10px] font-bold text-blue-600 dark:text-blue-400">KPIs</span>
-                                </button>
+                                </button>` : ''}
                                 <button onclick="switchFleetSubView('all'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
                                     <span class="flex items-center gap-2">Consolidated View (All)</span>
                                     <span class="text-[10px] font-mono text-slate-400">Full</span>

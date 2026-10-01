@@ -165,7 +165,8 @@ ALL_PERMISSIONS: List[str] = [
     "view_it_workspace",
     "view_projects_workspace",
     "view_audit_logs",
-    "manage_user_permissions"
+    "manage_user_permissions",
+    "view_analytics"
 ]
 
 ROLE_DEFAULT_PERMISSIONS: Dict[str, Set[str]] = {

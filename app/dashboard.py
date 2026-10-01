@@ -1818,6 +1818,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         can_view_schedules = user_has_permission(user, "view_customer_schedules") or user_has_permission(user, "manage_sales_pipeline")
         can_view_balances = user_has_permission(user, "view_sales_rep_balances")
         can_approve_trips = user_has_permission(user, "approve_trips")
+        can_view_analytics = (user.get("role") == "MASTER_ADMIN")
         can_clear_debt = user_has_permission(user, "clear_sales_rep_debt")
         can_view_workshop = user_has_permission(user, "view_workshop_workspace")
         is_observer = (user.get("role") == "EXECUTIVE_OBSERVER")
@@ -2284,7 +2285,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "payments": payments_list if can_view_balances else [],
             "ledger": ledger_records if can_view_balances else [],
             "audit_logs": audit_records,
-            "analytics": filtered_analytics,
+            "analytics": filtered_analytics if can_view_analytics else {},
             "cities": sorted(list(cities_set)),
             "route_rules": get_all_cached_city_rules(),
             "fuel_price": get_fuel_price(),
@@ -2427,8 +2428,11 @@ async def dashboard_view(request: Request):
         sidebar_links.append('<button onclick="switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Payment History</button>')
         sidebar_links.append('<button onclick="switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Financial Audit Log</button>')
 
-    sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Analytics & Insights</div>')
-    sidebar_links.append('<button onclick="switchFleetSubView(\'analytics\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Operations Analytics</button>')
+    is_master_admin = (user_role == "MASTER_ADMIN")
+
+    if is_master_admin:
+        sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Analytics & Insights</div>')
+        sidebar_links.append('<button onclick="switchFleetSubView(\'analytics\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Operations Analytics</button>')
 
     if can_manage_fuel or can_manage_city or can_view_audit or can_manage_users:
         sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">System Management</div>')
@@ -2444,10 +2448,12 @@ async def dashboard_view(request: Request):
     nav_salespersons_opt = '<option value="salespersons">Sales Representative Balances</option>' if can_view_balances else ''
     nav_payments_opt = '<option value="payments">Payment History</option>' if can_view_balances else ''
     nav_ledger_opt = '<option value="ledger">Financial Audit Log</option>' if can_view_balances else ''
+    nav_analytics_opt = '<option value="analytics">Data Analytics</option>' if is_master_admin else ''
 
     nav_salespersons_btn = '<button onclick="switchFleetSubView(\'salespersons\')" id="fleet-btn-salespersons" data-view="salespersons" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Sales Reps</button>' if can_view_balances else ''
     nav_payments_btn = '<button onclick="switchFleetSubView(\'payments\')" id="fleet-btn-payments" data-view="payments" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Payments</button>' if can_view_balances else ''
     nav_ledger_btn = '<button onclick="switchFleetSubView(\'ledger\')" id="fleet-btn-ledger" data-view="ledger" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Audit Log</button>' if can_view_balances else ''
+    nav_analytics_btn = '<button onclick="switchFleetSubView(\'analytics\')" id="fleet-btn-analytics" data-view="analytics" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Analytics</button>' if is_master_admin else ''
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -3059,7 +3065,7 @@ async def dashboard_view(request: Request):
                         <option value="drivers">Commercial Drivers</option>
                         <option value="approvals">Trip Approvals</option>
                         {nav_ledger_opt}
-                        <option value="analytics">Data Analytics</option>
+                        {nav_analytics_opt}
                         <option value="all">Consolidated View</option>
                     </select>
                 </div>
@@ -3074,7 +3080,7 @@ async def dashboard_view(request: Request):
                     <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" data-view="drivers" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Drivers</button>
                     <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" data-view="approvals" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Approvals</button>
                     {nav_ledger_btn}
-                    <button onclick="switchFleetSubView('analytics')" id="fleet-btn-analytics" data-view="analytics" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Analytics</button>
+                    {nav_analytics_btn}
                     <button onclick="switchFleetSubView('all')" id="fleet-btn-all" data-view="all" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">All</button>
                 </div>
 
@@ -3834,6 +3840,7 @@ async def dashboard_view(request: Request):
             """ if can_view_balances else ""}
 
             <!-- SUBVIEW 8: DATA ANALYTICS & FLEET METRICS -->
+            {f"""
             <div id="fleet-section-analytics" class="fleet-subview-panel space-y-6 transition-all duration-200" style="display: none;">
                 <!-- Analytics Header Card -->
                 <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -3860,8 +3867,8 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1" id="an-stat-trips-completed">0 completed</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
-                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">""" + ("Avg Revenue / Trip" if can_view_balances else "Trip Delivery Health") + f"""</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-avg-revenue">""" + ("$0.00" if can_view_balances else "100%") + f"""</div>
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Avg Revenue / Trip</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-avg-revenue">$0.00</div>
                         <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-avg-opex">Avg Opex: $0.00</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
@@ -3989,7 +3996,6 @@ async def dashboard_view(request: Request):
                     </div>
 
                     <!-- Debt Ledger & Clearance Liquidity Health -->
-                    {f"""
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
                         <div>
                             <div class="flex items-center justify-between mb-2">
@@ -4022,42 +4028,9 @@ async def dashboard_view(request: Request):
                             <span class="text-xs font-bold text-blue-600 dark:text-blue-400">Synchronized</span>
                         </div>
                     </div>
-                    """ if can_view_balances else """
-                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-                        <div>
-                            <div class="flex items-center justify-between mb-2">
-                                <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">Fleet Dispatch Readiness</h3>
-                                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">Readiness</span>
-                            </div>
-                            <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Vehicle availability vs active transport trips</p>
-                            <div class="h-56 relative w-full mb-3">
-                                <canvas id="an-fleet-readiness-chart"></canvas>
-                            </div>
-                            <div class="space-y-3">
-                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
-                                    <div>
-                                        <div class="text-[10px] uppercase font-bold text-slate-400">Active Commercial Fleet</div>
-                                        <div class="text-base font-extrabold font-mono text-blue-600 dark:text-blue-400 mt-0.5" id="an-fleet-vehicles-count">Active Fleet</div>
-                                    </div>
-                                    <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Registered Roster</span>
-                                </div>
-                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
-                                    <div>
-                                        <div class="text-[10px] uppercase font-bold text-slate-400">Verified Drivers</div>
-                                        <div class="text-base font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5" id="an-fleet-drivers-count">Active Drivers</div>
-                                    </div>
-                                    <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Assigned</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
-                            <span class="text-[11px] text-slate-500 dark:text-zinc-400">Commercial Pipeline Status</span>
-                            <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400">Active</span>
-                        </div>
-                    </div>
-                    """}
                 </div>
             </div>
+            """ if is_master_admin else ""}
         </div>
     </main>
 
