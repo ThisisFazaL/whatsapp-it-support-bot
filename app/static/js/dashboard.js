@@ -428,6 +428,50 @@ function escapeJsAttr(val) {
                     }
                 }
             });
+
+            if (viewId === 'analytics' && window.lastFleetAnalytics && window.lastFleetStats) {
+                setTimeout(() => renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats), 50);
+            }
+        }
+
+        window.currentSalespersonCompanyFilter = 'ALL';
+
+        function filterSalespersonsByCompany(comp) {
+            window.currentSalespersonCompanyFilter = comp;
+            document.querySelectorAll('.sp-filter-btn').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs');
+                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+            });
+            const btnId = comp === 'ALL' ? 'sp-filter-ALL' :
+                          comp.includes('LG') ? 'sp-filter-LG' :
+                          comp.includes('Tagoneswa') ? 'sp-filter-TG' : 'sp-filter-Kreckle';
+            const activeBtn = document.getElementById(btnId);
+            if (activeBtn) {
+                activeBtn.classList.add('bg-blue-600', 'text-white', 'shadow-xs');
+                activeBtn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+            }
+            applySalespersonsFilter();
+        }
+
+        function filterSalespersonsSearch() {
+            applySalespersonsFilter();
+        }
+
+        function applySalespersonsFilter() {
+            const comp = window.currentSalespersonCompanyFilter || 'ALL';
+            const query = (document.getElementById('sp-search-input')?.value || '').toLowerCase().trim();
+            const cards = document.querySelectorAll('.salesperson-card');
+            cards.forEach(card => {
+                const cardComp = card.getAttribute('data-company') || '';
+                const cardSearch = card.getAttribute('data-search') || '';
+                const matchComp = (comp === 'ALL') ||
+                                  cardComp.toLowerCase().includes(comp.toLowerCase()) ||
+                                  (comp.includes('Tagoneswa') && cardComp.toLowerCase().includes('tagoneswa')) ||
+                                  (comp.includes('LG') && cardComp.toLowerCase().includes('lg')) ||
+                                  (comp.includes('Kreckle') && cardComp.toLowerCase().includes('kreckle'));
+                const matchQuery = !query || cardSearch.includes(query);
+                card.style.display = (matchComp && matchQuery) ? 'flex' : 'none';
+            });
         }
 
         function renderOperationsOverview(overview, user) {
@@ -707,14 +751,27 @@ function escapeJsAttr(val) {
         }
 
         // =============================================================
-        // SUBVIEW 8: DATA ANALYTICS RENDERER
+        // SUBVIEW 8: DATA ANALYTICS RENDERER (CHART.JS INTEGRATED)
         // =============================================================
+        window.analyticsCharts = window.analyticsCharts || {};
+        window.lastFleetAnalytics = null;
+        window.lastFleetStats = null;
+
+        function destroyAnalyticsChart(key) {
+            if (window.analyticsCharts[key]) {
+                try { window.analyticsCharts[key].destroy(); } catch (e) { /* ignore */ }
+                delete window.analyticsCharts[key];
+            }
+        }
+
         function renderAnalyticsSection(an, stats) {
             if (!an && !stats) return;
             an = an || {};
             stats = stats || {};
+            window.lastFleetAnalytics = an;
+            window.lastFleetStats = stats;
 
-            // 1. KPI Cards
+            // 1. Top Executive KPI Cards
             const tripsTotalEl = document.getElementById('an-stat-trips-total');
             if (tripsTotalEl) tripsTotalEl.textContent = an.trips_total ?? stats.total_trips ?? 0;
 
@@ -739,7 +796,61 @@ function escapeJsAttr(val) {
             const recSubEl = document.getElementById('an-stat-recovery-sub');
             if (recSubEl) recSubEl.textContent = `$${Number(an.recovery_total || 0).toLocaleString()} recovered of $${Number(an.shortfall_total || 0).toLocaleString()}`;
 
-            // 2. Pipeline Stage Volume Distribution Bars
+            const isDark = document.documentElement.classList.contains('dark');
+
+            // 2. Chart 1: Pipeline Stage Volume (Chart.js Bar Chart)
+            const ctxPipeline = document.getElementById('an-pipeline-chart');
+            if (ctxPipeline && typeof Chart !== 'undefined') {
+                destroyAnalyticsChart('pipeline');
+                const completed = an.trips_completed || 0;
+                const active = Math.max(0, (an.trips_total || 0) - completed - (an.trips_cancelled || 0));
+                const shortfalls = stats.shortfall_trips || 0;
+                const approved = stats.approved_trips || 0;
+
+                window.analyticsCharts['pipeline'] = new Chart(ctxPipeline, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Completed', 'Active/Transit', 'Shortfalls', 'Cleared'],
+                        datasets: [{
+                            label: 'Trip Volume',
+                            data: [completed, active, shortfalls, approved],
+                            backgroundColor: [
+                                'rgba(16, 185, 129, 0.85)',
+                                'rgba(59, 130, 246, 0.85)',
+                                'rgba(245, 158, 11, 0.85)',
+                                'rgba(99, 102, 241, 0.85)'
+                            ],
+                            borderRadius: 6,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => ` ${ctx.parsed.y} trip(s)`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: isDark ? '#a1a1aa' : '#64748b', font: { size: 10, weight: '600' } }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' },
+                                ticks: { color: isDark ? '#a1a1aa' : '#64748b', precision: 0 }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Pipeline Progress Bars
             const pipelineBarsEl = document.getElementById('an-pipeline-bars');
             if (pipelineBarsEl) {
                 const totalT = an.trips_total || stats.total_trips || 1;
@@ -763,15 +874,65 @@ function escapeJsAttr(val) {
                                 <span>${s.label}</span>
                                 <span class="font-mono text-slate-500">${s.count} trips (${pct}%)</span>
                             </div>
-                            <div class="w-full bg-slate-100 dark:bg-[#181820] rounded-full h-2.5 overflow-hidden">
-                                <div class="${s.color} h-2.5 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                            <div class="w-full bg-slate-100 dark:bg-[#181820] rounded-full h-2 overflow-hidden">
+                                <div class="${s.color} h-2 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
                             </div>
                         </div>
                     `;
                 }).join('');
             }
 
-            // 3. Operational Expense Composition Bars
+            // 3. Chart 2: Operational Expense Composition (Chart.js Donut Chart)
+            const ctxCost = document.getElementById('an-cost-donut-chart');
+            if (ctxCost && typeof Chart !== 'undefined') {
+                destroyAnalyticsChart('cost');
+                const fuel = an.total_emergency_fuel || 0;
+                const allowances = (an.total_allowances || 0) + (an.total_meals || 0);
+                const accom = an.total_accommodation || 0;
+                const other = (an.total_tolls || 0) + (an.total_emergency_other || 0);
+
+                window.analyticsCharts['cost'] = new Chart(ctxCost, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Fuel', 'Allowances', 'Accommodation', 'Tolls/Other'],
+                        datasets: [{
+                            data: [fuel, allowances, accom, other],
+                            backgroundColor: [
+                                'rgba(245, 158, 11, 0.9)',
+                                'rgba(59, 130, 246, 0.9)',
+                                'rgba(168, 85, 247, 0.9)',
+                                'rgba(244, 63, 94, 0.9)'
+                            ],
+                            borderWidth: isDark ? 2 : 1,
+                            borderColor: isDark ? '#0a0a0d' : '#ffffff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '66%',
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    color: isDark ? '#d4d4d8' : '#334155',
+                                    boxWidth: 8,
+                                    boxHeight: 8,
+                                    usePointStyle: true,
+                                    font: { size: 10, weight: '600' }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => ` $${Number(ctx.parsed).toLocaleString('en-US', {minimumFractionDigits: 2})}`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Expense Breakdown Bars
             const costBarsEl = document.getElementById('an-cost-bars');
             if (costBarsEl) {
                 const totalOpex = an.total_operational_expenses || 1;
@@ -795,23 +956,70 @@ function escapeJsAttr(val) {
                                 <span>${c.label}</span>
                                 <span class="font-mono text-slate-500">$${Number(c.amount).toFixed(2)} (${pct}%)</span>
                             </div>
-                            <div class="w-full bg-slate-100 dark:bg-[#181820] rounded-full h-2.5 overflow-hidden">
-                                <div class="${c.color} h-2.5 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+                            <div class="w-full bg-slate-100 dark:bg-[#181820] rounded-full h-2 overflow-hidden">
+                                <div class="${c.color} h-2 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
                             </div>
                         </div>
                     `;
                 }).join('');
             }
 
-            // 4. Top Delivery Corridors & Cities
+            // 4. Chart 3: Top Corridors (Chart.js Horizontal Bar Chart)
+            const ctxCorridors = document.getElementById('an-corridors-bar-chart');
+            if (ctxCorridors && typeof Chart !== 'undefined') {
+                destroyAnalyticsChart('corridors');
+                const rawCities = (an.cities || []).slice(0, 6);
+                const cLabels = rawCities.length > 0 ? rawCities.map(c => c.city) : ['Harare', 'Bulawayo', 'Mutare', 'Gweru', 'Masvingo'];
+                const cCounts = rawCities.length > 0 ? rawCities.map(c => c.trips) : [0, 0, 0, 0, 0];
+
+                window.analyticsCharts['corridors'] = new Chart(ctxCorridors, {
+                    type: 'bar',
+                    data: {
+                        labels: cLabels,
+                        datasets: [{
+                            label: 'Trip Volume',
+                            data: cCounts,
+                            backgroundColor: 'rgba(99, 102, 241, 0.85)',
+                            borderRadius: 6,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => ` ${ctx.parsed.x} trip(s)`
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                beginAtZero: true,
+                                grid: { color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' },
+                                ticks: { color: isDark ? '#a1a1aa' : '#64748b', precision: 0 }
+                            },
+                            y: {
+                                grid: { display: false },
+                                ticks: { color: isDark ? '#d4d4d8' : '#334155', font: { size: 10, weight: '600' } }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Top Cities List
             const topCitiesEl = document.getElementById('an-top-cities-list');
             if (topCitiesEl) {
                 const cities = an.cities || [];
                 if (cities.length === 0) {
-                    topCitiesEl.innerHTML = '<div class="text-xs text-slate-400 p-4 text-center">No city delivery records logged yet.</div>';
+                    topCitiesEl.innerHTML = '<div class="text-xs text-slate-400 p-3 text-center">No city delivery records logged yet.</div>';
                 } else {
-                    topCitiesEl.innerHTML = cities.slice(0, 6).map(c => `
-                        <div class="py-2.5 flex items-center justify-between text-xs">
+                    topCitiesEl.innerHTML = cities.slice(0, 5).map(c => `
+                        <div class="py-2 flex items-center justify-between text-xs">
                             <div>
                                 <span class="font-bold text-slate-900 dark:text-zinc-100 capitalize">${c.city}</span>
                                 <span class="text-[11px] text-slate-400 dark:text-zinc-500 ml-2 font-mono">${c.trips} trips</span>
@@ -824,7 +1032,97 @@ function escapeJsAttr(val) {
                 }
             }
 
-            // 5. Cleared & Outstanding Debt Totals
+            // 5. Chart 4: Financial Recovery / Fleet Readiness (Chart.js Donut Chart)
+            const ctxFin = document.getElementById('an-financial-overview-chart');
+            if (ctxFin && typeof Chart !== 'undefined') {
+                destroyAnalyticsChart('financial');
+                const cleared = Number(an.cleared_payments_total || 0);
+                const debt = Number(an.outstanding_debt_total || stats.total_outstanding_backlog || 0);
+
+                window.analyticsCharts['financial'] = new Chart(ctxFin, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Cleared Settlements', 'Outstanding Backlog'],
+                        datasets: [{
+                            data: [cleared, debt],
+                            backgroundColor: [
+                                'rgba(16, 185, 129, 0.9)',
+                                'rgba(244, 63, 94, 0.9)'
+                            ],
+                            borderWidth: isDark ? 2 : 1,
+                            borderColor: isDark ? '#0a0a0d' : '#ffffff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '70%',
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    color: isDark ? '#d4d4d8' : '#334155',
+                                    boxWidth: 8,
+                                    boxHeight: 8,
+                                    usePointStyle: true,
+                                    font: { size: 10, weight: '600' }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => ` $${Number(ctx.parsed).toLocaleString('en-US', {minimumFractionDigits: 2})}`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            const ctxReadiness = document.getElementById('an-fleet-readiness-chart');
+            if (ctxReadiness && typeof Chart !== 'undefined') {
+                destroyAnalyticsChart('readiness');
+                const avail = Number(stats.trucks_available ?? 39);
+                const ws = Number(stats.trucks_in_workshop ?? 0);
+
+                window.analyticsCharts['readiness'] = new Chart(ctxReadiness, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Available', 'In Workshop'],
+                        datasets: [{
+                            data: [avail, ws],
+                            backgroundColor: [
+                                'rgba(59, 130, 246, 0.9)',
+                                'rgba(245, 158, 11, 0.9)'
+                            ],
+                            borderWidth: isDark ? 2 : 1,
+                            borderColor: isDark ? '#0a0a0d' : '#ffffff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '70%',
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    color: isDark ? '#d4d4d8' : '#334155',
+                                    boxWidth: 8,
+                                    boxHeight: 8,
+                                    usePointStyle: true,
+                                    font: { size: 10, weight: '600' }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => ` ${ctx.parsed} vehicles`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
             const clearedTotEl = document.getElementById('an-cleared-total');
             if (clearedTotEl) clearedTotEl.textContent = '$' + Number(an.cleared_payments_total || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
@@ -1605,15 +1903,32 @@ function escapeJsAttr(val) {
                             badgeText = 'Pending Recovery';
                         }
 
+                        let comp = sp.company || 'Commercial Sales';
+                        let compBadgeClass = 'bg-slate-100 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300 border-slate-200 dark:border-zinc-700';
+                        if (comp.includes('LG')) {
+                            compBadgeClass = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                        } else if (comp.includes('Tagoneswa') || comp.includes('TG')) {
+                            compBadgeClass = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        } else if (comp.includes('Kreckle')) {
+                            compBadgeClass = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                        }
+
+                        const searchData = `${(sp.name || '').toLowerCase()} ${(sp.phone || '')} ${(sp.company || '').toLowerCase()}`;
+
                         return `
-                            <div class="bg-slate-50 dark:bg-[#0f0f13] border border-slate-200 dark:border-zinc-800 rounded-xl p-4 flex flex-col justify-between hover:shadow-md transition">
+                            <div class="salesperson-card bg-slate-50 dark:bg-[#0f0f13] border border-slate-200 dark:border-zinc-800 rounded-xl p-4 flex flex-col justify-between hover:shadow-md transition" data-company="${escapeJsAttr(comp)}" data-search="${escapeJsAttr(searchData)}">
                                 <div>
                                     <div class="flex items-start justify-between gap-1">
                                         <div>
-                                            <div class="font-extrabold text-slate-900 dark:text-zinc-100 text-sm">${sp.name}</div>
-                                            <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">+${sp.phone}</div>
+                                            <div class="font-extrabold text-slate-900 dark:text-zinc-100 text-sm flex items-center gap-1.5 flex-wrap">
+                                                <span>${sp.name}</span>
+                                            </div>
+                                            <div class="flex items-center gap-1.5 mt-1">
+                                                <span class="text-[9px] font-bold px-1.5 py-0.5 rounded-md border ${compBadgeClass}">${comp}</span>
+                                                <span class="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">+${sp.phone}</span>
+                                            </div>
                                         </div>
-                                        <div class="flex items-center gap-1.5">
+                                        <div class="flex items-center gap-1.5 shrink-0">
                                             <button onclick="openAddSalesRepModal('${sp.employee_id || ''}', '${escapeJsAttr(sp.name)}', '${sp.phone}', '${escapeJsAttr(sp.email)}', true)" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs font-bold cursor-pointer">
                                                 Edit
                                             </button>
@@ -1639,6 +1954,7 @@ function escapeJsAttr(val) {
                             </div>
                         `;
                     }).join('');
+                    if (typeof applySalespersonsFilter === 'function') applySalespersonsFilter();
                 }
             }
 

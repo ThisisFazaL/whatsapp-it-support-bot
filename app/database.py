@@ -957,23 +957,59 @@ async def init_db_models():
         loc_austin_res = await session.execute(select(Location).where(Location.location_name.ilike("%6 Austin Road%")))
         austin_loc = loc_austin_res.scalars().first()
 
-        # Update or Insert Patience Ndlovu
-        p_res = await session.execute(select(Employee).where(Employee.phone == "263780806954"))
-        patience = p_res.scalars().first()
-        if patience:
-            patience.full_name = "Patience Ndlovu"
-            patience.department_id = sales_dept.department_id
-            if austin_loc: patience.location_id = austin_loc.location_id
-            patience.active = True
-        else:
-            session.add(Employee(
-                employee_code="EMP_PATIENCE",
-                full_name="Patience Ndlovu",
-                phone="263780806954",
-                department_id=sales_dept.department_id,
-                location_id=austin_loc.location_id if austin_loc else None,
-                active=True
-            ))
+        # Ensure Commercial Companies Locations exist
+        loc_lg = (await session.execute(select(Location).where(Location.location_name.ilike("%LG Plast%")))).scalars().first()
+        loc_tg = (await session.execute(select(Location).where(Location.location_name.ilike("%Tagoneswa%")))).scalars().first()
+        loc_kreckle = (await session.execute(select(Location).where(Location.location_name.ilike("%Kreckle%")))).scalars().first()
+
+        # Guarantee all 17 Commercial Sales Representatives & 4 Sales Admins are synced
+        sales_roster = [
+            # LG Plast Sales Reps
+            {"name": "Ashraf Nedziwe", "phone": "263779214825", "loc": loc_lg},
+            {"name": "Mercy Mungoriwo", "phone": "263711421201", "loc": loc_lg},
+            {"name": "Callistus Keche", "phone": "263777425204", "loc": loc_lg},
+            {"name": "Primrose Makumbe", "phone": "263781337103", "loc": loc_lg},
+            {"name": "Sharon Mushava", "phone": "263712498581", "loc": loc_lg},
+            {"name": "Tatenda Mombechena", "phone": "263787448975", "loc": loc_lg},
+            {"name": "Wallace Muzarurwi", "phone": "263786032376", "loc": loc_lg},
+            # Tagoneswa Hardware Sales Reps
+            {"name": "Stuart Chaleka", "phone": "263718643451", "loc": loc_tg},
+            {"name": "Vanessa Zimbiti", "phone": "263782723251", "loc": loc_tg},
+            {"name": "Tafadzwa Sungiso", "phone": "263717905914", "loc": loc_tg},
+            {"name": "Talent Ruziwe", "phone": "263717905915", "loc": loc_tg},
+            {"name": "Tafadzwa Chikove", "phone": "263788231069", "loc": loc_tg},
+            {"name": "Tanaka Mupfumi", "phone": "263780435477", "loc": loc_tg},
+            # Kreckle Sales Reps
+            {"name": "David Mungadzi", "phone": "263780543771", "loc": loc_kreckle or austin_loc},
+            {"name": "Patience Ndlovu", "phone": "263780806954", "loc": loc_kreckle or austin_loc},
+            {"name": "Mufaro Gambiza", "phone": "263783103611", "loc": loc_kreckle or austin_loc},
+            {"name": "Rosa Ndimande Samihembo", "phone": "263780573092", "loc": loc_kreckle or austin_loc},
+            {"name": "Kudzai Marevesa", "phone": "263784566997", "loc": loc_kreckle or austin_loc},
+            # Sales Admins
+            {"name": "Everjoy Tias", "phone": "263780216289", "loc": loc_kreckle or austin_loc},
+            {"name": "Onelly Madziro", "phone": "263787381215", "loc": loc_lg or coventry_loc},
+            {"name": "Christine Chiweshe", "phone": "263783498457", "loc": loc_tg or coventry_loc},
+            {"name": "Mazviita Sibongile Ruzvidzo", "phone": "263718174894", "loc": loc_lg or coventry_loc},
+        ]
+
+        for s_rep in sales_roster:
+            sr_res = await session.execute(select(Employee).where(Employee.phone == s_rep["phone"]))
+            existing_sr = sr_res.scalars().first()
+            if existing_sr:
+                existing_sr.full_name = s_rep["name"]
+                existing_sr.department_id = sales_dept.department_id
+                if s_rep["loc"]:
+                    existing_sr.location_id = s_rep["loc"].location_id
+                existing_sr.active = True
+            else:
+                session.add(Employee(
+                    employee_code=f"EMP_SALES_{s_rep['phone'][-4:]}",
+                    full_name=s_rep["name"],
+                    phone=s_rep["phone"],
+                    department_id=sales_dept.department_id,
+                    location_id=s_rep["loc"].location_id if s_rep["loc"] else None,
+                    active=True
+                ))
 
         # Sync location mappings for registered Austin Road employees (batched)
         austin_phones = [

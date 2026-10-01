@@ -35,6 +35,30 @@ router = APIRouter()
 
 IT_SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
 
+OFFICIAL_SALES_REPS_DIRECTORY = {
+    # LG Plast Sales Reps
+    "263779214825": {"name": "Ashraf Nedziwe", "company": "LG Plast"},
+    "263711421201": {"name": "Mercy Mungoriwo", "company": "LG Plast"},
+    "263777425204": {"name": "Callistus Keche", "company": "LG Plast"},
+    "263781337103": {"name": "Primrose Makumbe", "company": "LG Plast"},
+    "263712498581": {"name": "Sharon Mushava", "company": "LG Plast"},
+    "263787448975": {"name": "Tatenda Mombechena", "company": "LG Plast"},
+    "263786032376": {"name": "Wallace Muzarurwi", "company": "LG Plast"},
+    # Tagoneswa Hardware Sales Reps
+    "263718643451": {"name": "Stuart Chaleka", "company": "Tagoneswa Hardware"},
+    "263782723251": {"name": "Vanessa Zimbiti", "company": "Tagoneswa Hardware"},
+    "263717905914": {"name": "Tafadzwa Sungiso", "company": "Tagoneswa Hardware"},
+    "263717905915": {"name": "Talent Ruziwe", "company": "Tagoneswa Hardware"},
+    "263788231069": {"name": "Tafadzwa Chikove", "company": "Tagoneswa Hardware"},
+    "263780435477": {"name": "Tanaka Mupfumi", "company": "Tagoneswa Hardware"},
+    # Kreckle Sales Reps
+    "263780543771": {"name": "David Mungadzi", "company": "Kreckle Foods"},
+    "263780806954": {"name": "Patience Ndlovu", "company": "Kreckle Foods"},
+    "263783103611": {"name": "Mufaro Gambiza", "company": "Kreckle Foods"},
+    "263780573092": {"name": "Rosa Ndimande Samihembo", "company": "Kreckle Foods"},
+    "263784566997": {"name": "Kudzai Marevesa", "company": "Kreckle Foods"},
+}
+
 def get_client_ip(request: Request) -> str:
     """Extracts client IP address safely from headers or connection."""
     try:
@@ -1462,6 +1486,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 salesperson_map[p] = {
                     "phone": p,
                     "name": fa.salesperson_name or "Sales Rep",
+                    "company": "Commercial Sales",
                     "total_shortfalls": 0.0,
                     "total_recovered": 0.0,
                     "net_balance": 0.0,
@@ -1471,6 +1496,55 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 }
             elif p and fa.trip_id:
                 salesperson_map[p]["trips"].add(fa.trip_id)
+
+        # Guarantee all registered commercial sales representatives from Employee directory are included
+        sales_dept_stmt = (
+            select(Employee)
+            .join(Department, Employee.department_id == Department.department_id, isouter=True)
+            .options(selectinload(Employee.location), selectinload(Employee.department))
+            .where(
+                (Department.department_name.ilike("%Sales%")) |
+                (Department.department_name.ilike("%Marketing%")) |
+                (Employee.phone.in_(list(OFFICIAL_SALES_REPS_DIRECTORY.keys())))
+            )
+        )
+        registered_sales_employees = (await db.execute(sales_dept_stmt)).scalars().all()
+        for emp in registered_sales_employees:
+            p = emp.phone
+            comp = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {}).get("company")
+            if not comp and emp.location:
+                comp = emp.location.location_name
+            if not comp and emp.department:
+                comp = emp.department.department_name
+            if not comp:
+                comp = "Commercial Sales"
+
+            official_name = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {}).get("name", emp.full_name)
+
+            if p not in salesperson_map:
+                salesperson_map[p] = {
+                    "phone": p,
+                    "name": official_name,
+                    "company": comp,
+                    "total_shortfalls": 0.0,
+                    "total_recovered": 0.0,
+                    "net_balance": 0.0,
+                    "entries_count": 0,
+                    "trips": set(),
+                    "recent_date": "Active Commercial Roster",
+                    "employee_id": emp.employee_id,
+                    "email": emp.email or "",
+                    "active": emp.active,
+                    "is_official": True
+                }
+            else:
+                salesperson_map[p]["company"] = comp
+                salesperson_map[p]["employee_id"] = emp.employee_id
+                salesperson_map[p]["email"] = emp.email or ""
+                salesperson_map[p]["active"] = emp.active
+                salesperson_map[p]["is_official"] = True
+                if str(salesperson_map[p].get("name", "")).startswith("Test Rep") or not salesperson_map[p].get("name"):
+                    salesperson_map[p]["name"] = official_name
 
         salespersons_list = []
         for p, s in salesperson_map.items():
@@ -1484,6 +1558,11 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             salespersons_list.append({
                 "phone": p,
                 "name": s["name"],
+                "company": s.get("company", "Commercial Sales"),
+                "employee_id": s.get("employee_id"),
+                "email": s.get("email", ""),
+                "active": s.get("active", True),
+                "is_official": s.get("is_official", p in OFFICIAL_SALES_REPS_DIRECTORY),
                 "total_shortfalls": round(s["total_shortfalls"], 2),
                 "total_recovered": round(s["total_recovered"], 2),
                 "net_balance": net,
@@ -1492,7 +1571,13 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "recent_date": s["recent_date"],
                 "risk_level": risk
             })
-        salespersons_list.sort(key=lambda x: x["net_balance"], reverse=True)
+
+        salespersons_list.sort(key=lambda x: (
+            -x["net_balance"],
+            0 if x["is_official"] else 1,
+            x["company"],
+            x["name"]
+        ))
 
         # B. Trip Approvals Records & Anti-Fraud Audit
         approval_records = []
@@ -2209,6 +2294,7 @@ async def dashboard_view(request: Request):
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Tagoneswa Operations Console</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <script>
         tailwind.config = {{
             darkMode: 'class',
@@ -3244,6 +3330,16 @@ async def dashboard_view(request: Request):
                             <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
                         </div>
                     </div>
+                <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 mb-4 pb-3 border-b border-slate-100 dark:border-zinc-850">
+                    <div class="flex flex-wrap items-center gap-1.5" id="sp-company-filters">
+                        <button onclick="filterSalespersonsByCompany('ALL')" id="sp-filter-ALL" class="sp-filter-btn px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">All Divisions</button>
+                        <button onclick="filterSalespersonsByCompany('LG Plast')" id="sp-filter-LG" class="sp-filter-btn px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">LG Plast</button>
+                        <button onclick="filterSalespersonsByCompany('Tagoneswa Hardware')" id="sp-filter-TG" class="sp-filter-btn px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Tagoneswa Hardware</button>
+                        <button onclick="filterSalespersonsByCompany('Kreckle Foods')" id="sp-filter-Kreckle" class="sp-filter-btn px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">Kreckle Foods</button>
+                    </div>
+                    <div class="relative sm:w-64">
+                        <input type="text" id="sp-search-input" onkeyup="filterSalespersonsSearch()" placeholder="Search rep or phone..." class="w-full px-3 py-1.5 text-xs rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                    </div>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4" id="fleet-salesperson-cards">
                     <!-- Populated dynamically -->
@@ -3593,23 +3689,35 @@ async def dashboard_view(request: Request):
                 <!-- Deep Analytics Grid: Operational Breakdown & Corridors -->
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                     <!-- Panel 1: Trip Pipeline Operational Distribution -->
-                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs">
-                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between">
-                            <span>Pipeline Stage Volume Distribution</span>
-                            <span class="text-[10px] font-mono text-slate-400">Total Lifecycle</span>
-                        </h3>
-                        <div class="mt-4 space-y-3.5" id="an-pipeline-bars">
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">Pipeline Stage Volume</h3>
+                                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold border border-blue-200 dark:border-blue-800">Lifecycle</span>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Trips distributed across operational stages & delivery pipeline</p>
+                            <div class="h-56 relative w-full mb-3 flex items-center justify-center">
+                                <canvas id="an-pipeline-chart"></canvas>
+                            </div>
+                        </div>
+                        <div class="space-y-2.5 pt-3 border-t border-slate-100 dark:border-zinc-850" id="an-pipeline-bars">
                             <!-- Populated dynamically -->
                         </div>
                     </div>
 
                     <!-- Panel 2: Operational Cost Composition -->
-                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs">
-                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between">
-                            <span>Operational Expense Composition</span>
-                            <span class="text-[10px] font-mono text-slate-400">Fuel vs Allowances vs Other</span>
-                        </h3>
-                        <div class="mt-4 space-y-3.5" id="an-cost-bars">
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">Operational Cost Composition</h3>
+                                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">OPEX Split</span>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Live breakdown of fuel, crew allowances, meals, accommodation & tolls</p>
+                            <div class="h-56 relative w-full flex items-center justify-center mb-3">
+                                <canvas id="an-cost-donut-chart"></canvas>
+                            </div>
+                        </div>
+                        <div class="space-y-2.5 pt-3 border-t border-slate-100 dark:border-zinc-850" id="an-cost-bars">
                             <!-- Populated dynamically -->
                         </div>
                     </div>
@@ -3618,12 +3726,18 @@ async def dashboard_view(request: Request):
                 <!-- Panel 3: Top Corridors & Financial Ledger Health -->
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                     <!-- Top Destinations & Routes -->
-                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs">
-                        <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
-                            <span>Top Delivery Destinations & Corridors</span>
-                            <span class="text-[10px] font-mono text-slate-400">Zimbabwe Routes</span>
-                        </h3>
-                        <div class="divide-y divide-slate-100 dark:divide-zinc-850" id="an-top-cities-list">
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">Top Corridors & City Traffic</h3>
+                                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 font-bold border border-indigo-200 dark:border-indigo-800">Regional</span>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Trip volume and frequency across key Zimbabwe commercial routes</p>
+                            <div class="h-56 relative w-full mb-3">
+                                <canvas id="an-corridors-bar-chart"></canvas>
+                            </div>
+                        </div>
+                        <div class="divide-y divide-slate-100 dark:divide-zinc-850 pt-2 border-t border-slate-100 dark:border-zinc-850" id="an-top-cities-list">
                             <!-- Populated dynamically -->
                         </div>
                     </div>
@@ -3632,28 +3746,32 @@ async def dashboard_view(request: Request):
                     {f"""
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
                         <div>
-                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
-                                <span>Financial Recovery & Ledger Liquidity</span>
-                                <span class="text-[10px] font-mono text-slate-400">Accounts Audit</span>
-                            </h3>
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">Financial Ledger & Recovery</h3>
+                                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-bold border border-purple-200 dark:border-purple-800">Audit</span>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Settlement clearance comparison and deficit liquidity</p>
+                            <div class="h-56 relative w-full mb-3 flex items-center justify-center">
+                                <canvas id="an-financial-overview-chart"></canvas>
+                            </div>
                             <div class="space-y-3">
-                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
                                     <div>
                                         <div class="text-[10px] uppercase font-bold text-slate-400">Total Cleared Payments</div>
-                                        <div class="text-lg font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5" id="an-cleared-total">$0.00</div>
+                                        <div class="text-base font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5" id="an-cleared-total">$0.00</div>
                                     </div>
                                     <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Bank Verified</span>
                                 </div>
-                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
                                     <div>
                                         <div class="text-[10px] uppercase font-bold text-slate-400">Outstanding Debt Backlog</div>
-                                        <div class="text-lg font-extrabold font-mono text-rose-600 dark:text-rose-400 mt-0.5" id="an-outstanding-total">$0.00</div>
+                                        <div class="text-base font-extrabold font-mono text-rose-600 dark:text-rose-400 mt-0.5" id="an-outstanding-total">$0.00</div>
                                     </div>
                                     <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Pending Offset</span>
                                 </div>
                             </div>
                         </div>
-                        <div class="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
+                        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
                             <span class="text-[11px] text-slate-500 dark:text-zinc-400">Accounts Reconciliation Status</span>
                             <span class="text-xs font-bold text-blue-600 dark:text-blue-400">Synchronized</span>
                         </div>
@@ -3661,28 +3779,32 @@ async def dashboard_view(request: Request):
                     """ if can_view_balances else f"""
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
                         <div>
-                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
-                                <span>Fleet Dispatch Readiness</span>
-                                <span class="text-[10px] font-mono text-slate-400">Operations Control</span>
-                            </h3>
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100">Fleet Dispatch Readiness</h3>
+                                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">Readiness</span>
+                            </div>
+                            <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Vehicle availability vs active transport trips</p>
+                            <div class="h-56 relative w-full mb-3 flex items-center justify-center">
+                                <canvas id="an-fleet-readiness-chart"></canvas>
+                            </div>
                             <div class="space-y-3">
-                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
                                     <div>
                                         <div class="text-[10px] uppercase font-bold text-slate-400">Active Commercial Fleet</div>
-                                        <div class="text-lg font-extrabold font-mono text-blue-600 dark:text-blue-400 mt-0.5">{len(trucks_list)} Vehicles</div>
+                                        <div class="text-base font-extrabold font-mono text-blue-600 dark:text-blue-400 mt-0.5">{len(trucks_list)} Vehicles</div>
                                     </div>
                                     <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Registered Roster</span>
                                 </div>
-                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
                                     <div>
                                         <div class="text-[10px] uppercase font-bold text-slate-400">Verified Drivers</div>
-                                        <div class="text-lg font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">{drivers_active} Active</div>
+                                        <div class="text-base font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">{drivers_active} Active</div>
                                     </div>
                                     <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Assigned</span>
                                 </div>
                             </div>
                         </div>
-                        <div class="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
+                        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
                             <span class="text-[11px] text-slate-500 dark:text-zinc-400">Commercial Pipeline Status</span>
                             <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400">Active</span>
                         </div>
