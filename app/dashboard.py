@@ -110,11 +110,8 @@ async def login_page(request: Request):
 <body class="bg-slate-50 dark:bg-black text-slate-800 dark:text-zinc-100 min-h-screen flex items-center justify-center p-3 sm:p-6 transition-colors duration-200">
     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200 dark:border-zinc-800/80 rounded-3xl shadow-2xl w-full max-w-md p-6 sm:p-10 transition-colors duration-200">
         <div class="text-center mb-6 sm:mb-8">
-            <div class="w-12 h-12 bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-500 rounded-2xl flex items-center justify-center text-white text-2xl font-bold shadow-md shadow-blue-500/20 mx-auto mb-3.5 border border-blue-400/30">
-                🚚
-            </div>
             <div class="inline-flex items-center gap-2 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300 px-3.5 py-1 rounded-full text-xs font-bold mb-3 sm:mb-4">
-                🔒 Enterprise Security
+                Enterprise Security
             </div>
             <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-zinc-100 tracking-tight">Tagoneswa Portal</h1>
             <p class="text-slate-500 dark:text-zinc-400 text-xs sm:text-sm mt-1">Fleet Approval • IT Support • Projects • Workshop</p>
@@ -2277,9 +2274,6 @@ async def dashboard_view(request: Request):
         <!-- Sidebar Header -->
         <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between">
             <div class="flex items-center gap-2.5">
-                <div class="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center text-white text-base font-bold shadow-md shadow-blue-500/20">
-                    🚚
-                </div>
                 <div>
                     <h3 class="text-sm font-extrabold text-slate-900 dark:text-zinc-100">Tagoneswa Hub</h3>
                     <p class="text-[10px] text-slate-500 dark:text-zinc-400 font-medium">Enterprise Central Control</p>
@@ -2332,9 +2326,6 @@ async def dashboard_view(request: Request):
                         <button onclick="toggleSidebar(true)" class="p-2 rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer border border-slate-200 dark:border-zinc-800 shadow-xs flex items-center justify-center text-lg leading-none" title="Open Navigation Menu">
                             ☰
                         </button>
-                        <div class="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-500 rounded-xl flex items-center justify-center text-white text-lg sm:text-xl font-bold shadow-md shadow-blue-500/20 shrink-0 border border-blue-400/30">
-                            🚚
-                        </div>
                         <div>
                             <div class="flex items-center gap-1.5">
                                 <h1 class="text-base sm:text-lg font-extrabold text-slate-900 dark:text-zinc-100 tracking-tight leading-none">Tagoneswa</h1>
