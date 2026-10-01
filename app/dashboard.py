@@ -1712,6 +1712,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "id": tr.id,
                 "trip_id": tr.trip_id,
                 "company_name": tr.company_name,
+                "company": tr.company_name,
+                "trip_sales_value": round(tr.trip_sales_value or 0.0, 2),
                 "salesperson_name": tr.salesperson_name or "Sales Rep",
                 "salesperson_phone": tr.salesperson_phone,
                 "destination_city": tr.destination_city,
@@ -2091,6 +2093,97 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         fleet_util = round((active_trips_count / trucks_available * 100), 1) if trucks_available > 0 else 0.0
         ws_impact = trucks_total - trucks_available
 
+        # 8b. Real Time-Series Sales Trends: Day-Wise, Month-Wise, and Company-Wise
+        def _normalize_co(comp_str, ph_str=""):
+            s = (comp_str or "").lower()
+            if "lg" in s or "plast" in s:
+                return "LG Plast"
+            elif "tagoneswa" in s or "hardware" in s or "tg" in s:
+                return "Tagoneswa Hardware"
+            elif "kreckle" in s or "food" in s:
+                return "Kreckle Foods"
+            if ph_str and ph_str in OFFICIAL_SALES_REPS_DIRECTORY:
+                sp_c = OFFICIAL_SALES_REPS_DIRECTORY[ph_str].get("company", "").lower()
+                if "lg" in sp_c:
+                    return "LG Plast"
+                elif "tagoneswa" in sp_c or "tg" in sp_c:
+                    return "Tagoneswa Hardware"
+                elif "kreckle" in sp_c:
+                    return "Kreckle Foods"
+            return "LG Plast"
+
+        now_utc = datetime.datetime.utcnow()
+        # Day-wise: Last 14 days
+        days_list = [(now_utc - datetime.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+        day_map = {d: {"total": 0.0, "LG Plast": 0.0, "Tagoneswa Hardware": 0.0, "Kreckle Foods": 0.0, "trips": 0} for d in days_list}
+
+        # Month-wise: Last 6 months
+        months_list = []
+        for i in range(5, -1, -1):
+            m_date = now_utc - datetime.timedelta(days=i * 30)
+            m_key = m_date.strftime("%b %Y")
+            if m_key not in months_list:
+                months_list.append(m_key)
+        month_map = {m: {"total": 0.0, "LG Plast": 0.0, "Tagoneswa Hardware": 0.0, "Kreckle Foods": 0.0, "trips": 0} for m in months_list}
+
+        co_totals = {
+            "LG Plast": {"sales": 0.0, "trips": 0},
+            "Tagoneswa Hardware": {"sales": 0.0, "trips": 0},
+            "Kreckle Foods": {"sales": 0.0, "trips": 0}
+        }
+
+        for tr in raw_trips:
+            s_val = round(tr.trip_sales_value or 0.0, 2)
+            co = _normalize_co(tr.company_name, tr.salesperson_phone)
+            co_totals[co]["sales"] = round(co_totals[co]["sales"] + s_val, 2)
+            co_totals[co]["trips"] += 1
+
+            if tr.created_at:
+                d_str = tr.created_at.strftime("%Y-%m-%d")
+                if d_str in day_map:
+                    day_map[d_str]["total"] = round(day_map[d_str]["total"] + s_val, 2)
+                    day_map[d_str][co] = round(day_map[d_str][co] + s_val, 2)
+                    day_map[d_str]["trips"] += 1
+
+                m_str = tr.created_at.strftime("%b %Y")
+                if m_str in month_map:
+                    month_map[m_str]["total"] = round(month_map[m_str]["total"] + s_val, 2)
+                    month_map[m_str][co] = round(month_map[m_str][co] + s_val, 2)
+                    month_map[m_str]["trips"] += 1
+
+        sales_trends = {
+            "day_wise": {
+                "labels": [datetime.datetime.strptime(d, "%Y-%m-%d").strftime("%d %b") for d in days_list],
+                "dates": days_list,
+                "total": [day_map[d]["total"] for d in days_list],
+                "lg_plast": [day_map[d]["LG Plast"] for d in days_list],
+                "tagoneswa": [day_map[d]["Tagoneswa Hardware"] for d in days_list],
+                "kreckle": [day_map[d]["Kreckle Foods"] for d in days_list],
+                "trips": [day_map[d]["trips"] for d in days_list]
+            },
+            "month_wise": {
+                "labels": months_list,
+                "total": [month_map[m]["total"] for m in months_list],
+                "lg_plast": [month_map[m]["LG Plast"] for m in months_list],
+                "tagoneswa": [month_map[m]["Tagoneswa Hardware"] for m in months_list],
+                "kreckle": [month_map[m]["Kreckle Foods"] for m in months_list],
+                "trips": [month_map[m]["trips"] for m in months_list]
+            },
+            "company_wise": {
+                "companies": ["LG Plast", "Tagoneswa Hardware", "Kreckle Foods"],
+                "totals": [co_totals["LG Plast"]["sales"], co_totals["Tagoneswa Hardware"]["sales"], co_totals["Kreckle Foods"]["sales"]],
+                "trips": [co_totals["LG Plast"]["trips"], co_totals["Tagoneswa Hardware"]["trips"], co_totals["Kreckle Foods"]["trips"]],
+                "day_labels": [datetime.datetime.strptime(d, "%Y-%m-%d").strftime("%d %b") for d in days_list],
+                "day_lg": [day_map[d]["LG Plast"] for d in days_list],
+                "day_tg": [day_map[d]["Tagoneswa Hardware"] for d in days_list],
+                "day_kr": [day_map[d]["Kreckle Foods"] for d in days_list],
+                "month_labels": months_list,
+                "month_lg": [month_map[m]["LG Plast"] for m in months_list],
+                "month_tg": [month_map[m]["Tagoneswa Hardware"] for m in months_list],
+                "month_kr": [month_map[m]["Kreckle Foods"] for m in months_list]
+            }
+        }
+
         operations_analytics = {
             "total_sales": round(tot_sales, 2),
             "total_transport_charges": round(tot_trans, 2),
@@ -2117,7 +2210,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "cleared_payments_total": round(cleared_tot, 2),
             "outstanding_debt_total": round(debt_tot, 2),
             "cities": top_cities,
-            "routes": top_routes
+            "routes": top_routes,
+            "sales_trends": sales_trends
         }
 
         # Role-filtered analytics and payloads
@@ -2132,6 +2226,11 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "outstanding_debt_total": 0.0,
             "cities": [{"city": c["city"], "trips": c["trips"], "opex": c["opex"], "transport": c["transport"], "sales": 0.0} for c in top_cities],
             "routes": [{"route": r["route"], "city": r["city"], "trips": r["trips"], "opex": r["opex"], "transport": r["transport"], "sales": 0.0} for r in top_routes],
+            "sales_trends": {
+                "day_wise": {**sales_trends["day_wise"], "total": [0.0]*len(days_list), "lg_plast": [0.0]*len(days_list), "tagoneswa": [0.0]*len(days_list), "kreckle": [0.0]*len(days_list)},
+                "month_wise": {**sales_trends["month_wise"], "total": [0.0]*len(months_list), "lg_plast": [0.0]*len(months_list), "tagoneswa": [0.0]*len(months_list), "kreckle": [0.0]*len(months_list)},
+                "company_wise": {**sales_trends["company_wise"], "totals": [0.0, 0.0, 0.0], "day_lg": [0.0]*len(days_list), "day_tg": [0.0]*len(days_list), "day_kr": [0.0]*len(days_list), "month_lg": [0.0]*len(months_list), "month_tg": [0.0]*len(months_list), "month_kr": [0.0]*len(months_list)}
+            }
         }
 
         fleet_payload = {
@@ -3646,6 +3745,7 @@ async def dashboard_view(request: Request):
                     <div class="flex items-center gap-1.5" id="fleet-pagination-controls"></div>
                 </div>
             </div>
+        </div>
 
             <!-- SUBVIEW 7: FINANCIAL AUDIT & RECOVERY LEDGER -->
             {f"""
@@ -3771,6 +3871,62 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Shortfall Recovery Rate</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono" id="an-stat-recovery-rate">0%</div>
                         <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-recovery-sub">$0 recovered of $0</div>
+                    </div>
+                </div>
+
+                <!-- Dedicated Line Chart: Total Sales Revenue Trends (Day-Wise, Month-Wise, Company-Wise) -->
+                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/30">Commercial Trajectory</span>
+                                <span class="text-xs font-bold text-slate-400 dark:text-zinc-500 font-mono">Live ERP Sales</span>
+                            </div>
+                            <h3 class="text-sm sm:text-base font-extrabold uppercase tracking-tight text-slate-900 dark:text-zinc-100 mt-1">
+                                Total Sales Revenue Trends
+                            </h3>
+                            <p class="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                                Real-time sales trajectory tracked day-wise, month-wise, and company-wise across divisions.
+                            </p>
+                        </div>
+                        
+                        <!-- Line Chart View Selector: Day-Wise, Month-Wise, Company-Wise -->
+                        <div class="flex flex-wrap items-center gap-1.5 bg-slate-100 dark:bg-[#121216] p-1 rounded-xl border border-slate-200 dark:border-zinc-800 self-start md:self-auto">
+                            <button onclick="switchSalesChartMode('DAY')" id="btn-sales-chart-DAY" class="sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">
+                                📅 Day-Wise
+                            </button>
+                            <button onclick="switchSalesChartMode('MONTH')" id="btn-sales-chart-MONTH" class="sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">
+                                📆 Month-Wise
+                            </button>
+                            <button onclick="switchSalesChartMode('COMPANY')" id="btn-sales-chart-COMPANY" class="sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">
+                                🏢 Company-Wise (3 Lines)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Revenue KPI Mini-Bar for Chart -->
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 pt-3 border-t border-slate-100 dark:border-zinc-850">
+                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">Selected Total</div>
+                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5" id="sales-chart-total-val">$0.00</div>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">LG Plast Sales</div>
+                            <div class="text-base sm:text-lg font-extrabold text-blue-600 dark:text-blue-400 font-mono mt-0.5" id="sales-chart-lg-val">$0.00</div>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">Tagoneswa Sales</div>
+                            <div class="text-base sm:text-lg font-extrabold text-amber-600 dark:text-amber-400 font-mono mt-0.5" id="sales-chart-tg-val">$0.00</div>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
+                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">Kreckle Foods Sales</div>
+                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5" id="sales-chart-kreckle-val">$0.00</div>
+                        </div>
+                    </div>
+
+                    <!-- Line Chart Canvas Container -->
+                    <div class="h-72 sm:h-80 relative w-full">
+                        <canvas id="an-sales-trend-line-chart"></canvas>
                     </div>
                 </div>
 

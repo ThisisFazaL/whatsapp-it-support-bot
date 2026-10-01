@@ -873,6 +873,7 @@ function escapeJsAttr(val) {
         window.analyticsCharts = window.analyticsCharts || {};
         window.lastFleetAnalytics = null;
         window.lastFleetStats = null;
+        window.currentSalesChartMode = 'DAY';
 
         function destroyAnalyticsChart(key) {
             if (window.analyticsCharts[key]) {
@@ -880,6 +881,301 @@ function escapeJsAttr(val) {
                 delete window.analyticsCharts[key];
             }
         }
+
+        function switchSalesChartMode(mode) {
+            window.currentSalesChartMode = mode;
+            ['DAY', 'MONTH', 'COMPANY'].forEach(m => {
+                const btn = document.getElementById('btn-sales-chart-' + m);
+                if (btn) {
+                    if (m === mode) {
+                        btn.className = 'sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer';
+                    } else {
+                        btn.className = 'sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer';
+                    }
+                }
+            });
+
+            if (window.lastFleetAnalytics) {
+                renderSalesTrendLineChart(window.lastFleetAnalytics.sales_trends, mode, window.selectedFleetCompany || 'ALL');
+            }
+        }
+        window.switchSalesChartMode = switchSalesChartMode;
+
+        function renderSalesTrendLineChart(trends, mode, companyFilter) {
+            const canvas = document.getElementById('an-sales-trend-line-chart');
+            if (!canvas || typeof Chart === 'undefined') return;
+
+            destroyAnalyticsChart('sales_trend');
+
+            trends = trends || (window.lastFleetAnalytics ? window.lastFleetAnalytics.sales_trends : null);
+            if (!trends) return;
+
+            mode = mode || window.currentSalesChartMode || 'DAY';
+            companyFilter = companyFilter || window.selectedFleetCompany || 'ALL';
+
+            const isDark = document.documentElement.classList.contains('dark');
+
+            // 1. Update KPI badges
+            const coTrends = trends.company_wise || {};
+            const dayTrends = trends.day_wise || {};
+            const monthTrends = trends.month_wise || {};
+
+            const lgSales = (coTrends.totals && coTrends.totals[0] != null) ? Number(coTrends.totals[0]) : 0;
+            const tgSales = (coTrends.totals && coTrends.totals[1] != null) ? Number(coTrends.totals[1]) : 0;
+            const krSales = (coTrends.totals && coTrends.totals[2] != null) ? Number(coTrends.totals[2]) : 0;
+            const totalSales = lgSales + tgSales + krSales;
+
+            const totalEl = document.getElementById('sales-chart-total-val');
+            if (totalEl) totalEl.textContent = '$' + Number(totalSales).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+            const lgEl = document.getElementById('sales-chart-lg-val');
+            if (lgEl) lgEl.textContent = '$' + Number(lgSales).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+            const tgEl = document.getElementById('sales-chart-tg-val');
+            if (tgEl) tgEl.textContent = '$' + Number(tgSales).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+            const krEl = document.getElementById('sales-chart-kreckle-val');
+            if (krEl) krEl.textContent = '$' + Number(krSales).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+            // 2. Build chart data based on mode & company filter
+            let labels = [];
+            let datasets = [];
+
+            const ctx = canvas.getContext('2d');
+            function createGrad(c1, c2) {
+                try {
+                    const g = ctx.createLinearGradient(0, 0, 0, 300);
+                    g.addColorStop(0, c1);
+                    g.addColorStop(1, c2);
+                    return g;
+                } catch (e) {
+                    return c1;
+                }
+            }
+
+            if (mode === 'COMPANY') {
+                // Multi-line comparison of all 3 companies side-by-side
+                labels = dayTrends.labels || [];
+                const gradLg = createGrad('rgba(59, 130, 246, 0.22)', 'rgba(59, 130, 246, 0.0)');
+                const gradTg = createGrad('rgba(245, 158, 11, 0.22)', 'rgba(245, 158, 11, 0.0)');
+                const gradKr = createGrad('rgba(16, 185, 129, 0.22)', 'rgba(16, 185, 129, 0.0)');
+
+                datasets = [
+                    {
+                        label: 'LG Plast ($)',
+                        data: dayTrends.lg_plast || [],
+                        borderColor: '#3b82f6',
+                        backgroundColor: gradLg,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2.5,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#3b82f6'
+                    },
+                    {
+                        label: 'Tagoneswa Hardware ($)',
+                        data: dayTrends.tagoneswa || [],
+                        borderColor: '#f59e0b',
+                        backgroundColor: gradTg,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2.5,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#f59e0b'
+                    },
+                    {
+                        label: 'Kreckle Foods ($)',
+                        data: dayTrends.kreckle || [],
+                        borderColor: '#10b981',
+                        backgroundColor: gradKr,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2.5,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#10b981'
+                    }
+                ];
+            } else if (mode === 'MONTH') {
+                labels = monthTrends.labels || [];
+                if (companyFilter !== 'ALL') {
+                    const cLower = companyFilter.toLowerCase();
+                    let subData = monthTrends.total || [];
+                    let coLabel = 'Monthly Sales ($)';
+                    let coColor = '#6366f1';
+
+                    if (cLower.includes('lg')) {
+                        subData = monthTrends.lg_plast || [];
+                        coLabel = 'LG Plast Monthly Sales ($)';
+                        coColor = '#3b82f6';
+                    } else if (cLower.includes('tagoneswa') || cLower.includes('tg') || cLower.includes('hardware')) {
+                        subData = monthTrends.tagoneswa || [];
+                        coLabel = 'Tagoneswa Hardware Monthly Sales ($)';
+                        coColor = '#f59e0b';
+                    } else if (cLower.includes('kreckle')) {
+                        subData = monthTrends.kreckle || [];
+                        coLabel = 'Kreckle Foods Monthly Sales ($)';
+                        coColor = '#10b981';
+                    }
+
+                    const grad = createGrad(coColor + '40', coColor + '00');
+                    datasets = [{
+                        label: coLabel,
+                        data: subData,
+                        borderColor: coColor,
+                        backgroundColor: grad,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2.5,
+                        pointRadius: 4,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: coColor
+                    }];
+                } else {
+                    const gradTot = createGrad('rgba(99, 102, 241, 0.28)', 'rgba(99, 102, 241, 0.0)');
+                    datasets = [{
+                        label: 'Total Monthly Sales ($)',
+                        data: monthTrends.total || [],
+                        borderColor: '#6366f1',
+                        backgroundColor: gradTot,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 3,
+                        pointRadius: 4,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: '#6366f1'
+                    }];
+                }
+            } else {
+                // DAY mode (Default)
+                labels = dayTrends.labels || [];
+                if (companyFilter !== 'ALL') {
+                    const cLower = companyFilter.toLowerCase();
+                    let subData = dayTrends.total || [];
+                    let coLabel = 'Daily Sales ($)';
+                    let coColor = '#10b981';
+
+                    if (cLower.includes('lg')) {
+                        subData = dayTrends.lg_plast || [];
+                        coLabel = 'LG Plast Daily Sales ($)';
+                        coColor = '#3b82f6';
+                    } else if (cLower.includes('tagoneswa') || cLower.includes('tg') || cLower.includes('hardware')) {
+                        subData = dayTrends.tagoneswa || [];
+                        coLabel = 'Tagoneswa Hardware Daily Sales ($)';
+                        coColor = '#f59e0b';
+                    } else if (cLower.includes('kreckle')) {
+                        subData = dayTrends.kreckle || [];
+                        coLabel = 'Kreckle Foods Daily Sales ($)';
+                        coColor = '#10b981';
+                    }
+
+                    const grad = createGrad(coColor + '40', coColor + '00');
+                    datasets = [{
+                        label: coLabel,
+                        data: subData,
+                        borderColor: coColor,
+                        backgroundColor: grad,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 2.5,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: coColor
+                    }];
+                } else {
+                    const gradTot = createGrad('rgba(16, 185, 129, 0.28)', 'rgba(16, 185, 129, 0.0)');
+                    datasets = [{
+                        label: 'Total Daily Sales ($)',
+                        data: dayTrends.total || [],
+                        borderColor: '#10b981',
+                        backgroundColor: gradTot,
+                        fill: true,
+                        tension: 0.35,
+                        borderWidth: 3,
+                        pointRadius: 3,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#10b981'
+                    }];
+                }
+            }
+
+            window.analyticsCharts['sales_trend'] = new Chart(canvas, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        legend: {
+                            display: mode === 'COMPANY',
+                            position: 'top',
+                            align: 'end',
+                            labels: {
+                                color: isDark ? '#d4d4d8' : '#334155',
+                                boxWidth: 10,
+                                boxHeight: 10,
+                                usePointStyle: true,
+                                font: { size: 11, weight: '600' }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: isDark ? '#18181b' : '#ffffff',
+                            titleColor: isDark ? '#f4f4f5' : '#0f172a',
+                            bodyColor: isDark ? '#d4d4d8' : '#334155',
+                            borderColor: isDark ? '#27272a' : '#e2e8f0',
+                            borderWidth: 1,
+                            padding: 10,
+                            boxPadding: 4,
+                            callbacks: {
+                                label: function(ctx) {
+                                    const val = Number(ctx.parsed.y || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                                    return ` ${ctx.dataset.label || ''}: $${val}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                color: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
+                                display: true
+                            },
+                            ticks: {
+                                color: isDark ? '#a1a1aa' : '#64748b',
+                                font: { size: 10, weight: '600' },
+                                maxRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: 12
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'
+                            },
+                            ticks: {
+                                color: isDark ? '#a1a1aa' : '#64748b',
+                                font: { size: 10, weight: '600' },
+                                callback: function(val) {
+                                    if (val >= 1000) return '$' + (val / 1000).toFixed(1) + 'k';
+                                    return '$' + val;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        window.renderSalesTrendLineChart = renderSalesTrendLineChart;
 
         function renderAnalyticsSection(an, stats) {
             if (!an && !stats) return;
@@ -915,7 +1211,10 @@ function escapeJsAttr(val) {
 
             const isDark = document.documentElement.classList.contains('dark');
 
-            // 2. Chart 1: Pipeline Stage Volume (Chart.js Bar Chart)
+            // 2. Sales Trend Line Chart (Day-Wise, Month-Wise, Company-Wise)
+            renderSalesTrendLineChart(an.sales_trends, window.currentSalesChartMode || 'DAY', window.selectedFleetCompany || 'ALL');
+
+            // 3. Chart 1: Pipeline Stage Volume (Chart.js Bar Chart)
             const ctxPipeline = document.getElementById('an-pipeline-chart');
             if (ctxPipeline && typeof Chart !== 'undefined') {
                 destroyAnalyticsChart('pipeline');
