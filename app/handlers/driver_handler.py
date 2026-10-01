@@ -365,7 +365,7 @@ async def handle_driver_interaction(
 
         trip_id = trip.trip_id
         if not trip.returning_at:
-            trip.returning_at = datetime.datetime.now(datetime.UTC)
+            trip.returning_at = datetime.datetime.utcnow()
         trip.status = "RETURNING"
         trip.is_live_location_active = False
         await session.commit()

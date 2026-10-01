@@ -23,7 +23,7 @@ def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) ->
     """Fast check whether an incoming message belongs to the fleet operations subsystem."""
     txt = (message_text or "").strip().lower()
 
-    if txt.startswith(("flt_", "location_pin_", "btn_dispatch_", "btn_add_trans_", "btn_short_")):
+    if txt.startswith(("flt_", "location_pin_", "btn_dispatch_", "btn_add_trans_", "btn_short_")) or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges"}:
         return True
 
     if state and state.flow_name:
@@ -95,7 +95,7 @@ async def dispatch_fleet_message(
             return True
 
     # 3. Driver Transit Actions
-    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "flt_odo_", "location_pin_")) or fn == "fleet_driver":
+    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "flt_odo_", "location_pin_")) or fn == "fleet_driver" or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges"}:
         handled = await handle_driver_interaction(session, clean_p, message_text, state, image_id=image_id)
         if handled:
             return True
