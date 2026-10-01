@@ -36,27 +36,29 @@ router = APIRouter()
 IT_SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
 
 OFFICIAL_SALES_REPS_DIRECTORY = {
-    # LG Plast Sales Reps
-    "263779214825": {"name": "Ashraf Nedziwe", "company": "LG Plast"},
-    "263711421201": {"name": "Mercy Mungoriwo", "company": "LG Plast"},
-    "263777425204": {"name": "Callistus Keche", "company": "LG Plast"},
-    "263781337103": {"name": "Primrose Makumbe", "company": "LG Plast"},
-    "263712498581": {"name": "Sharon Mushava", "company": "LG Plast"},
-    "263787448975": {"name": "Tatenda Mombechena", "company": "LG Plast"},
-    "263786032376": {"name": "Wallace Muzarurwi", "company": "LG Plast"},
-    # Tagoneswa Hardware Sales Reps
-    "263718643451": {"name": "Stuart Chaleka", "company": "Tagoneswa Hardware"},
-    "263782723251": {"name": "Vanessa Zimbiti", "company": "Tagoneswa Hardware"},
-    "263717905914": {"name": "Tafadzwa Sungiso", "company": "Tagoneswa Hardware"},
-    "263717905915": {"name": "Talent Ruziwe", "company": "Tagoneswa Hardware"},
-    "263788231069": {"name": "Tafadzwa Chikove", "company": "Tagoneswa Hardware"},
-    "263780435477": {"name": "Tanaka Mupfumi", "company": "Tagoneswa Hardware"},
-    # Kreckle Sales Reps
-    "263780543771": {"name": "David Mungadzi", "company": "Kreckle Foods"},
-    "263780806954": {"name": "Patience Ndlovu", "company": "Kreckle Foods"},
-    "263783103611": {"name": "Mufaro Gambiza", "company": "Kreckle Foods"},
-    "263780573092": {"name": "Rosa Ndimande Samihembo", "company": "Kreckle Foods"},
-    "263784566997": {"name": "Kudzai Marevesa", "company": "Kreckle Foods"},
+    # ── LG Plast Sales Reps (7) ───────────────────────────────────────────────
+    "263779214825": {"name": "Ashraf Nedziwe",      "company": "LG Plast"},
+    "263711421201": {"name": "Mercy Mungoriwo",      "company": "LG Plast"},
+    "263777425204": {"name": "Callistus Keche",      "company": "LG Plast"},
+    "263781337103": {"name": "Primrose Makumbe",     "company": "LG Plast"},
+    "263712498581": {"name": "Sharon Mushava",       "company": "LG Plast"},
+    "263787448975": {"name": "Tatenda Mombechena",   "company": "LG Plast"},
+    "263786032376": {"name": "Wallace Muzarurwi",    "company": "LG Plast"},
+
+    # ── Tagoneswa Hardware Sales Reps (6) ─────────────────────────────────────
+    "263718643451": {"name": "Stuart Chaleka",       "company": "Tagoneswa Hardware"},
+    "263782723251": {"name": "Vanessa Zimbiti",      "company": "Tagoneswa Hardware"},
+    "263717905914": {"name": "Tafadzwa Sungiso",     "company": "Tagoneswa Hardware"},
+    "263717905915": {"name": "Talent Ruziwe",        "company": "Tagoneswa Hardware"},
+    "263788231069": {"name": "Tafadzwa Chikove",     "company": "Tagoneswa Hardware"},
+    "263780435477": {"name": "Tanaka Mupfumi",       "company": "Tagoneswa Hardware"},
+
+    # ── Kreckle Foods Sales Reps (5) ──────────────────────────────────────────
+    "263780543771": {"name": "David Mungadzi",           "company": "Kreckle Foods"},
+    "263780806954": {"name": "Patience Ndlovu",          "company": "Kreckle Foods"},
+    "263783103611": {"name": "Mufaro Gambiza",           "company": "Kreckle Foods"},
+    "263784566997": {"name": "Kudzai Marevesa",          "company": "Kreckle Foods"},
+    "263780573092": {"name": "Ndiwande Samihembo Rosa",  "company": "Kreckle Foods"},
 }
 
 def get_client_ip(request: Request) -> str:
@@ -4630,8 +4632,11 @@ async def dashboard_view(request: Request):
         window.canViewBalances = {'true' if can_view_balances else 'false'};
         window.initialAllowedDomains = {allowed_domains_json};
         window.initialDefaultTab = '{default_tab}';
+        window.currentUserRole = '{user.get("role", "")}';
+        window.currentUserCompany = '{user.get("company", "")}';
+        window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.4.1"></script>
+    <script src="/static/js/dashboard.js?v=2.4.2"></script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)

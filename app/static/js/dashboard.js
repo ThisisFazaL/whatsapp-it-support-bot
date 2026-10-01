@@ -3777,3 +3777,13 @@ function escapeJsAttr(val) {
                 fetchDashboard();
             }
         });
+
+        // Auto-apply company filter if the logged-in user has a company (e.g. named Sales Admin)
+        if (window.currentUserCompany && window.currentUserCompany.trim() !== '') {
+            // Apply after first data loads (1.5s grace to allow fetchDashboard to complete)
+            setTimeout(() => {
+                if (typeof switchFleetCompany === 'function') {
+                    switchFleetCompany(window.currentUserCompany);
+                }
+            }, 1500);
+        }

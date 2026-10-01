@@ -81,7 +81,63 @@ USERS_DB = {
         "role": "EXECUTIVE_OBSERVER",
         "name": "Executive Observer",
         "allowed_domains": ["it", "projects", "logistics", "fleet"]
-    }
+    },
+
+    # ── Sales Admins (individual named logins) ────────────────────────────────
+    "everjoy": {
+        "username": "everjoy",
+        "password": os.getenv("DASHBOARD_EVERJOY_PASS", "Everjoy@Kreckle2026!"),
+        "role": "SALES_ADMIN",
+        "name": "Everjoy Tias",
+        "company": "Kreckle Foods",
+        "phone": "263780216289",
+        "allowed_domains": ["fleet"]
+    },
+    "onelly": {
+        "username": "onelly",
+        "password": os.getenv("DASHBOARD_ONELLY_PASS", "Onelly@LGPlast2026!"),
+        "role": "SALES_ADMIN",
+        "name": "Onelly Madziro",
+        "company": "LG Plast",
+        "phone": "263787381215",
+        "allowed_domains": ["fleet"]
+    },
+    "christine": {
+        "username": "christine",
+        "password": os.getenv("DASHBOARD_CHRISTINE_PASS", "Christine@TG2026!"),
+        "role": "SALES_ADMIN",
+        "name": "Christine Chiweshe",
+        "company": "Tagoneswa Hardware",
+        "phone": "263783498457",
+        "allowed_domains": ["fleet"]
+    },
+    "mazviita": {
+        "username": "mazviita",
+        "password": os.getenv("DASHBOARD_MAZVIITA_PASS", "Mazviita@LGPlast2026!"),
+        "role": "SALES_ADMIN",
+        "name": "Mazviita Sibongile Ruzvidzo",
+        "company": "LG Plast",
+        "phone": "263718174894",
+        "allowed_domains": ["fleet"]
+    },
+
+    # ── Accounts (individual named logins) ────────────────────────────────────
+    "vigilance": {
+        "username": "vigilance",
+        "password": os.getenv("DASHBOARD_VIGILANCE_PASS", "Vigilance@Accounts2026!"),
+        "role": "ACCOUNTS_USER",
+        "name": "Vigilance Bangezhano",
+        "phone": "263780100288",
+        "allowed_domains": ["accounts", "fleet"]
+    },
+    "munashe": {
+        "username": "munashe",
+        "password": os.getenv("DASHBOARD_MUNASHE_PASS", "Munashe@Accounts2026!"),
+        "role": "ACCOUNTS_USER",
+        "name": "Munashe Milca",
+        "phone": "263788068567",
+        "allowed_domains": ["accounts", "fleet"]
+    },
 }
 
 COOKIE_NAME = "tagoneswa_session"
