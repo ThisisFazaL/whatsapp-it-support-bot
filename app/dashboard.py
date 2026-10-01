@@ -896,6 +896,47 @@ async def api_save_truck(request: Request, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.post("/api/v2/fleet/trucks/delete")
+async def api_delete_truck(request: Request, db: AsyncSession = Depends(get_db)):
+    """Deletes a commercial truck from the fleet database."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_trucks")
+
+    body = await request.json()
+    truck_id = body.get("truck_id")
+    if not truck_id:
+        raise HTTPException(status_code=400, detail="Truck ID is required.")
+
+    stmt = select(WorkshopTruck).where(WorkshopTruck.truck_id == int(truck_id))
+    truck = (await db.execute(stmt)).scalars().first()
+    if not truck:
+        raise HTTPException(status_code=404, detail="Truck not found.")
+
+    uname = user.get("name", "Admin")
+    plate_number = truck.plate_number
+    truck_number = truck.truck_number
+
+    await db.delete(truck)
+
+    audit = AuditLog(
+        username=uname,
+        user_role=user.get("role", "FLEET_ADMIN"),
+        action="DELETE_COMMERCIAL_TRUCK",
+        module="FLEET_MANAGEMENT",
+        permission_used="manage_trucks",
+        entity_id=plate_number,
+        previous_value={"truck_number": truck_number, "plate_number": plate_number},
+        new_value=None,
+        remarks=f"Deleted truck #{truck_number} ({plate_number}) by {uname}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {"status": "success", "message": f"Truck #{truck_number} ({plate_number}) removed."}
+
+
 @router.post("/api/v2/fleet/drivers/save")
 async def api_save_driver(request: Request, db: AsyncSession = Depends(get_db)):
     """Creates or updates a commercial driver in staff and employee directories."""
@@ -1848,23 +1889,25 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
 
         # If audit logs are fewer than 6, blend with real recent payments & trip approvals
         if len(recent_activity_list) < 6:
-            for pm in payments_list[:4]:
-                recent_activity_list.append({
-                    "id": f"pay-{pm['id']}",
-                    "timestamp": pm["payment_date"],
-                    "category": "FINANCE",
-                    "title": f"Cleared ${pm['cleared_amount']:,.2f} Debt",
-                    "description": f"Settlement recorded for {pm['salesperson_name']} via {pm['payment_method']}",
-                    "actor": pm["recorded_by"],
-                    "badge_class": "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30"
-                })
+            if can_view_balances:
+                for pm in payments_list[:4]:
+                    recent_activity_list.append({
+                        "id": f"pay-{pm['id']}",
+                        "timestamp": pm["payment_date"],
+                        "category": "FINANCE",
+                        "title": f"Cleared ${pm['cleared_amount']:,.2f} Debt",
+                        "description": f"Settlement recorded for {pm['salesperson_name']} via {pm['payment_method']}",
+                        "actor": pm["recorded_by"],
+                        "badge_class": "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30"
+                    })
             for fa in approval_records[:4]:
+                sales_desc = f" (${fa['trip_sales_value']:,.2f})" if can_view_balances else ""
                 recent_activity_list.append({
                     "id": f"app-{fa['id']}",
                     "timestamp": fa["created_at"],
                     "category": "APPROVALS",
                     "title": f"Trip {fa['trip_id']} Approved",
-                    "description": f"{fa['salesperson_name']} to {fa['destination_city']} (${fa['trip_sales_value']:,.2f})",
+                    "description": f"{fa['salesperson_name']} to {fa['destination_city']}{sales_desc}",
                     "actor": "Fleet Operations",
                     "badge_class": "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30"
                 })
@@ -1963,16 +2006,41 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "routes": top_routes
         }
 
+        # Role-filtered analytics and payloads
+        filtered_analytics = operations_analytics if can_view_balances else {
+            **operations_analytics,
+            "total_sales": 0.0,
+            "avg_revenue_per_trip": 0.0,
+            "net_amount": 0.0,
+            "shortfall_total": 0.0,
+            "recovery_total": 0.0,
+            "cleared_payments_total": 0.0,
+            "outstanding_debt_total": 0.0,
+            "cities": [{"city": c["city"], "trips": c["trips"], "opex": c["opex"], "transport": c["transport"], "sales": 0.0} for c in top_cities],
+            "routes": [{"route": r["route"], "city": r["city"], "trips": r["trips"], "opex": r["opex"], "transport": r["transport"], "sales": 0.0} for r in top_routes],
+        }
+
         fleet_payload = {
-            "stats": fleet_stats,
-            "salespersons": salespersons_list,
-            "sales_reps": sales_reps_list,
-            "records": approval_records,
-            "trips": trips_list,
-            "payments": payments_list,
-            "ledger": ledger_records,
+            "stats": fleet_stats if can_view_balances else {
+                **fleet_stats,
+                "total_sales_value": 0.0,
+                "total_outstanding_backlog": 0.0,
+                "total_recovered": 0.0,
+            },
+            "salespersons": salespersons_list if can_view_balances else [],
+            "sales_reps": sales_reps_list if can_view_balances else [],
+            "records": approval_records if can_view_balances else [
+                {**r, "trip_sales_value": 0.0, "shortfall": 0.0, "pending_balance_recorded": 0.0}
+                for r in approval_records
+            ],
+            "trips": trips_list if can_view_balances else [
+                {**t, "trip_sales_value": 0.0}
+                for t in trips_list
+            ],
+            "payments": payments_list if can_view_balances else [],
+            "ledger": ledger_records if can_view_balances else [],
             "audit_logs": audit_records,
-            "analytics": operations_analytics,
+            "analytics": filtered_analytics,
             "cities": sorted(list(cities_set)),
             "route_rules": get_all_cached_city_rules(),
             "fuel_price": get_fuel_price(),
@@ -2005,7 +2073,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 },
                 "alerts": operations_alerts,
                 "recent_activity": recent_activity_list,
-                "analytics": operations_analytics,
+                "analytics": filtered_analytics,
                 "audit_logs": audit_records[:15],
                 "role": user.get("role"),
                 "is_read_only": is_observer
@@ -2034,12 +2102,14 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         total_ops += fleet_payload["stats"]["total_trips"]
 
     res_rate = int((resolved_ops / total_ops) * 100) if total_ops > 0 else 100
+    pending_fleet_approvals = sum(1 for fa in fleet_approvals if fa.status == "SHORTFALL_RECORDED") if fleet_payload else 0
     master_kpis = {
         "active_operations": active_ops,
+        "pending_approvals": pending_fleet_approvals,
         "resolved_operations": resolved_ops,
         "total_operations": total_ops,
         "resolution_rate_pct": res_rate,
-        "total_financial_backlog": fleet_payload["stats"]["total_outstanding_backlog"] if fleet_payload else 0.0,
+        "total_financial_backlog": fleet_payload["stats"]["total_outstanding_backlog"] if (fleet_payload and can_view_balances) else 0.0,
         "transport_revenue": fleet_payload["stats"]["total_transport_charges"] if fleet_payload else 0.0
     }
 
@@ -2107,12 +2177,11 @@ async def dashboard_view(request: Request):
     sidebar_links.append('<button onclick="switchFleetSubView(\'drivers\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Commercial Drivers</button>')
     sidebar_links.append('<button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Delivery Corridors</button>')
 
-    sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
     if can_view_balances:
+        sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Finance & Ledgers</div>')
         sidebar_links.append('<button onclick="switchFleetSubView(\'salespersons\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Sales Representative Balances</button>')
-    if can_view_balances or can_clear_debt:
         sidebar_links.append('<button onclick="switchFleetSubView(\'payments\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Payment History</button>')
-    sidebar_links.append('<button onclick="switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Financial Audit Log</button>')
+        sidebar_links.append('<button onclick="switchFleetSubView(\'ledger\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Financial Audit Log</button>')
 
     sidebar_links.append('<div class="px-4 pt-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Analytics & Insights</div>')
     sidebar_links.append('<button onclick="switchFleetSubView(\'analytics\'); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">Operations Analytics</button>')
@@ -2127,6 +2196,14 @@ async def dashboard_view(request: Request):
             sidebar_links.append('<button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full text-left px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition flex items-center gap-2.5">System Audit Logs</button>')
 
     sidebar_markup = "\n".join(sidebar_links)
+
+    nav_salespersons_opt = '<option value="salespersons">Sales Representative Balances</option>' if can_view_balances else ''
+    nav_payments_opt = '<option value="payments">Payment History</option>' if can_view_balances else ''
+    nav_ledger_opt = '<option value="ledger">Financial Audit Log</option>' if can_view_balances else ''
+
+    nav_salespersons_btn = '<button onclick="switchFleetSubView(\'salespersons\')" id="fleet-btn-salespersons" data-view="salespersons" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Sales Reps</button>' if can_view_balances else ''
+    nav_payments_btn = '<button onclick="switchFleetSubView(\'payments\')" id="fleet-btn-payments" data-view="payments" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Payments</button>' if can_view_balances else ''
+    nav_ledger_btn = '<button onclick="switchFleetSubView(\'ledger\')" id="fleet-btn-ledger" data-view="ledger" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Audit Log</button>' if can_view_balances else ''
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2369,7 +2446,7 @@ async def dashboard_view(request: Request):
                 <!-- Controls & Filters -->
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="it-search" placeholder="🔍 Search employee, ticket #, issue..." oninput="filterITTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="it-search" placeholder="Search employee, ticket #, issue..." oninput="filterITTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- Admin Filter -->
                         <select id="it-admin-filter" onchange="filterITTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
@@ -2472,7 +2549,7 @@ async def dashboard_view(request: Request):
             <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="proj-search" placeholder="🔍 Search site, ticket #, repair..." oninput="filterProjectsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="proj-search" placeholder="Search site, ticket #, repair..." oninput="filterProjectsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- Location Filter -->
                         <select id="proj-loc-filter" onchange="filterProjectsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
@@ -2570,7 +2647,7 @@ async def dashboard_view(request: Request):
             <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="ws-search" placeholder="🔍 Search truck #, plate, fault notes..." oninput="filterFleetTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="ws-search" placeholder="Search truck #, plate, fault notes..." oninput="filterFleetTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- Mechanic Filter -->
                         <select id="ws-mech-filter" onchange="filterFleetTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
@@ -2671,15 +2748,16 @@ async def dashboard_view(request: Request):
 
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
-                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Active Tasks</div>
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Pending Approvals</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-amber-400 mt-1 font-mono" id="master-active-ops">0</div>
-                        <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Pending approvals</div>
+                        <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Trips requiring review</div>
                     </div>
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Clearance Rate</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1 font-mono" id="master-res-rate">100%</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Approved vs dispatched</div>
                     </div>
+                    {f"""
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Transport Billed</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1 font-mono" id="master-transport-revenue">$0.00</div>
@@ -2690,6 +2768,18 @@ async def dashboard_view(request: Request):
                         <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1 font-mono" id="master-financial-backlog">$0.00</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Pending shortfall recovery</div>
                     </div>
+                    """ if can_view_balances else f"""
+                    <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active In-Transit</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1 font-mono" id="master-in-transit-count">{in_transit_trips}</div>
+                        <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Commercial trips rolling</div>
+                    </div>
+                    <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Commercial Roster</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1 font-mono" id="master-roster-count">{len(trucks_list)} Vehicles</div>
+                        <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">{drivers_active} Active Drivers</div>
+                    </div>
+                    """}
                 </div>
             </div>
 
@@ -2700,12 +2790,12 @@ async def dashboard_view(request: Request):
                     <select id="fleet-view-selector" onchange="switchFleetSubView(this.value)" class="w-full bg-slate-100 dark:bg-zinc-800/90 text-slate-900 dark:text-zinc-100 text-xs font-bold px-3 py-2 rounded-xl border border-slate-300 dark:border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500">
                         <option value="overview">Operations Overview</option>
                         <option value="trips">Trip Pipeline</option>
-                        <option value="salespersons">Sales Representative Balances</option>
-                        <option value="payments">Payment History</option>
+                        {nav_salespersons_opt}
+                        {nav_payments_opt}
                         <option value="trucks">Fleet Vehicles</option>
                         <option value="drivers">Commercial Drivers</option>
                         <option value="approvals">Trip Approvals</option>
-                        <option value="ledger">Financial Audit Log</option>
+                        {nav_ledger_opt}
                         <option value="analytics">Data Analytics</option>
                         <option value="all">Consolidated View</option>
                     </select>
@@ -2715,12 +2805,12 @@ async def dashboard_view(request: Request):
                 <div class="hidden sm:flex items-center gap-1 overflow-x-auto no-scrollbar" id="fleet-fast-nav">
                     <button onclick="switchFleetSubView('overview')" id="fleet-btn-overview" data-view="overview" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer whitespace-nowrap">Overview</button>
                     <button onclick="switchFleetSubView('trips')" id="fleet-btn-trips" data-view="trips" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Trips</button>
-                    <button onclick="switchFleetSubView('salespersons')" id="fleet-btn-salespersons" data-view="salespersons" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Sales Reps</button>
-                    <button onclick="switchFleetSubView('payments')" id="fleet-btn-payments" data-view="payments" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Payments</button>
+                    {nav_salespersons_btn}
+                    {nav_payments_btn}
                     <button onclick="switchFleetSubView('trucks')" id="fleet-btn-trucks" data-view="trucks" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Vehicles</button>
                     <button onclick="switchFleetSubView('drivers')" id="fleet-btn-drivers" data-view="drivers" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Drivers</button>
                     <button onclick="switchFleetSubView('approvals')" id="fleet-btn-approvals" data-view="approvals" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Approvals</button>
-                    <button onclick="switchFleetSubView('ledger')" id="fleet-btn-ledger" data-view="ledger" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Audit Log</button>
+                    {nav_ledger_btn}
                     <button onclick="switchFleetSubView('analytics')" id="fleet-btn-analytics" data-view="analytics" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">Analytics</button>
                     <button onclick="switchFleetSubView('all')" id="fleet-btn-all" data-view="all" class="fleet-quick-pill px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer whitespace-nowrap">All</button>
                 </div>
@@ -2810,6 +2900,7 @@ async def dashboard_view(request: Request):
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Successfully settled</div>
                         </div>
                         <!-- Average Revenue per Trip -->
+                        {f"""
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Avg Revenue / Trip</span>
@@ -2817,6 +2908,15 @@ async def dashboard_view(request: Request):
                             <div class="text-2xl sm:text-3xl font-extrabold text-slate-800 dark:text-zinc-100 mt-1 font-mono truncate" id="ov-kpi-avg-revenue">$0.00</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Manifest revenue mean</div>
                         </div>
+                        """ if can_view_balances else f"""
+                        <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
+                            <div class="flex items-center justify-between">
+                                <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active In-Transit</span>
+                            </div>
+                            <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono truncate" id="ov-kpi-transit-ops">{in_transit_trips}</div>
+                            <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Currently rolling</div>
+                        </div>
+                        """}
                     </div>
                 </div>
 
@@ -2863,7 +2963,8 @@ async def dashboard_view(request: Request):
                 </div>
 
                 <!-- ═══ TIER 4: FINANCIAL OVERVIEW ═══ -->
-                <div>
+                {f"""
+                <div id="ov-financial-tier-4">
                     <div class="flex items-center gap-2 mb-3">
                         <span class="text-[10px] font-black uppercase tracking-widest text-indigo-600 dark:text-indigo-400">Financial Overview</span>
                         <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-medium">Trip manifests, billings & ledger totals</span>
@@ -2901,6 +3002,7 @@ async def dashboard_view(request: Request):
                         </div>
                     </div>
                 </div>
+                """ if can_view_balances else ""}
 
                 <!-- ═══ TIER 5: OPERATIONAL EXPENSES ═══ -->
                 <div>
@@ -3080,7 +3182,7 @@ async def dashboard_view(request: Request):
             <div id="fleet-section-trips" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200" style="display: none;">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="trips-search" placeholder="🔍 Search Trip #, Driver, Truck, City..." oninput="filterTripsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="trips-search" placeholder="Search Trip #, Driver, Truck, City..." oninput="filterTripsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <select id="trips-stage-filter" onchange="filterTripsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
                             <option value="ALL">All Trip Stages (1–7)</option>
@@ -3126,6 +3228,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- SUBVIEW 2: SALESPERSON DEBT LEDGER & BALANCES -->
+            {f"""
             <div id="fleet-section-salespersons" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
                     <div>
@@ -3135,16 +3238,16 @@ async def dashboard_view(request: Request):
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative with instant clearance action</p>
                     </div>
                     <div class="flex items-center gap-2.5">
-                        {"" if not (user_has_permission(user, "manage_sales_pipeline") or can_manage_trucks) else """
+                        {"" if not (user_has_permission(user, "manage_sales_pipeline") or can_manage_trucks) else '''
                         <button onclick="openAddSalesRepModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
                             <span>+</span> Add Sales Rep
                         </button>
-                        """}
-                        {"" if not can_clear_debt else """
+                        '''}
+                        {"" if not can_clear_debt else '''
                         <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
                             Clear Debt Payment
                         </button>
-                        """}
+                        '''}
                         <div class="text-right">
                             <span class="text-xs font-bold text-slate-500 dark:text-zinc-400">Total Pending: </span>
                             <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
@@ -3165,11 +3268,11 @@ async def dashboard_view(request: Request):
                         </h3>
                         <p class="text-[11px] text-slate-500 dark:text-zinc-400">Official accounting verification and payment offset audit history</p>
                     </div>
-                    {"" if not can_clear_debt else """
+                    {"" if not can_clear_debt else '''
                     <button onclick="openClearPaymentModal()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3.5 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto">
                         <span>+</span> Record New Clearance
                     </button>
-                    """}
+                    '''}
                 </div>
 
                 <div class="overflow-x-auto">
@@ -3194,6 +3297,7 @@ async def dashboard_view(request: Request):
                     <div class="flex items-center gap-1.5" id="payments-pagination-controls"></div>
                 </div>
             </div>
+            """ if can_view_balances else ""}
 
             <!-- SUBVIEW 4: FLEET VEHICLES -->
             <div id="fleet-section-trucks" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
@@ -3277,11 +3381,11 @@ async def dashboard_view(request: Request):
             <!-- SUBVIEW 6: SHORTFALL APPROVALS & DISPATCH AUDITS -->
             <div id="fleet-section-approvals" class="fleet-subview-panel space-y-4 transition-all duration-200" style="display: none;">
                 <!-- Fleet Approval Top Stats Cards -->
-                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                <div class="grid grid-cols-2 sm:grid-cols-3 {f'lg:grid-cols-5' if can_view_balances else 'lg:grid-cols-4'} gap-3 sm:gap-4">
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
                         <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Trips Verified</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1.5" id="fleet-stat-trips">0</div>
-                        <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1" id="fleet-stat-sales-val">$0.00 ERP Sales</div>
+                        <div class="text-[11px] sm:text-xs text-blue-600 dark:text-blue-400 font-semibold mt-1" id="fleet-stat-sales-val">""" + (f"""$0.00 ERP Sales""" if can_view_balances else f"""Trips Logged""") + f"""</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200">
                         <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Approved for Dispatch</div>
@@ -3298,17 +3402,19 @@ async def dashboard_view(request: Request):
                         <div class="text-2xl sm:text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 mt-1.5" id="fleet-stat-transport">$0.00</div>
                         <div class="text-[11px] sm:text-xs text-indigo-600 dark:text-indigo-400 font-semibold mt-1">Total Fee Assessed</div>
                     </div>
+                    {f"""
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition-all duration-200 col-span-2 sm:col-span-1">
                         <div class="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Salesperson Debt</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-rose-500 dark:text-rose-400 mt-1.5" id="fleet-stat-backlog">$0.00</div>
                         <div class="text-[11px] sm:text-xs text-rose-600 dark:text-rose-400 font-semibold mt-1">Pending Shortfall Ledger</div>
                     </div>
+                    """ if can_view_balances else ""}
                 </div>
 
                 <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden">
                     <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 bg-slate-50/60 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-                        <input type="text" id="fleet-search" placeholder="🔍 Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
+                        <input type="text" id="fleet-search" placeholder="Search Trip ID, Salesperson, City..." oninput="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-4 py-2.5 sm:py-2 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-64 transition">
                         
                         <!-- City Filter -->
                         <select id="fleet-city-filter" onchange="filterFleetApprovalsTable(true)" class="bg-white dark:bg-[#121216] border border-slate-300 dark:border-zinc-750 rounded-xl px-3 py-2.5 sm:py-2 text-xs font-medium text-slate-700 dark:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-auto transition">
@@ -3339,9 +3445,15 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Trip ID</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Salesperson</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Destination & Route</th>
+                                {f"""
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">ERP Valuation</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Shortfall / Transport</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Settlement (Customer vs Debt)</th>
+                                """ if can_view_balances else f"""
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Valuation Status</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Shortfall Status</th>
+                                <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Accounting Status</th>
+                                """}
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Audit Check</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Status</th>
                                 <th class="px-4 sm:px-5 py-3.5 whitespace-nowrap">Date</th>
@@ -3361,6 +3473,7 @@ async def dashboard_view(request: Request):
             </div>
 
             <!-- SUBVIEW 7: FINANCIAL AUDIT & RECOVERY LEDGER -->
+            {f"""
             <div id="fleet-section-ledger" class="fleet-subview-panel bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xs overflow-hidden transition-all duration-200">
                 <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-850 bg-slate-50/75 dark:bg-[#0e0e12]/80">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -3441,6 +3554,7 @@ async def dashboard_view(request: Request):
                     <div class="flex items-center gap-1.5" id="ledger-pagination-controls"></div>
                 </div>
             </div>
+            """ if can_view_balances else ""}
 
             <!-- SUBVIEW 8: DATA ANALYTICS & FLEET METRICS -->
             <div id="fleet-section-analytics" class="fleet-subview-panel space-y-6 transition-all duration-200" style="display: none;">
@@ -3469,8 +3583,8 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1" id="an-stat-trips-completed">0 completed</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
-                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Avg Revenue / Trip</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-avg-revenue">$0.00</div>
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">""" + ("Avg Revenue / Trip" if can_view_balances else "Trip Delivery Health") + f"""</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-avg-revenue">""" + ("$0.00" if can_view_balances else "100%") + f"""</div>
                         <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-avg-opex">Avg Opex: $0.00</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
@@ -3524,6 +3638,7 @@ async def dashboard_view(request: Request):
                     </div>
 
                     <!-- Debt Ledger & Clearance Liquidity Health -->
+                    {f"""
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
                         <div>
                             <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
@@ -3552,6 +3667,36 @@ async def dashboard_view(request: Request):
                             <span class="text-xs font-bold text-blue-600 dark:text-blue-400">Synchronized</span>
                         </div>
                     </div>
+                    """ if can_view_balances else f"""
+                    <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center justify-between mb-3">
+                                <span>Fleet Dispatch Readiness</span>
+                                <span class="text-[10px] font-mono text-slate-400">Operations Control</span>
+                            </h3>
+                            <div class="space-y-3">
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                    <div>
+                                        <div class="text-[10px] uppercase font-bold text-slate-400">Active Commercial Fleet</div>
+                                        <div class="text-lg font-extrabold font-mono text-blue-600 dark:text-blue-400 mt-0.5">{len(trucks_list)} Vehicles</div>
+                                    </div>
+                                    <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Registered Roster</span>
+                                </div>
+                                <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3.5 flex items-center justify-between">
+                                    <div>
+                                        <div class="text-[10px] uppercase font-bold text-slate-400">Verified Drivers</div>
+                                        <div class="text-lg font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">{drivers_active} Active</div>
+                                    </div>
+                                    <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Assigned</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-850 flex items-center justify-between">
+                            <span class="text-[11px] text-slate-500 dark:text-zinc-400">Commercial Pipeline Status</span>
+                            <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400">Active</span>
+                        </div>
+                    </div>
+                    """}
                 </div>
             </div>
         </div>
@@ -3652,7 +3797,7 @@ async def dashboard_view(request: Request):
                 <div class="border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
                     <div class="p-3.5 bg-slate-50/75 dark:bg-[#121216] border-b border-slate-200 dark:border-zinc-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                         <div class="flex items-center gap-2">
-                            <input type="text" id="modal-city-search" placeholder="🔍 Search city or route..." oninput="filterCityRulesModal()" class="bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-1.5 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-60 transition">
+                            <input type="text" id="modal-city-search" placeholder="Search city or route..." oninput="filterCityRulesModal()" class="bg-white dark:bg-[#181820] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-1.5 text-xs font-medium text-slate-800 dark:text-zinc-100 placeholder-slate-400 dark:placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full sm:w-60 transition">
                             <span id="modal-city-count" class="text-xs text-slate-500 dark:text-zinc-400 font-bold whitespace-nowrap">45 Cities</span>
                         </div>
                         <span class="text-[11px] text-slate-400 dark:text-zinc-500 italic">Values saved dynamically into database without hardcoding</span>
@@ -4112,6 +4257,7 @@ async def dashboard_view(request: Request):
         // RBAC & PERMISSION HELPERS
         // =============================================================
         let currentUser = null;
+        const canViewBalances = {'true' if can_view_balances else 'false'};
         function hasPermission(permKey) {{
             if (!currentUser) return false;
             if (currentUser.role === 'MASTER_ADMIN') return true;
@@ -4493,6 +4639,9 @@ async def dashboard_view(request: Request):
         // -------------------------------------------------------------
         let currentFleetSubView = 'overview';
         function switchFleetSubView(viewId) {{
+            if (!canViewBalances && (viewId === 'salespersons' || viewId === 'payments' || viewId === 'ledger')) {{
+                viewId = 'overview';
+            }}
             currentFleetSubView = viewId;
             const sel = document.getElementById('fleet-view-selector');
             if (sel && sel.value !== viewId) sel.value = viewId;
@@ -4958,48 +5107,49 @@ async def dashboard_view(request: Request):
                             </div>
                             <div class="space-y-0.5">
                                 <button onclick="switchFleetSubView('overview'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>📊</span> Operations Overview</span>
+                                    <span class="flex items-center gap-2">Operations Overview</span>
                                     <span class="text-[10px] font-mono text-slate-400">Live</span>
                                 </button>
                                 <button onclick="switchFleetSubView('trips'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>🚚</span> Trip Pipeline</span>
+                                    <span class="flex items-center gap-2">Trip Pipeline</span>
                                     <span class="text-[10px] font-mono text-slate-400">7 Stages</span>
                                 </button>
                                 <button onclick="switchFleetSubView('trucks'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>🚛</span> Fleet Vehicles</span>
+                                    <span class="flex items-center gap-2">Fleet Vehicles</span>
                                     <span class="text-[10px] font-mono text-slate-400">Registry</span>
                                 </button>
                                 <button onclick="switchFleetSubView('drivers'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>👤</span> Commercial Drivers</span>
+                                    <span class="flex items-center gap-2">Commercial Drivers</span>
                                     <span class="text-[10px] font-mono text-slate-400">Roster</span>
                                 </button>
                                 <button onclick="switchFleetSubView('approvals'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>⏳</span> Shortfall Approvals</span>
+                                    <span class="flex items-center gap-2">Shortfall Approvals</span>
                                     <span class="text-[10px] font-mono text-amber-500 font-bold">Queue</span>
                                 </button>
                             </div>
                         </div>
 
-                        <!-- Group 2: Finance & Ledgers -->
+                        <!-- Group 2: Finance & Ledgers (Restricted) -->
+                        ${{canViewBalances ? `
                         <div>
                             <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
                                 Finance & Ledgers
                             </div>
                             <div class="space-y-0.5">
                                 <button onclick="switchFleetSubView('salespersons'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>💼</span> Sales Representative Balances</span>
+                                    <span class="flex items-center gap-2">Sales Representative Balances</span>
                                     <span class="text-[10px] font-mono text-rose-500 font-bold">Balances</span>
                                 </button>
                                 <button onclick="switchFleetSubView('payments'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>💳</span> Payment History</span>
+                                    <span class="flex items-center gap-2">Payment History</span>
                                     <span class="text-[10px] font-mono text-emerald-500 font-bold">History</span>
                                 </button>
                                 <button onclick="switchFleetSubView('ledger'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>📑</span> Financial Audit Log</span>
+                                    <span class="flex items-center gap-2">Financial Audit Log</span>
                                     <span class="text-[10px] font-mono text-slate-400">Ledger</span>
                                 </button>
                             </div>
-                        </div>
+                        </div>` : ''}}
 
                         <!-- Group 3: Analytics & Insights -->
                         <div>
@@ -5008,11 +5158,11 @@ async def dashboard_view(request: Request):
                             </div>
                             <div class="space-y-0.5">
                                 <button onclick="switchFleetSubView('analytics'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>📈</span> Data Analytics</span>
+                                    <span class="flex items-center gap-2">Data Analytics</span>
                                     <span class="text-[10px] font-bold text-blue-600 dark:text-blue-400">KPIs</span>
                                 </button>
                                 <button onclick="switchFleetSubView('all'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>📑</span> Consolidated View (All)</span>
+                                    <span class="flex items-center gap-2">Consolidated View (All)</span>
                                     <span class="text-[10px] font-mono text-slate-400">Full</span>
                                 </button>
                             </div>
@@ -5027,28 +5177,28 @@ async def dashboard_view(request: Request):
                             <div class="space-y-0.5">
                                 ${{canFuel ? `
                                 <button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>⚙️</span> Fuel & City Rates</span>
+                                    <span class="flex items-center gap-2">Fuel & City Rates</span>
                                     <span class="text-[10px] font-mono text-slate-400">Config</span>
                                 </button>` : ''}}
                                 ${{canTrucks ? `
                                 <button onclick="openAddTruckModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>➕</span> Register Truck</span>
+                                    <span class="flex items-center gap-2">Register Truck</span>
                                 </button>` : ''}}
                                 ${{canDrivers ? `
                                 <button onclick="openAddDriverModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>➕</span> Register Driver</span>
+                                    <span class="flex items-center gap-2">Register Driver</span>
                                 </button>` : ''}}
                                 ${{canSales ? `
                                 <button onclick="openAddSalesRepModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>➕</span> Register Sales Rep</span>
+                                    <span class="flex items-center gap-2">Register Sales Rep</span>
                                 </button>` : ''}}
                                 ${{canAudit ? `
                                 <button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>📜</span> System Audit Logs</span>
+                                    <span class="flex items-center gap-2">System Audit Logs</span>
                                 </button>` : ''}}
                                 ${{canUsers ? `
                                 <button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2"><span>👥</span> User Management & Permissions</span>
+                                    <span class="flex items-center gap-2">User Management & Permissions</span>
                                 </button>` : ''}}
                             </div>
                         </div>` : ''}}
@@ -5063,13 +5213,13 @@ async def dashboard_view(request: Request):
                             </div>
                             <div class="space-y-0.5">
                                 <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>🎫</span> Active Tickets Queue</span>
+                                    <span class="flex items-center gap-2">Active Tickets Queue</span>
                                 </a>
                                 <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>🔴</span> Critical & SLA Breaches</span>
+                                    <span class="flex items-center gap-2">Critical & SLA Breaches</span>
                                 </a>
                                 <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>🤖</span> WhatsApp Bot Diagnostics</span>
+                                    <span class="flex items-center gap-2">WhatsApp Bot Diagnostics</span>
                                 </a>
                             </div>
                         </div>
@@ -5084,13 +5234,13 @@ async def dashboard_view(request: Request):
                             </div>
                             <div class="space-y-0.5">
                                 <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>🏗️</span> Active Site Projects</span>
+                                    <span class="flex items-center gap-2">Active Site Projects</span>
                                 </a>
                                 <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>📦</span> Materials & Cement Logistics</span>
+                                    <span class="flex items-center gap-2">Materials & Cement Logistics</span>
                                 </a>
                                 <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>💰</span> Site Budgets & Approvals</span>
+                                    <span class="flex items-center gap-2">Site Budgets & Approvals</span>
                                 </a>
                             </div>
                         </div>
@@ -5274,7 +5424,7 @@ async def dashboard_view(request: Request):
                         <div>
                             <div class="font-extrabold text-slate-900 dark:text-zinc-100 text-xs sm:text-sm group-hover:text-blue-600 dark:group-hover:text-blue-400 transition flex items-center gap-1.5">
                                 <span>${{a.name}}</span>
-                                <span class="text-[10px] text-blue-500 opacity-0 group-hover:opacity-100 transition font-semibold">🔍 Filter</span>
+                                <span class="text-[10px] text-blue-500 opacity-0 group-hover:opacity-100 transition font-semibold">Filter</span>
                             </div>
                             <div class="text-[10px] sm:text-[11px] text-slate-500 dark:text-zinc-400 font-mono">+${{a.phone}}</div>
                             <div class="mt-2 flex items-center gap-1.5">
@@ -5605,8 +5755,8 @@ async def dashboard_view(request: Request):
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-zinc-200 whitespace-nowrap">${{r.truck_model}}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-zinc-100">${{r.category}}</strong><br><small class="text-slate-500 dark:text-zinc-400">${{r.description.substring(0, 45)}}...</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-700 dark:text-zinc-300 whitespace-nowrap">${{r.logged_by}}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${{r.assigned_mechanic}}</strong><br><small class="text-blue-600 dark:text-blue-400 font-semibold">⏱️ ETA: ${{r.eta}}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><small class="bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 px-2 py-0.5 rounded font-medium">📦 ${{r.parts_status}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${{r.assigned_mechanic}}</strong><br><small class="text-blue-600 dark:text-blue-400 font-semibold">ETA: ${{r.eta}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><small class="bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 px-2 py-0.5 rounded font-medium">${{r.parts_status}}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold font-mono text-slate-900 dark:text-zinc-100 whitespace-nowrap">${{r.costing}}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
                                     <div class="flex flex-col items-start gap-1">
@@ -5633,7 +5783,7 @@ async def dashboard_view(request: Request):
         function renderMasterKPIs(kpis) {{
             if (!kpis) return;
             const elActive = document.getElementById('master-active-ops');
-            if (elActive) elActive.textContent = kpis.active_operations;
+            if (elActive) elActive.textContent = (kpis.pending_approvals !== undefined) ? kpis.pending_approvals : (kpis.active_operations ?? 0);
             const elRate = document.getElementById('master-res-rate');
             if (elRate) elRate.textContent = kpis.resolution_rate_pct + '%';
             const elRev = document.getElementById('master-transport-revenue');
@@ -5666,13 +5816,26 @@ async def dashboard_view(request: Request):
             if (fleet.analytics || fleet.stats) renderAnalyticsSection(fleet.analytics, fleet.stats);
 
             // 1. Top Stats Cards
-            document.getElementById('fleet-stat-trips').textContent = fleet.stats.total_trips;
-            document.getElementById('fleet-stat-sales-val').textContent = '$' + Number(fleet.stats.total_sales_value).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}) + ' ERP Sales';
-            document.getElementById('fleet-stat-approved').textContent = fleet.stats.approved_trips;
-            document.getElementById('fleet-stat-shortfalls').textContent = fleet.stats.shortfall_trips;
-            document.getElementById('fleet-stat-transport').textContent = '$' + Number(fleet.stats.total_transport_charges).toFixed(2);
-            document.getElementById('fleet-stat-backlog').textContent = '$' + Number(fleet.stats.total_outstanding_backlog).toFixed(2);
-            document.getElementById('fleet-total-pending-pill').textContent = '$' + Number(fleet.stats.total_outstanding_backlog).toFixed(2);
+            const tripsEl = document.getElementById('fleet-stat-trips');
+            if (tripsEl) tripsEl.textContent = fleet.stats.total_trips;
+            const salesValEl = document.getElementById('fleet-stat-sales-val');
+            if (salesValEl) {{
+                if (canViewBalances) {{
+                    salesValEl.textContent = '$' + Number(fleet.stats.total_sales_value).toLocaleString('en-US', {{minimumFractionDigits: 2, maximumFractionDigits: 2}}) + ' ERP Sales';
+                }} else {{
+                    salesValEl.textContent = 'Trips Logged';
+                }}
+            }}
+            const approvedEl = document.getElementById('fleet-stat-approved');
+            if (approvedEl) approvedEl.textContent = fleet.stats.approved_trips;
+            const shortfallsEl = document.getElementById('fleet-stat-shortfalls');
+            if (shortfallsEl) shortfallsEl.textContent = fleet.stats.shortfall_trips;
+            const transportEl = document.getElementById('fleet-stat-transport');
+            if (transportEl) transportEl.textContent = '$' + Number(fleet.stats.total_transport_charges).toFixed(2);
+            const backlogEl = document.getElementById('fleet-stat-backlog');
+            if (backlogEl) backlogEl.textContent = '$' + Number(fleet.stats.total_outstanding_backlog).toFixed(2);
+            const pendingPill = document.getElementById('fleet-total-pending-pill');
+            if (pendingPill) pendingPill.textContent = '$' + Number(fleet.stats.total_outstanding_backlog).toFixed(2);
 
             // 2. Salesperson Pending Balance & Audit Cards
             const spCardsContainer = document.getElementById('fleet-salesperson-cards');
@@ -5682,13 +5845,13 @@ async def dashboard_view(request: Request):
                 }} else {{
                     spCardsContainer.innerHTML = fleet.salespersons.map(sp => {{
                         let badgeClass = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
-                        let badgeText = '🟢 Cleared / Healthy';
+                        let badgeText = 'Cleared / Healthy';
                         if (sp.risk_level === 'HIGH_ALERT') {{
                             badgeClass = 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30 font-bold';
-                            badgeText = '🔴 High Debt Alert';
+                            badgeText = 'High Debt Alert';
                         }} else if (sp.risk_level === 'ACTIVE_PENDING') {{
                             badgeClass = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30 font-semibold';
-                            badgeText = '🟡 Pending Recovery';
+                            badgeText = 'Pending Recovery';
                         }}
 
                         return `
@@ -5700,8 +5863,8 @@ async def dashboard_view(request: Request):
                                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-mono">+${{sp.phone}}</div>
                                         </div>
                                         <div class="flex items-center gap-1.5">
-                                            <button onclick="openAddSalesRepModal('${{sp.employee_id || ''}}', '${{(sp.name || '').replace(/'/g, \"\\\\'\")}}', '${{sp.phone}}', '${{(sp.email || '').replace(/'/g, \"\\\\'\")}}', true)" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 p-1 rounded-md hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs cursor-pointer">
-                                                ✏️
+                                            <button onclick="openAddSalesRepModal('${{sp.employee_id || ''}}', '${{(sp.name || '').replace(/'/g, \"\\\\'\")}}', '${{sp.phone}}', '${{(sp.email || '').replace(/'/g, \"\\\\'\")}}', true)" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs font-bold cursor-pointer">
+                                                Edit
                                             </button>
                                             <span class="text-[10px] px-2 py-0.5 rounded-full border ${{badgeClass}} whitespace-nowrap">${{badgeText}}</span>
                                         </div>
@@ -5719,7 +5882,7 @@ async def dashboard_view(request: Request):
                                 </div>
                                 ${{sp.net_balance > 0 && hasPermission('clear_sales_rep_debt') ? `
                                     <button onclick="openClearPaymentModal('${{sp.name}}', '${{sp.phone}}', ${{sp.net_balance}})" class="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center justify-center gap-1 shadow-xs cursor-pointer">
-                                        <span>💳</span> Clear Debt Settlement
+                                        Clear Debt Settlement
                                     </button>
                                 ` : ''}}
                             </div>
@@ -5989,19 +6152,23 @@ async def dashboard_view(request: Request):
                             <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${{r.trip_id}}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${{r.salesperson_name}}</strong><br><small class="text-slate-400 dark:text-zinc-500 font-mono">+${{r.salesperson_phone}}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><span class="font-bold text-slate-800 dark:text-zinc-200">📍 ${{r.destination_city}}</span><br><small class="text-slate-500 dark:text-zinc-400">${{r.route}}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><span class="font-bold text-slate-800 dark:text-zinc-200">${{r.destination_city}}</span><br><small class="text-slate-500 dark:text-zinc-400">${{r.route}}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono whitespace-nowrap">
+                                    ${{canViewBalances ? `
                                     <span class="font-bold ${{r.trip_sales_value >= r.required_minimum ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-900 dark:text-zinc-100'}}">$${{r.trip_sales_value.toFixed(2)}}</span>
                                     <br><small class="text-slate-400 dark:text-zinc-500">Min: $${{r.required_minimum.toFixed(2)}}</small>
+                                    ` : `
+                                    <span class="font-semibold text-slate-600 dark:text-zinc-400">Audited</span>
+                                    `}}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono whitespace-nowrap">
-                                    ${{r.has_shortfall ? `<span class="text-rose-600 dark:text-rose-400 font-bold">-$${{r.shortfall.toFixed(2)}}</span><br><small class="text-indigo-600 dark:text-indigo-400 font-bold">Fee: $${{r.transport_charge.toFixed(2)}}</small>` : '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Compliant (No Fee)</span>'}}
+                                    ${{canViewBalances ? (r.has_shortfall ? `<span class="text-rose-600 dark:text-rose-400 font-bold">-$${{r.shortfall.toFixed(2)}}</span><br><small class="text-indigo-600 dark:text-indigo-400 font-bold">Fee: $${{r.transport_charge.toFixed(2)}}</small>` : '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Compliant (No Fee)</span>') : (r.has_shortfall ? '<span class="text-amber-600 dark:text-amber-400 font-semibold">Shortfall Flagged</span>' : '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">Compliant</span>')}}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-xs text-slate-700 dark:text-zinc-300 whitespace-nowrap">
-                                    ${{r.has_shortfall ? `
+                                    ${{canViewBalances ? (r.has_shortfall ? `
                                         <span>Customer Paid: <strong class="text-emerald-700 dark:text-emerald-400 font-mono">$${{r.amount_charged_to_customer.toFixed(2)}}</strong></span><br>
                                         <span>Debt Added: <strong class="text-amber-700 dark:text-amber-400 font-mono">$${{r.pending_balance_recorded.toFixed(2)}}</strong></span>
-                                    ` : '<span class="text-slate-400 dark:text-zinc-500">Direct Clearance</span>'}}
+                                    ` : '<span class="text-slate-400 dark:text-zinc-500">Direct Clearance</span>') : '<span class="text-slate-400 dark:text-zinc-500">Accounts Managed</span>'}}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">${{auditBadge}}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
@@ -6062,26 +6229,26 @@ async def dashboard_view(request: Request):
                     tbody.innerHTML = pagedTrips.map(t => {{
                         const st = (t.status || '').toUpperCase();
                         let stageBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
-                        let stageLabel = '📝 Stage 1: Quoted';
+                        let stageLabel = 'Stage 1: Quoted';
 
                         if (st.includes('APPROVED')) {{
                             stageBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
-                            stageLabel = '⚡ Stage 2: Approved';
+                            stageLabel = 'Stage 2: Approved';
                         }} else if (st.includes('VOUCHER') || st.includes('ALLOWANCE')) {{
                             stageBadge = 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30';
-                            stageLabel = '⛽ Stage 3: Voucher Issued';
+                            stageLabel = 'Stage 3: Voucher Issued';
                         }} else if (st.includes('LOADED') || st.includes('ODOMETER')) {{
                             stageBadge = 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/30';
-                            stageLabel = '📦 Stage 4: Loaded';
+                            stageLabel = 'Stage 4: Loaded';
                         }} else if (st.includes('IN_TRANSIT') || st.includes('TRANSIT')) {{
                             stageBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
-                            stageLabel = '🚛 Stage 5: In Transit';
+                            stageLabel = 'Stage 5: In Transit';
                         }} else if (st.includes('OFFLOADED') || st.includes('POD')) {{
                             stageBadge = 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-200 dark:border-teal-500/30';
-                            stageLabel = '🏢 Stage 6: Offloaded';
+                            stageLabel = 'Stage 6: Offloaded';
                         }} else if (st.includes('SETTLED') || st.includes('CLOSED')) {{
                             stageBadge = 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-500/40';
-                            stageLabel = '✅ Stage 7: Settled';
+                            stageLabel = 'Stage 7: Settled';
                         }}
 
                         return `
@@ -6097,12 +6264,12 @@ async def dashboard_view(request: Request):
                                     <small class="text-slate-400 dark:text-zinc-500 font-mono">+${{t.salesperson_phone}}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                    <span class="font-bold text-slate-800 dark:text-zinc-200">📍 ${{t.destination_city}}</span><br>
+                                    <span class="font-bold text-slate-800 dark:text-zinc-200">${{t.destination_city}}</span><br>
                                     <small class="text-slate-500 dark:text-zinc-400">${{t.route}}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                    <strong class="text-slate-900 dark:text-zinc-100">🚚 ${{t.truck_plate}}</strong><br>
-                                    <small class="text-slate-500 dark:text-zinc-400">👤 ${{t.driver_name}}</small>
+                                    <strong class="text-slate-900 dark:text-zinc-100">${{t.truck_plate}}</strong><br>
+                                    <small class="text-slate-500 dark:text-zinc-400">${{t.driver_name}}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap font-mono text-xs">
                                     <div>Allow: <strong class="text-slate-900 dark:text-zinc-100">$${{t.total_allowance.toFixed(2)}}</strong></div>
@@ -6114,7 +6281,7 @@ async def dashboard_view(request: Request):
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap font-mono text-xs">
                                     <span>${{t.start_odometer ? t.start_odometer + ' km' : '--'}} → ${{t.end_odometer ? t.end_odometer + ' km' : '--'}}</span>
-                                    ${{t.discrepancy_amount > 0 ? `<br><small class="text-rose-600 dark:text-rose-400 font-bold">⚠️ Discrepancy: $${{t.discrepancy_amount.toFixed(2)}}</small>` : ''}}
+                                    ${{t.discrepancy_amount > 0 ? `<br><small class="text-rose-600 dark:text-rose-400 font-bold">Discrepancy: $${{t.discrepancy_amount.toFixed(2)}}</small>` : ''}}
                                 </td>
                             </tr>
                         `;
@@ -6165,9 +6332,16 @@ async def dashboard_view(request: Request):
                                 </span>
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">
-                                <button onclick="openAddTruckModal('${{t.truck_id}}', '${{t.truck_number}}', '${{t.plate_number}}', '${{(t.model_make || '').replace(/'/g, \"\\\\'\")}}', '${{t.body_type}}', '${{(t.home_depot || '').replace(/'/g, \"\\\\'\")}}', ${{t.active}})" class="text-blue-600 hover:text-blue-800 dark:hover:text-blue-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900/60 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer">
-                                    ✏️ Edit
-                                </button>
+                                <div class="inline-flex items-center gap-1.5 justify-end">
+                                    <button onclick="openAddTruckModal('${{t.truck_id}}', '${{t.truck_number}}', '${{t.plate_number}}', '${{(t.model_make || '').replace(/'/g, \"\\\\'\")}}', '${{t.body_type}}', '${{(t.home_depot || '').replace(/'/g, \"\\\\'\")}}', ${{t.active}})" class="text-blue-600 hover:text-blue-800 dark:hover:text-blue-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900/60 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer">
+                                        Edit
+                                    </button>
+                                    ${{hasPermission('manage_trucks') ? `
+                                        <button onclick="deleteTruck('${{t.truck_id}}', '${{t.truck_number}}')" class="text-rose-600 hover:text-rose-800 dark:hover:text-rose-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer">
+                                            Delete
+                                        </button>
+                                    ` : ''}}
+                                </div>
                             </td>
                         </tr>
                     `).join('');
@@ -6204,7 +6378,7 @@ async def dashboard_view(request: Request):
                     tbody.innerHTML = pagedDrivers.map(d => `
                         <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
                             <td class="px-4 sm:px-5 py-3.5 font-mono text-xs text-slate-500 dark:text-zinc-400 whitespace-nowrap">#WD-${{d.staff_id}}</td>
-                            <td class="px-4 sm:px-5 py-3.5 font-extrabold text-slate-900 dark:text-zinc-100 whitespace-nowrap">👤 ${{d.full_name}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-extrabold text-slate-900 dark:text-zinc-100 whitespace-nowrap">${{d.full_name}}</td>
                             <td class="px-4 sm:px-5 py-3.5 font-mono text-blue-600 dark:text-blue-400 whitespace-nowrap">+${{d.phone}}</td>
                             <td class="px-4 sm:px-5 py-3.5 text-xs font-semibold text-slate-700 dark:text-zinc-300 whitespace-nowrap">${{d.role}}</td>
                             <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
@@ -6215,7 +6389,7 @@ async def dashboard_view(request: Request):
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">
                                 <button onclick="openAddDriverModal('${{d.staff_id}}', '${{(d.full_name || '').replace(/'/g, \"\\\\'\")}}', '${{d.phone}}', '${{d.role}}', ${{d.active}})" class="text-purple-600 hover:text-purple-800 dark:hover:text-purple-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-900/60 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition cursor-pointer">
-                                    ✏️ Edit
+                                    Edit
                                 </button>
                             </td>
                         </tr>
@@ -6271,7 +6445,7 @@ async def dashboard_view(request: Request):
                             <td class="px-4 sm:px-5 py-3.5 font-mono text-xs whitespace-nowrap">
                                 <span class="text-slate-400">$${{p.previous_balance.toFixed(2)}}</span> → <strong class="text-slate-900 dark:text-zinc-100">$${{p.remaining_balance.toFixed(2)}}</strong>
                             </td>
-                            <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-700 dark:text-zinc-300 whitespace-nowrap">👤 ${{p.recorded_by}}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-700 dark:text-zinc-300 whitespace-nowrap">${{p.recorded_by}}</td>
                             <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-600 dark:text-zinc-300">${{p.remarks || '--'}}</td>
                         </tr>
                     `).join('');
@@ -6854,7 +7028,29 @@ async def dashboard_view(request: Request):
                 alert('Network error saving truck: ' + err.message);
             }} finally {{
                 btn.disabled = false;
-                btn.innerHTML = '<span>💾</span> Save Truck Details';
+                btn.innerHTML = 'Save Truck Details';
+            }}
+        }}
+
+        async function deleteTruck(truckId, truckNum) {{
+            if (!confirm(`Are you sure you want to remove truck #${{truckNum}} from the commercial fleet database? This action cannot be undone.`)) {{
+                return;
+            }}
+            try {{
+                const res = await fetch('/api/v2/fleet/trucks/delete', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ truck_id: parseInt(truckId) }})
+                }});
+                const data = await res.json();
+                if (res.ok) {{
+                    showToast(`Truck #${{truckNum}} removed successfully.`);
+                    await fetchDashboard();
+                }} else {{
+                    alert(data.detail || 'Failed to remove truck.');
+                }}
+            }} catch (err) {{
+                alert('Network error removing truck: ' + err.message);
             }}
         }}
 
@@ -6898,7 +7094,7 @@ async def dashboard_view(request: Request):
             }}
 
             btn.disabled = true;
-            btn.innerHTML = '⏳ Saving Driver...';
+            btn.innerHTML = 'Saving Driver...';
 
             try {{
                 const res = await fetch('/api/v2/fleet/drivers/save', {{
@@ -6929,7 +7125,7 @@ async def dashboard_view(request: Request):
                 alert('Network error saving driver: ' + err.message);
             }} finally {{
                 btn.disabled = false;
-                btn.innerHTML = '<span>💾</span> Save Driver';
+                btn.innerHTML = 'Save Driver';
             }}
         }}
 
@@ -6973,7 +7169,7 @@ async def dashboard_view(request: Request):
             }}
 
             btn.disabled = true;
-            btn.innerHTML = '⏳ Saving Sales Rep...';
+            btn.innerHTML = 'Saving Sales Rep...';
 
             try {{
                 const res = await fetch('/api/v2/fleet/sales-reps/save', {{
@@ -7004,7 +7200,7 @@ async def dashboard_view(request: Request):
                 alert('Network error saving sales rep: ' + err.message);
             }} finally {{
                 btn.disabled = false;
-                btn.innerHTML = '<span>💾</span> Save Sales Rep';
+                btn.innerHTML = 'Save Sales Rep';
             }}
         }}
 

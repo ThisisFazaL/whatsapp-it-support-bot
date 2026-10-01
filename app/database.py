@@ -1074,6 +1074,10 @@ async def init_db_models():
             wt_chk = await session.execute(select(WorkshopTruck))
             if not wt_chk.scalars().first():
                 await seed_workshop_data_in_session(session)
+            else:
+                # Ensure test trucks (e.g. 123 / ZW 123 ABC / 9999) are removed so fleet matches official 39 vehicles
+                await session.execute(delete(WorkshopTruck).where(WorkshopTruck.truck_number.in_(["123", "9999"]) | WorkshopTruck.plate_number.in_(["ZW 123 ABC", "ZW 9999 TEST"])))
+                await session.commit()
         except Exception as ws_err:
             import logging
             logging.getLogger("database").warning(f"Workshop tables init note: {ws_err}")

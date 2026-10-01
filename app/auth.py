@@ -147,7 +147,6 @@ ROLE_DEFAULT_PERMISSIONS: Dict[str, Set[str]] = {
         "manage_fleet_rules",
         "approve_trips",
         "view_customer_schedules",
-        "view_sales_rep_balances",
         "view_audit_logs"
     },
     "LOGISTICS_ADMIN": {
