@@ -2906,16 +2906,16 @@ async def dashboard_view(request: Request):
                         <div class="text-2xl sm:text-3xl font-extrabold text-rose-400 mt-1 font-mono" id="master-financial-backlog">$0.00</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Pending shortfall recovery</div>
                     </div>
-                    """ if can_view_balances else f"""
+                    """ if can_view_balances else """
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active In-Transit</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1 font-mono" id="master-in-transit-count">{in_transit_trips}</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-emerald-400 mt-1 font-mono" id="master-in-transit-count">0</div>
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Commercial trips rolling</div>
                     </div>
                     <div class="bg-slate-800/60 dark:bg-[#121216]/90 backdrop-blur border border-slate-700/60 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Commercial Roster</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1 font-mono" id="master-roster-count">{len(trucks_list)} Vehicles</div>
-                        <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">{drivers_active} Active Drivers</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-400 mt-1 font-mono" id="master-roster-count">Active Roster</div>
+                        <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">Fleet & Operations</div>
                     </div>
                     """}
                 </div>
@@ -3070,12 +3070,12 @@ async def dashboard_view(request: Request):
                             <div class="text-2xl sm:text-3xl font-extrabold text-slate-800 dark:text-zinc-100 mt-1 font-mono truncate" id="ov-kpi-avg-revenue">$0.00</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Manifest revenue mean</div>
                         </div>
-                        """ if can_view_balances else f"""
+                        """ if can_view_balances else """
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs hover:shadow-md transition">
                             <div class="flex items-center justify-between">
                                 <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Active In-Transit</span>
                             </div>
-                            <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono truncate" id="ov-kpi-transit-ops">{in_transit_trips}</div>
+                            <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono truncate" id="ov-kpi-transit-ops">0</div>
                             <div class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5 font-medium truncate">Currently rolling</div>
                         </div>
                         """}
@@ -3864,7 +3864,7 @@ async def dashboard_view(request: Request):
                             <span class="text-xs font-bold text-blue-600 dark:text-blue-400">Synchronized</span>
                         </div>
                     </div>
-                    """ if can_view_balances else f"""
+                    """ if can_view_balances else """
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
                         <div>
                             <div class="flex items-center justify-between mb-2">
@@ -3879,14 +3879,14 @@ async def dashboard_view(request: Request):
                                 <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
                                     <div>
                                         <div class="text-[10px] uppercase font-bold text-slate-400">Active Commercial Fleet</div>
-                                        <div class="text-base font-extrabold font-mono text-blue-600 dark:text-blue-400 mt-0.5">{len(trucks_list)} Vehicles</div>
+                                        <div class="text-base font-extrabold font-mono text-blue-600 dark:text-blue-400 mt-0.5" id="an-fleet-vehicles-count">Active Fleet</div>
                                     </div>
                                     <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Registered Roster</span>
                                 </div>
                                 <div class="bg-slate-50 dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-xl p-3 flex items-center justify-between">
                                     <div>
                                         <div class="text-[10px] uppercase font-bold text-slate-400">Verified Drivers</div>
-                                        <div class="text-base font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">{drivers_active} Active</div>
+                                        <div class="text-base font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5" id="an-fleet-drivers-count">Active Drivers</div>
                                     </div>
                                     <span class="text-xs text-slate-400 dark:text-zinc-500 font-mono">Assigned</span>
                                 </div>

@@ -133,3 +133,12 @@ class TestAnalyticsAndSalesRoster(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(OFFICIAL_SALES_REPS_DIRECTORY["263773998877"]["role"], "SALES_ADMIN")
         # Cleanup
         del OFFICIAL_SALES_REPS_DIRECTORY["263773998877"]
+
+    async def test_all_roles_render_dashboard_view_without_errors(self):
+        from app.auth import USERS_DB
+        mock_req = self.make_mock_request()
+
+        for username, udata in USERS_DB.items():
+            with patch("app.dashboard.get_current_user_from_request", return_value=udata):
+                resp = await dashboard_view(mock_req)
+                self.assertEqual(resp.status_code, 200, f"Role {udata.get('role')} ({username}) failed to render /dashboard")
