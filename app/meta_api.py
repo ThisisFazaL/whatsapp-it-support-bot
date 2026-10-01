@@ -24,8 +24,8 @@ class MetaWhatsAppAPI:
     def get_client(self) -> httpx.AsyncClient:
         """Returns reusable persistent httpx client with connection pooling and keep-alive."""
         if self._client is None or self._client.is_closed:
-            limits = httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=60.0)
-            self._client = httpx.AsyncClient(timeout=15.0, limits=limits, follow_redirects=True)
+            limits = httpx.Limits(max_keepalive_connections=30, max_connections=60, keepalive_expiry=120.0)
+            self._client = httpx.AsyncClient(timeout=8.0, limits=limits, follow_redirects=True)
         return self._client
 
     async def close(self):
@@ -33,7 +33,7 @@ class MetaWhatsAppAPI:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    async def _post_with_retry(self, payload: dict, max_retries: int = 3) -> dict:
+    async def _post_with_retry(self, payload: dict, max_retries: int = 2) -> dict:
         """Helper method to execute HTTP POST to Meta Graph API with automatic retries and connection reuse."""
         headers = {
             "Authorization": f"Bearer {self.access_token}",
@@ -50,20 +50,20 @@ class MetaWhatsAppAPI:
                     return response_json
                 else:
                     logger.warning(f"Meta Graph API Warning ({response.status_code}) Attempt {attempt}/{max_retries}: {response_json}")
-                    # Check if error is 24-hour window restriction (code 131047 / 131042 / 131026)
-                    err_code = response_json.get("error", {}).get("code")
-                    if err_code in {131047, 131042, 131026}:
-                        logger.info(f"[24H WINDOW EXPIRED] Meta Error {err_code}. Returning response for template fallback.")
+                    # For 4xx errors (e.g. 24h window 131047, bad request 400, invalid button format), return immediately
+                    # Never sleep or retry client errors as payload will not change
+                    if response.status_code < 500:
                         return response_json
                         
+                    # Only retry 5xx server errors
                     if attempt < max_retries:
-                        await asyncio.sleep(0.5 * attempt)
+                        await asyncio.sleep(0.2 * attempt)
                     else:
                         return response_json
             except Exception as e:
                 logger.error(f"Meta API Request Exception (Attempt {attempt}/{max_retries}): {e}")
                 if attempt < max_retries:
-                    await asyncio.sleep(0.5 * attempt)
+                    await asyncio.sleep(0.2 * attempt)
                 else:
                     return {"error": str(e)}
 

@@ -742,33 +742,38 @@ async def verify_webhook(
 
 async def process_webhook_payload(body: dict):
     """Processes incoming Meta WhatsApp Webhook payload safely in background task."""
+    try:
+        entry = body.get("entry", [])
+        if not entry:
+            return
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return
+        value = changes[0].get("value", {})
+        messages = value.get("messages", [])
+        if not messages:
+            return
+
+        msg_obj = messages[0]
+        wamid = msg_obj.get("id")
+        sender_phone = msg_obj.get("from")
+        msg_type = msg_obj.get("type")
+
+        # Deduplication check
+        if wamid and wamid in PROCESSED_WAMIDS:
+            logger.info(f"Duplicate wamid '{wamid}' skipped.")
+            return
+
+        if wamid:
+            PROCESSED_WAMIDS.add(wamid)
+            if len(PROCESSED_WAMIDS) > 5000:
+                PROCESSED_WAMIDS.clear()
+    except Exception as e:
+        logger.error(f"Error parsing webhook payload: {e}")
+        return
+
     async with async_session_factory() as db:
         try:
-            entry = body.get("entry", [])
-            if not entry:
-                return
-            changes = entry[0].get("changes", [])
-            if not changes:
-                return
-            value = changes[0].get("value", {})
-            messages = value.get("messages", [])
-            if not messages:
-                return
-
-            msg_obj = messages[0]
-            wamid = msg_obj.get("id")
-            sender_phone = msg_obj.get("from")
-            msg_type = msg_obj.get("type")
-
-            # Deduplication check
-            if wamid and wamid in PROCESSED_WAMIDS:
-                logger.info(f"Duplicate wamid '{wamid}' skipped.")
-                return
-
-            if wamid:
-                PROCESSED_WAMIDS.add(wamid)
-                if len(PROCESSED_WAMIDS) > 5000:
-                    PROCESSED_WAMIDS.clear()
 
             image_id = None
             message_text = ""

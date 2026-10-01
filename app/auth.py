@@ -122,7 +122,7 @@ ROLE_DEFAULT_PERMISSIONS: Dict[str, Set[str]] = {
         "manage_fleet_rules",
         "approve_trips",
         "view_customer_schedules",
-        "view_sales_rep_balances",
+        "manage_sales_pipeline",
         "view_workshop_workspace",
         "view_audit_logs"
     },

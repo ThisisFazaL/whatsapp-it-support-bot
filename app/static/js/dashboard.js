@@ -390,7 +390,10 @@ function escapeJsAttr(val) {
         // -------------------------------------------------------------
         let currentFleetSubView = 'overview';
         function switchFleetSubView(viewId) {
-            if (!canViewBalances && (viewId === 'salespersons' || viewId === 'payments' || viewId === 'ledger')) {
+            if (!canViewBalances && !hasPermission('manage_sales_pipeline') && viewId === 'salespersons') {
+                viewId = 'overview';
+            }
+            if (!canViewBalances && (viewId === 'payments' || viewId === 'ledger')) {
                 viewId = 'overview';
             }
             currentFleetSubView = viewId;
@@ -429,12 +432,126 @@ function escapeJsAttr(val) {
                 }
             });
 
-            if (viewId === 'analytics' && window.lastFleetAnalytics && window.lastFleetStats) {
-                setTimeout(() => renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats), 50);
+            if ((viewId === 'analytics' || viewId === 'all') && window.lastFleetAnalytics) {
+                requestAnimationFrame(() => {
+                    setTimeout(() => {
+                        renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
+                    }, 80);
+                });
             }
         }
 
+        window.selectedFleetCompany = 'ALL';
         window.currentSalespersonCompanyFilter = 'ALL';
+
+        function switchFleetCompany(comp) {
+            window.selectedFleetCompany = comp;
+            window.currentSalespersonCompanyFilter = comp;
+
+            // Update company division pills UI
+            document.querySelectorAll('.fleet-company-pill').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs');
+                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+            });
+            const pillId = comp === 'ALL' ? 'fleet-comp-ALL' :
+                           comp.includes('LG') ? 'fleet-comp-LG' :
+                           comp.includes('Tagoneswa') ? 'fleet-comp-TG' : 'fleet-comp-Kreckle';
+            const activePill = document.getElementById(pillId);
+            if (activePill) {
+                activePill.classList.add('bg-blue-600', 'text-white', 'shadow-xs');
+                activePill.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+            }
+
+            // Synchronize subview salesperson buttons
+            filterSalespersonsByCompany(comp);
+
+            // Re-filter Trips table
+            if (typeof filterTripsTable === 'function') filterTripsTable(true);
+
+            // Re-filter Approvals table
+            if (typeof filterFleetApprovalsTable === 'function') filterFleetApprovalsTable(true);
+            if (typeof filterApprovalsTable === 'function') filterApprovalsTable(true);
+
+            // Re-render Analytics & KPIs for this company
+            updateCompanyPartitionedKPIs();
+        }
+
+        function updateCompanyPartitionedKPIs() {
+            if (!cachedData || !cachedData.fleet) return;
+            const fleet = cachedData.fleet;
+            const comp = window.selectedFleetCompany || 'ALL';
+
+            if (comp === 'ALL') {
+                // Master / overall data across all 3 companies
+                const tripsEl = document.getElementById('fleet-stat-trips');
+                if (tripsEl && fleet.stats) tripsEl.textContent = fleet.stats.total_trips ?? 0;
+
+                const approvedEl = document.getElementById('fleet-stat-approved');
+                if (approvedEl && fleet.stats) approvedEl.textContent = fleet.stats.approved_trips ?? 0;
+
+                const shortfallsEl = document.getElementById('fleet-stat-shortfalls');
+                if (shortfallsEl && fleet.stats) shortfallsEl.textContent = fleet.stats.shortfall_trips ?? 0;
+
+                const transportEl = document.getElementById('fleet-stat-transport');
+                if (transportEl && fleet.stats) transportEl.textContent = '$' + Number(fleet.stats.total_transport_charges || 0).toFixed(2);
+
+                const backlogEl = document.getElementById('fleet-stat-backlog');
+                if (backlogEl && fleet.stats) backlogEl.textContent = '$' + Number(fleet.stats.total_outstanding_backlog || 0).toFixed(2);
+
+                const masterApp = document.getElementById('master-active-ops');
+                if (masterApp && fleet.overview?.kpis) masterApp.textContent = fleet.overview.kpis.pending_trip_approvals ?? 0;
+
+                if (window.lastFleetAnalytics && window.lastFleetStats) {
+                    renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
+                }
+            } else {
+                // Company-specific partitioned data
+                const cLower = comp.toLowerCase();
+                const trips = (fleet.trips || []).filter(t => {
+                    const c = (t.company_name || '').toLowerCase();
+                    if (cLower.includes('lg')) return c.includes('lg');
+                    if (cLower.includes('tagoneswa') || cLower.includes('tg')) return c.includes('tagoneswa') || c.includes('tg') || c.includes('hardware');
+                    if (cLower.includes('kreckle')) return c.includes('kreckle');
+                    return false;
+                });
+
+                const reps = (fleet.salespersons || []).filter(s => {
+                    const c = (s.company || '').toLowerCase();
+                    if (cLower.includes('lg')) return c.includes('lg');
+                    if (cLower.includes('tagoneswa') || cLower.includes('tg')) return c.includes('tagoneswa') || c.includes('tg') || c.includes('hardware');
+                    if (cLower.includes('kreckle')) return c.includes('kreckle');
+                    return false;
+                });
+
+                const totalTrips = trips.length;
+                const approvedTrips = trips.filter(t => (t.status || '').toUpperCase().includes('APPROVED') || (t.status || '').toUpperCase().includes('SETTLED') || (t.status || '').toUpperCase().includes('CLOSED')).length;
+                const shortfallTrips = trips.filter(t => (t.shortfall || 0) > 0).length;
+                const totalTransport = trips.reduce((acc, t) => acc + (t.transport_charge || 0), 0);
+                const totalBacklog = reps.reduce((acc, s) => acc + Math.max(0, s.net_balance || 0), 0);
+
+                const tripsEl = document.getElementById('fleet-stat-trips');
+                if (tripsEl) tripsEl.textContent = totalTrips;
+
+                const approvedEl = document.getElementById('fleet-stat-approved');
+                if (approvedEl) approvedEl.textContent = approvedTrips;
+
+                const shortfallsEl = document.getElementById('fleet-stat-shortfalls');
+                if (shortfallsEl) shortfallsEl.textContent = shortfallTrips;
+
+                const transportEl = document.getElementById('fleet-stat-transport');
+                if (transportEl) transportEl.textContent = '$' + totalTransport.toFixed(2);
+
+                const backlogEl = document.getElementById('fleet-stat-backlog');
+                if (backlogEl) backlogEl.textContent = '$' + totalBacklog.toFixed(2);
+
+                const masterApp = document.getElementById('master-active-ops');
+                if (masterApp) masterApp.textContent = trips.filter(t => (t.status || '').toUpperCase().includes('SHORTFALL') || (t.status || '').toUpperCase().includes('QUOTED')).length;
+
+                if (window.lastFleetAnalytics && window.lastFleetStats) {
+                    renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
+                }
+            }
+        }
 
         function filterSalespersonsByCompany(comp) {
             window.currentSalespersonCompanyFilter = comp;
@@ -1143,7 +1260,7 @@ function escapeJsAttr(val) {
                 const canFuel = hasPermission('manage_fuel_price') || hasPermission('manage_city_minimums');
                 const canTrucks = hasPermission('manage_trucks');
                 const canDrivers = hasPermission('manage_drivers');
-                const canSales = hasPermission('manage_sales_reps');
+                const canSales = hasPermission('manage_sales_pipeline') || hasPermission('manage_sales_reps');
                 const canAudit = hasPermission('view_audit_logs');
                 const canUsers = currentUser && currentUser.role === 'MASTER_ADMIN';
 
@@ -1175,6 +1292,11 @@ function escapeJsAttr(val) {
                                     <span class="flex items-center gap-2">Shortfall Approvals</span>
                                     <span class="text-[10px] font-mono text-amber-500 font-bold">Queue</span>
                                 </button>
+                                ${!canViewBalances && canSales ? `
+                                <button onclick="switchFleetSubView('salespersons'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">Sales Reps Directory</span>
+                                    <span class="text-[10px] font-mono text-indigo-500 font-bold">Roster</span>
+                                </button>` : ''}
                             </div>
                         </div>
 
@@ -1929,24 +2051,44 @@ function escapeJsAttr(val) {
                                             </div>
                                         </div>
                                         <div class="flex items-center gap-1.5 shrink-0">
-                                            <button onclick="openAddSalesRepModal('${sp.employee_id || ''}', '${escapeJsAttr(sp.name)}', '${sp.phone}', '${escapeJsAttr(sp.email)}', true)" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs font-bold cursor-pointer">
+                                            <button onclick="openAddSalesRepModal('${sp.employee_id || ''}', '${escapeJsAttr(sp.name)}', '${sp.phone}', '${escapeJsAttr(sp.email)}', true, '${escapeJsAttr(comp)}', '${escapeJsAttr(sp.role || 'SALES_REP')}')" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs font-bold cursor-pointer">
                                                 Edit
                                             </button>
                                             <span class="text-[10px] px-2 py-0.5 rounded-full border ${badgeClass} whitespace-nowrap">${badgeText}</span>
                                         </div>
                                     </div>
+                                    ${(canViewBalances && !sp.hide_financials) ? `
                                     <div class="mt-3 bg-white dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-lg p-2.5">
                                         <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-zinc-500">Current Outstanding Debt</div>
                                         <div class="text-xl font-extrabold font-mono ${sp.net_balance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'} mt-0.5">
                                             $${sp.net_balance.toFixed(2)}
                                         </div>
                                     </div>
+                                    ` : `
+                                    <div class="mt-3 bg-white dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-lg p-2.5">
+                                        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-zinc-500">Commercial Contact</div>
+                                        <div class="text-xs font-semibold text-slate-700 dark:text-zinc-300 mt-1 flex items-center gap-1.5">
+                                            <a href="https://wa.me/${sp.phone}" target="_blank" class="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1">
+                                                <span>💬 WhatsApp</span>
+                                            </a>
+                                            <span class="text-slate-300 dark:text-zinc-700">•</span>
+                                            <span class="text-slate-500 dark:text-zinc-400">${sp.active !== false ? 'Active Roster' : 'Inactive'}</span>
+                                        </div>
+                                    </div>
+                                    `}
                                 </div>
+                                ${(canViewBalances && !sp.hide_financials) ? `
                                 <div class="mt-3 pt-2.5 border-t border-slate-200/80 dark:border-zinc-800/80 flex items-center justify-between text-[11px] text-slate-600 dark:text-zinc-400">
                                     <span>Accrued: <strong class="text-rose-600 dark:text-rose-400 font-mono">$${sp.total_shortfalls.toFixed(2)}</strong></span>
                                     <span>Recovered: <strong class="text-emerald-600 dark:text-emerald-400 font-mono">$${sp.total_recovered.toFixed(2)}</strong></span>
                                 </div>
-                                ${sp.net_balance > 0 && hasPermission('clear_sales_rep_debt') ? `
+                                ` : `
+                                <div class="mt-3 pt-2.5 border-t border-slate-200/80 dark:border-zinc-800/80 flex items-center justify-between text-[11px] text-slate-400 dark:text-zinc-500 italic">
+                                    <span>Financials: Restricted</span>
+                                    <span>Division: ${escapeJsAttr(comp)}</span>
+                                </div>
+                                `}
+                                ${(canViewBalances && !sp.hide_financials && sp.net_balance > 0 && hasPermission('clear_sales_rep_debt')) ? `
                                     <button onclick="openClearPaymentModal('${sp.name}', '${sp.phone}', ${sp.net_balance})" class="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center justify-center gap-1 shadow-xs cursor-pointer">
                                         Clear Debt Settlement
                                     </button>
@@ -2180,7 +2322,22 @@ function escapeJsAttr(val) {
                                  r.route.toLowerCase().includes(q);
                 const matchesCity = cityFilter === 'ALL' || r.destination_city === cityFilter;
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
-                return matchesQ && matchesCity && matchesStatus;
+
+                let matchesCompany = true;
+                if (window.selectedFleetCompany && window.selectedFleetCompany !== 'ALL') {
+                    const sel = window.selectedFleetCompany.toLowerCase();
+                    const rComp = (r.company || '').toLowerCase();
+                    matchesCompany = rComp.includes(sel) || sel.includes(rComp);
+                    if (!matchesCompany && r.salesperson_phone && cachedData.fleet.salespersons) {
+                        const sp = cachedData.fleet.salespersons.find(s => s.phone === r.salesperson_phone);
+                        if (sp && sp.company) {
+                            const spComp = sp.company.toLowerCase();
+                            matchesCompany = spComp.includes(sel) || sel.includes(spComp);
+                        }
+                    }
+                }
+
+                return matchesQ && matchesCity && matchesStatus && matchesCompany;
             });
 
             // Enforce newest first
@@ -2277,7 +2434,22 @@ function escapeJsAttr(val) {
                     const st = (t.status || '').toUpperCase();
                     matchesStage = st.includes(stageFilter);
                 }
-                return matchesQ && matchesStage;
+
+                let matchesCompany = true;
+                if (window.selectedFleetCompany && window.selectedFleetCompany !== 'ALL') {
+                    const sel = window.selectedFleetCompany.toLowerCase();
+                    const tComp = (t.company || '').toLowerCase();
+                    matchesCompany = tComp.includes(sel) || sel.includes(tComp);
+                    if (!matchesCompany && t.salesperson_phone && cachedData.fleet.salespersons) {
+                        const sp = cachedData.fleet.salespersons.find(s => s.phone === t.salesperson_phone);
+                        if (sp && sp.company) {
+                            const spComp = sp.company.toLowerCase();
+                            matchesCompany = spComp.includes(sel) || sel.includes(spComp);
+                        }
+                    }
+                }
+
+                return matchesQ && matchesStage && matchesCompany;
             });
 
             const badgeEl = document.getElementById('trips-count-badge');
@@ -3199,15 +3371,32 @@ function escapeJsAttr(val) {
         // =============================================================
         // MODAL 6: SALES REPRESENTATIVE MANAGEMENT
         // =============================================================
-        function openAddSalesRepModal(empId = '', name = '', phone = '', email = '', active = true) {
+        function openAddSalesRepModal(empId = '', name = '', phone = '', email = '', active = true, company = '', role = 'SALES_REP') {
             const modal = document.getElementById('addSalesRepModal');
             if (!modal) return;
             document.getElementById('modal-salesrep-id').value = empId || '';
-            document.getElementById('salesrep-modal-title').textContent = empId ? ('Edit Sales Rep: ' + name) : 'Register New Sales Representative';
+            document.getElementById('salesrep-modal-title').textContent = empId ? ('Edit: ' + name) : 'Register New Sales Rep / Admin';
             document.getElementById('modal-salesrep-name').value = name || '';
             document.getElementById('modal-salesrep-phone').value = phone || '';
             document.getElementById('modal-salesrep-email').value = email || '';
             document.getElementById('modal-salesrep-active').checked = (active === true || active === 'true');
+
+            const compSelect = document.getElementById('modal-salesrep-company');
+            if (compSelect) {
+                if (company) {
+                    if (company.includes('LG')) compSelect.value = 'LG Plast';
+                    else if (company.includes('Tagoneswa') || company.includes('TG')) compSelect.value = 'Tagoneswa Hardware';
+                    else if (company.includes('Kreckle')) compSelect.value = 'Kreckle Foods';
+                    else compSelect.value = company;
+                } else if (window.selectedFleetCompany && window.selectedFleetCompany !== 'ALL') {
+                    compSelect.value = window.selectedFleetCompany;
+                }
+            }
+
+            const roleSelect = document.getElementById('modal-salesrep-role');
+            if (roleSelect && role) {
+                roleSelect.value = role;
+            }
 
             const fb = document.getElementById('modal-salesrep-feedback');
             if (fb) fb.classList.add('hidden');
@@ -3227,6 +3416,8 @@ function escapeJsAttr(val) {
             const phone = (document.getElementById('modal-salesrep-phone').value || '').trim();
             const email = (document.getElementById('modal-salesrep-email').value || '').trim();
             const active = document.getElementById('modal-salesrep-active').checked;
+            const company = document.getElementById('modal-salesrep-company')?.value || 'LG Plast';
+            const role = document.getElementById('modal-salesrep-role')?.value || 'SALES_REP';
             const btn = document.getElementById('modal-submit-salesrep-btn');
             const fb = document.getElementById('modal-salesrep-feedback');
 
@@ -3247,12 +3438,14 @@ function escapeJsAttr(val) {
                         full_name: name,
                         phone: phone,
                         email: email,
+                        company: company,
+                        role: role,
                         active: active
                     })
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast(`Sales Rep ${name} saved successfully!`);
+                    showToast(`Sales Rep ${name} (${company}) saved successfully!`);
                     closeAddSalesRepModal();
                     await fetchDashboard();
                 } else {

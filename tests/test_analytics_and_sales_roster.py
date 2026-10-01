@@ -71,3 +71,65 @@ class TestAnalyticsAndSalesRoster(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="an-corridors-bar-chart"', html_body, "Corridors bar chart canvas should be present")
         self.assertIn('id="an-financial-overview-chart"', html_body, "Financial overview chart canvas should be present")
         self.assertIn('id="sp-company-filters"', html_body, "Company filter bar should be present")
+        self.assertIn("Sales to Fleet", html_body, "Commercial Fleet tab should be renamed to Sales to Fleet")
+
+    async def test_fleet_admin_masked_financials_in_sales_roster(self):
+        fleet_user = {
+            "username": "sujit",
+            "name": "Sujit (Fleet Admin)",
+            "role": "FLEET_ADMIN",
+            "allowed_domains": ["fleet", "logistics"],
+            "custom_permissions": {}
+        }
+        mock_req = self.make_mock_request()
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=fleet_user):
+            async with async_session_factory() as session:
+                data = await get_dashboard_data(mock_req, session)
+
+        fleet = data.get("fleet", {})
+        salespersons = fleet.get("salespersons", [])
+        self.assertGreater(len(salespersons), 0)
+
+        # Confirm all sales reps have hide_financials = True and zeroed out balances for Fleet Admin
+        for sp in salespersons:
+            self.assertTrue(sp.get("hide_financials"), "Fleet Admin should have hide_financials = True for sales reps")
+            self.assertEqual(sp.get("net_balance"), 0.0, "Fleet Admin should see zeroed net_balance")
+            self.assertEqual(sp.get("total_shortfalls"), 0.0, "Fleet Admin should see zeroed total_shortfalls")
+            self.assertEqual(sp.get("total_recovered"), 0.0, "Fleet Admin should see zeroed total_recovered")
+
+    async def test_api_save_sales_rep_with_company_and_role(self):
+        from app.dashboard import api_save_sales_rep
+
+        fleet_user = {
+            "username": "sujit",
+            "name": "Sujit (Fleet Admin)",
+            "role": "FLEET_ADMIN",
+            "allowed_domains": ["fleet", "logistics"],
+            "custom_permissions": {}
+        }
+        post_data = {
+            "name": "Tariro SalesAdmin",
+            "phone": "263773998877",
+            "email": "tariro@kreckle.com",
+            "active": True,
+            "company": "Kreckle Foods",
+            "role": "SALES_ADMIN"
+        }
+        mock_req = MagicMock()
+        async def json_coro():
+            return post_data
+        mock_req.json = json_coro
+
+        with patch("app.dashboard.get_current_user_from_request", return_value=fleet_user):
+            async with async_session_factory() as session:
+                res = await api_save_sales_rep(mock_req, session)
+
+        self.assertEqual(res.get("status"), "success")
+        self.assertEqual(res.get("sales_rep", {}).get("company"), "Kreckle Foods")
+        self.assertEqual(res.get("sales_rep", {}).get("role"), "SALES_ADMIN")
+        self.assertIn("263773998877", OFFICIAL_SALES_REPS_DIRECTORY)
+        self.assertEqual(OFFICIAL_SALES_REPS_DIRECTORY["263773998877"]["company"], "Kreckle Foods")
+        self.assertEqual(OFFICIAL_SALES_REPS_DIRECTORY["263773998877"]["role"], "SALES_ADMIN")
+        # Cleanup
+        del OFFICIAL_SALES_REPS_DIRECTORY["263773998877"]

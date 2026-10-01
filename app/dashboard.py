@@ -1062,20 +1062,35 @@ async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db
     
     body = await request.json()
     emp_id = body.get("employee_id")
-    full_name = str(body.get("full_name", "")).strip()
+    full_name = str(body.get("full_name") or body.get("name") or "").strip()
     phone = str(body.get("phone", "")).replace("+", "").strip()
     email = str(body.get("email", "")).strip() or None
     is_active = bool(body.get("active", True))
+    company = str(body.get("company", "")).strip() or "LG Plast"
+    role = str(body.get("role", "SALES_REP")).strip()
 
     if not full_name or not phone:
         raise HTTPException(status_code=400, detail="Sales rep name and phone number are required.")
 
     uname = user.get("name", "Admin")
 
-    dept_stmt = select(Department).where(Department.department_name.ilike("%Sales%"))
-    sales_dept = (await db.execute(dept_stmt)).scalars().first()
-    loc_stmt = select(Location).limit(1)
+    # Match company to Location
+    loc_search = "%" + ("Kreckle" if "kreckle" in company.lower() else ("Tagoneswa" if "tagoneswa" in company.lower() or "tg" in company.lower() else "LG Plast")) + "%"
+    loc_stmt = select(Location).where(Location.location_name.ilike(loc_search))
     loc = (await db.execute(loc_stmt)).scalars().first()
+    if not loc:
+        loc_stmt_fallback = select(Location).limit(1)
+        loc = (await db.execute(loc_stmt_fallback)).scalars().first()
+
+    # Match role to Department
+    if role == "SALES_ADMIN":
+        dept_stmt = select(Department).where(Department.department_name.ilike("%Sales Admin%"))
+        sales_dept = (await db.execute(dept_stmt)).scalars().first()
+    else:
+        sales_dept = None
+    if not sales_dept:
+        dept_stmt = select(Department).where(Department.department_name.ilike("%Sales%"))
+        sales_dept = (await db.execute(dept_stmt)).scalars().first()
 
     if emp_id:
         stmt = select(Employee).where(Employee.employee_id == int(emp_id))
@@ -1089,23 +1104,38 @@ async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db
         emp.active = is_active
         if sales_dept:
             emp.department_id = sales_dept.department_id
+        if loc:
+            emp.location_id = loc.location_id
         action = "UPDATE_SALES_REP"
     else:
         stmt = select(Employee).where(Employee.phone == phone)
         existing = (await db.execute(stmt)).scalars().first()
         if existing:
-            raise HTTPException(status_code=400, detail=f"Employee with phone {phone} already exists.")
-        emp = Employee(
-            full_name=full_name,
-            phone=phone,
-            email=email,
-            department_id=sales_dept.department_id if sales_dept else None,
-            location_id=loc.location_id if loc else None,
-            active=is_active
-        )
-        db.add(emp)
-        prev_vals = None
-        action = "ADD_SALES_REP"
+            emp = existing
+            prev_vals = {"full_name": emp.full_name, "phone": emp.phone, "active": emp.active}
+            emp.full_name = full_name
+            emp.email = email
+            emp.active = is_active
+            if sales_dept:
+                emp.department_id = sales_dept.department_id
+            if loc:
+                emp.location_id = loc.location_id
+            action = "UPDATE_SALES_REP"
+        else:
+            emp = Employee(
+                full_name=full_name,
+                phone=phone,
+                email=email,
+                department_id=sales_dept.department_id if sales_dept else None,
+                location_id=loc.location_id if loc else None,
+                active=is_active
+            )
+            db.add(emp)
+            prev_vals = None
+            action = "ADD_SALES_REP"
+
+    # Update in-memory official directory cache
+    OFFICIAL_SALES_REPS_DIRECTORY[phone] = {"name": full_name, "company": company, "role": role}
 
     perm_used = "manage_sales_pipeline" if user_has_permission(user, "manage_sales_pipeline") else "manage_trucks"
     audit = AuditLog(
@@ -1116,8 +1146,8 @@ async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db
         permission_used=perm_used,
         entity_id=phone,
         previous_value=prev_vals,
-        new_value={"full_name": full_name, "phone": phone, "email": email, "active": is_active},
-        remarks=f"{action} by {uname}",
+        new_value={"full_name": full_name, "phone": phone, "email": email, "company": company, "role": role, "active": is_active},
+        remarks=f"{action} ({company} - {role}) by {uname}",
         ip_address=get_client_ip(request),
         created_at=datetime.datetime.utcnow()
     )
@@ -1132,6 +1162,8 @@ async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db
             "full_name": emp.full_name,
             "phone": emp.phone,
             "email": emp.email,
+            "company": company,
+            "role": role,
             "active": emp.active
         }
     }
@@ -2109,8 +2141,37 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "total_outstanding_backlog": 0.0,
                 "total_recovered": 0.0,
             },
-            "salespersons": salespersons_list if can_view_balances else [],
-            "sales_reps": sales_reps_list if can_view_balances else [],
+            "salespersons": salespersons_list if can_view_balances else [
+                {
+                    "phone": sp["phone"],
+                    "name": sp["name"],
+                    "company": sp.get("company", "Commercial Sales"),
+                    "employee_id": sp.get("employee_id"),
+                    "email": sp.get("email", ""),
+                    "active": sp.get("active", True),
+                    "is_official": sp.get("is_official", True),
+                    "total_shortfalls": 0.0,
+                    "total_recovered": 0.0,
+                    "net_balance": 0.0,
+                    "trips_count": sp.get("trips_count", 0),
+                    "entries_count": 0,
+                    "recent_date": sp.get("recent_date", "Active Commercial Roster"),
+                    "risk_level": "HEALTHY",
+                    "hide_financials": True
+                }
+                for sp in salespersons_list
+            ],
+            "sales_reps": sales_reps_list if can_view_balances else [
+                {
+                    "employee_id": r.get("employee_id"),
+                    "full_name": r.get("full_name"),
+                    "phone": r.get("phone"),
+                    "email": r.get("email", ""),
+                    "company": r.get("company", "Commercial Sales"),
+                    "active": r.get("active", True)
+                }
+                for r in sales_reps_list
+            ],
             "records": approval_records if can_view_balances else [
                 {**r, "trip_sales_value": 0.0, "shortfall": 0.0, "pending_balance_recorded": 0.0}
                 for r in approval_records
@@ -2227,7 +2288,7 @@ async def dashboard_view(request: Request):
     # Generate navigation tab buttons based on allowed domains
     tabs_html = []
     if "fleet" in allowed:
-        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">Commercial Fleet</button>')
+        tabs_html.append('<button id="btn-tab-fleet" onclick="switchDomain(\'fleet\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">Sales to Fleet</button>')
     if "it" in allowed:
         tabs_html.append('<button id="btn-tab-it" onclick="switchDomain(\'it\')" class="tab-btn px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer">IT Support</button>')
     if "projects" in allowed:
@@ -2785,7 +2846,7 @@ async def dashboard_view(request: Request):
             </div>
         </div>
         <!-- ========================================================= -->
-        <!-- TAB 4: COMMERCIAL FLEET & LOGISTICS OPERATIONS -->
+        <!-- TAB 4: SALES TO FLEET OPERATIONS -->
         <!-- ========================================================= -->
         <div id="view-fleet" class="domain-view space-y-6 sm:space-y-8" style="display: {'block' if 'fleet' in allowed and default_tab == 'fleet' else 'none'}">
             <!-- Executive Fleet Command Center Banner -->
@@ -2793,10 +2854,10 @@ async def dashboard_view(request: Request):
                 <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800/80 dark:border-zinc-800/80 pb-4 mb-5">
                     <div>
                         <div class="inline-flex items-center gap-2 bg-blue-500/20 text-blue-300 border border-blue-400/30 px-3 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase mb-1.5">
-                            Commercial Fleet & Logistics Operations
+                            Sales to Fleet Operations
                         </div>
-                        <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Fleet & Commercial Command Center</h2>
-                        <p class="text-xs text-slate-400 mt-1">Trip Pipeline, Fleet Vehicles, Commercial Drivers, Zimbabwe Corridors & Financial Debt Ledgers</p>
+                        <h2 class="text-xl sm:text-2xl font-extrabold tracking-tight">Enterprise Sales to Fleet Command Center</h2>
+                        <p class="text-xs text-slate-400 mt-1">Multi-Company Operations: LG Plast, Tagoneswa Hardware & Kreckle Foods</p>
                     </div>
                     <!-- Quick Management Action Buttons -->
                     <div class="flex flex-wrap items-center gap-2 sm:gap-2.5">
@@ -2857,6 +2918,30 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] text-slate-400 dark:text-zinc-400 mt-0.5 font-medium">{drivers_active} Active Drivers</div>
                     </div>
                     """}
+                </div>
+            </div>
+
+            <!-- Multi-Company Division Selector Bar -->
+            <div class="p-3 bg-white dark:bg-[#0c0c10] rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-extrabold uppercase tracking-wider text-slate-800 dark:text-zinc-200 flex items-center gap-1.5">
+                        <span>🏢</span> Company Division:
+                    </span>
+                    <span class="text-[11px] text-slate-400 dark:text-zinc-500 hidden md:inline">Partition operational metrics, trips & roster</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5" id="fleet-company-pills">
+                    <button onclick="switchFleetCompany('ALL')" id="fleet-comp-ALL" class="fleet-company-pill px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">
+                        🌐 All Companies (Master)
+                    </button>
+                    <button onclick="switchFleetCompany('LG Plast')" id="fleet-comp-LG" class="fleet-company-pill px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+                        🏢 LG Plast
+                    </button>
+                    <button onclick="switchFleetCompany('Tagoneswa Hardware')" id="fleet-comp-TG" class="fleet-company-pill px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+                        🔨 Tagoneswa Hardware
+                    </button>
+                    <button onclick="switchFleetCompany('Kreckle Foods')" id="fleet-comp-Kreckle" class="fleet-company-pill px-3.5 py-1.5 rounded-xl text-xs font-bold text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+                        🌾 Kreckle Foods
+                    </button>
                 </div>
             </div>
 
@@ -3310,14 +3395,14 @@ async def dashboard_view(request: Request):
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
                     <div>
                         <h2 class="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 dark:text-zinc-100 flex items-center gap-2">
-                            Sales Representative Balances
+                            """ + ("Sales Representative Balances" if can_view_balances else "Sales Representative Directory") + f"""
                         </h2>
-                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">Real-time balances tracked per sales representative with instant clearance action</p>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400 mt-0.5">""" + ("Real-time balances tracked per sales representative with instant clearance action" if can_view_balances else "Commercial sales representative roster and contact directory across LG Plast, Tagoneswa Hardware and Kreckle") + f"""</p>
                     </div>
                     <div class="flex items-center gap-2.5">
                         {"" if not (user_has_permission(user, "manage_sales_pipeline") or can_manage_trucks) else '''
                         <button onclick="openAddSalesRepModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer">
-                            <span>+</span> Add Sales Rep
+                            <span>+</span> Add Sales Rep / Admin
                         </button>
                         '''}
                         {"" if not can_clear_debt else '''
@@ -3325,11 +3410,14 @@ async def dashboard_view(request: Request):
                             Clear Debt Payment
                         </button>
                         '''}
+                        {f"""
                         <div class="text-right">
                             <span class="text-xs font-bold text-slate-500 dark:text-zinc-400">Total Pending: </span>
                             <span class="text-sm font-extrabold text-rose-600 dark:text-rose-400 font-mono" id="fleet-total-pending-pill">$0.00</span>
                         </div>
+                        """ if can_view_balances else ""}
                     </div>
+                </div>
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 mb-4 pb-3 border-b border-slate-100 dark:border-zinc-850">
                     <div class="flex flex-wrap items-center gap-1.5" id="sp-company-filters">
                         <button onclick="filterSalespersonsByCompany('ALL')" id="sp-filter-ALL" class="sp-filter-btn px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">All Divisions</button>
@@ -3696,7 +3784,7 @@ async def dashboard_view(request: Request):
                                 <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold border border-blue-200 dark:border-blue-800">Lifecycle</span>
                             </div>
                             <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Trips distributed across operational stages & delivery pipeline</p>
-                            <div class="h-56 relative w-full mb-3 flex items-center justify-center">
+                            <div class="h-56 relative w-full mb-3">
                                 <canvas id="an-pipeline-chart"></canvas>
                             </div>
                         </div>
@@ -3713,7 +3801,7 @@ async def dashboard_view(request: Request):
                                 <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">OPEX Split</span>
                             </div>
                             <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Live breakdown of fuel, crew allowances, meals, accommodation & tolls</p>
-                            <div class="h-56 relative w-full flex items-center justify-center mb-3">
+                            <div class="h-56 relative w-full mb-3">
                                 <canvas id="an-cost-donut-chart"></canvas>
                             </div>
                         </div>
@@ -3751,7 +3839,7 @@ async def dashboard_view(request: Request):
                                 <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-bold border border-purple-200 dark:border-purple-800">Audit</span>
                             </div>
                             <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Settlement clearance comparison and deficit liquidity</p>
-                            <div class="h-56 relative w-full mb-3 flex items-center justify-center">
+                            <div class="h-56 relative w-full mb-3">
                                 <canvas id="an-financial-overview-chart"></canvas>
                             </div>
                             <div class="space-y-3">
@@ -3784,7 +3872,7 @@ async def dashboard_view(request: Request):
                                 <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800">Readiness</span>
                             </div>
                             <p class="text-[11px] text-slate-500 dark:text-zinc-400 mb-3">Vehicle availability vs active transport trips</p>
-                            <div class="h-56 relative w-full mb-3 flex items-center justify-center">
+                            <div class="h-56 relative w-full mb-3">
                                 <canvas id="an-fleet-readiness-chart"></canvas>
                             </div>
                             <div class="space-y-3">
@@ -4236,12 +4324,28 @@ async def dashboard_view(request: Request):
                     <span class="text-[10px] text-slate-400 mt-1 block">WhatsApp number used to submit trip requests</span>
                 </div>
                 <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Company Division *</label>
+                    <select id="modal-salesrep-company" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                        <option value="LG Plast">LG Plast</option>
+                        <option value="Tagoneswa Hardware">Tagoneswa Hardware</option>
+                        <option value="Kreckle Foods">Kreckle Foods</option>
+                    </select>
+                    <span class="text-[10px] text-slate-400 mt-1 block">Partitions trips, shortfall ledgers and reporting by company</span>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Role Designation *</label>
+                    <select id="modal-salesrep-role" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                        <option value="SALES_REP">Commercial Sales Representative</option>
+                        <option value="SALES_ADMIN">Sales Administrator / Dispatch Lead</option>
+                    </select>
+                </div>
+                <div>
                     <label class="block text-xs font-bold text-slate-700 dark:text-zinc-300 mb-1">Email Address (Optional)</label>
                     <input type="email" id="modal-salesrep-email" placeholder="e.g. sales@tagoneswa.co.zw" class="w-full bg-slate-50 dark:bg-[#121216] border border-slate-300 dark:border-zinc-700 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                 </div>
                 <div class="flex items-center gap-2 pt-2">
                     <input type="checkbox" id="modal-salesrep-active" checked class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300">
-                    <label for="modal-salesrep-active" class="text-xs font-bold text-slate-700 dark:text-zinc-300 cursor-pointer">Active Sales Representative</label>
+                    <label for="modal-salesrep-active" class="text-xs font-bold text-slate-700 dark:text-zinc-300 cursor-pointer">Active Commercial Roster</label>
                 </div>
                 <div id="modal-salesrep-feedback" class="text-xs font-bold hidden"></div>
             </div>
