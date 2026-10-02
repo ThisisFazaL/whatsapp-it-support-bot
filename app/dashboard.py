@@ -33,7 +33,7 @@ from app.services.config_service import (
 logger = logging.getLogger("dashboard")
 router = APIRouter()
 
-IT_SUPPORT_ADMIN_PHONES = {"263718627526", "263788843579", "263780100503"}
+IT_SUPPORT_ADMIN_PHONES = {"263783709724", "263788843579", "263780100503"}
 
 OFFICIAL_SALES_REPS_DIRECTORY = {
     # ── LG Plast Sales Reps (7) ───────────────────────────────────────────────

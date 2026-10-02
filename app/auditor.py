@@ -78,7 +78,7 @@ async def seed_master_data(session: AsyncSession):
     emp_regular = Employee(employee_code="EMP_001", full_name="Regular Staff", phone="263771111111", location_id=austin.location_id, active=True)
     emp_dual = Employee(employee_code="EMP_002", full_name="Dual Reporter", phone="263772222222", location_id=coventry.location_id, is_maintenance_reporter=True, active=True)
     
-    admin_it = SupportAdmin(full_name="Kevin Support", phone="263718627526", is_maintenance_admin=False, is_master_admin=False, active=True)
+    admin_it = SupportAdmin(full_name="Kevin Support", phone="263783709724", is_maintenance_admin=False, is_master_admin=False, active=True)
     admin_maint = SupportAdmin(full_name="Stanclea Projects", phone="263780099291", is_maintenance_admin=True, is_master_admin=False, active=True)
     admin_master = SupportAdmin(full_name="Fazal Master", phone="919265368695", is_maintenance_admin=False, is_master_admin=True, active=True)
     session.add_all([emp_regular, emp_dual, admin_it, admin_maint, admin_master])
@@ -199,31 +199,31 @@ async def run_daily_button_audit() -> Dict[str, Any]:
                 # TEST GROUP 5: Support Admin Interactive Buttons
                 # -----------------------------------------------------------------
                 # 5.1 cmd_my_assigned_tickets
-                handled_my_assigned = await handle_admin_command(session, "263718627526", "cmd_my_assigned_tickets")
+                handled_my_assigned = await handle_admin_command(session, "263783709724", "cmd_my_assigned_tickets")
                 record_test("Admin Buttons", "Button: cmd_my_assigned_tickets", handled_my_assigned is True)
 
                 # 5.2 cmd_unassigned_tickets
-                handled_unassigned = await handle_admin_command(session, "263718627526", "cmd_unassigned_tickets")
+                handled_unassigned = await handle_admin_command(session, "263783709724", "cmd_unassigned_tickets")
                 record_test("Admin Buttons", "Button: cmd_unassigned_tickets", handled_unassigned is True)
 
                 # 5.3 cmd_raise_ticket
-                handled_raise = await handle_admin_command(session, "263718627526", "cmd_raise_ticket")
+                handled_raise = await handle_admin_command(session, "263783709724", "cmd_raise_ticket")
                 record_test("Admin Buttons", "Button: cmd_raise_ticket", handled_raise is True)
 
                 # 5.4 claim_{ticket_number}
                 if tkt:
-                    handled_claim = await handle_admin_command(session, "263718627526", f"claim_{tkt.ticket_number}")
+                    handled_claim = await handle_admin_command(session, "263783709724", f"claim_{tkt.ticket_number}")
                     await session.refresh(tkt)
                     record_test("Admin Buttons", f"Button: claim_{tkt.ticket_number} -> Sets In Progress", handled_claim is True and tkt.status_id == 2, f"Status ID: {tkt.status_id}")
 
                 # 5.5 resolve_{ticket_number}
                 if tkt:
-                    handled_resolve_btn = await handle_admin_command(session, "263718627526", f"resolve_{tkt.ticket_number}")
-                    s_admin = await get_user_state(session, "263718627526")
+                    handled_resolve_btn = await handle_admin_command(session, "263783709724", f"resolve_{tkt.ticket_number}")
+                    s_admin = await get_user_state(session, "263783709724")
                     record_test("Admin Buttons", f"Button: resolve_{tkt.ticket_number} -> Prompts for note", handled_resolve_btn is True and s_admin.current_step == "awaiting_admin_resolution_note", f"Step: {s_admin.current_step if s_admin else None}")
 
                     # Submit note
-                    handled_note = await handle_admin_command(session, "263718627526", "Replaced with new OEM battery and tested health")
+                    handled_note = await handle_admin_command(session, "263783709724", "Replaced with new OEM battery and tested health")
                     await session.refresh(tkt)
                     record_test("Admin Resolution", "Admin types resolution note -> Sets status to Resolved (3)", handled_note is True and tkt.status_id == 3 and tkt.resolution_note == "Replaced with new OEM battery and tested health", f"Status: {tkt.status_id}, Note: {tkt.resolution_note}")
 

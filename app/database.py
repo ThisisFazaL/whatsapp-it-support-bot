@@ -914,7 +914,7 @@ async def init_db_models():
         admin_data = [
             {"name": "Fazal Saiyed (Master Admin)", "phone": "919265368695", "is_master": True},
             {"name": "Sujit Patel (Admin)", "phone": "263718352518", "is_master": True},
-            {"name": "Kevin Chikati", "phone": "263718627526", "is_master": False},
+            {"name": "Kevin Chikati", "phone": "263783709724", "is_master": False},
             {"name": "Ellias Murenga", "phone": "263788843579", "is_master": False},
             {"name": "Faisal Kassim", "phone": "263780100503", "is_master": False},
         ]
@@ -1081,7 +1081,7 @@ async def init_db_models():
                 ))
 
         # Explicitly remove Kevin Chikati from maintenance reporters
-        kevin = (await session.execute(select(Employee).where(Employee.phone == "263718627526"))).scalars().first()
+        kevin = (await session.execute(select(Employee).where(Employee.phone == "263783709724"))).scalars().first()
         if kevin:
             kevin.is_maintenance_reporter = False
 

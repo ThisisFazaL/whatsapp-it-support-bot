@@ -657,9 +657,9 @@ async def finalize_ticket_creation(session: AsyncSession, phone: str, employee: 
             footer = "Tap button below to resolve"
         else:
             # Core IT Support (Computers, Laptops, Printers, Scanners, Peripherals, Wi-Fi, Internet, LAN, Outlook, Software, Passwords):
-            # Route to Combined Kevin Chikati (+263 718 627 526) & Ellias Murenga (+263 788 843 579) with Claim button!
+            # Route to Combined Kevin Chikati (+263 783 709 724) & Ellias Murenga (+263 788 843 579) with Claim button!
             kevin_ellias_stmt = select(SupportAdmin).where(
-                SupportAdmin.phone.in_(["263718627526", "263788843579", "+263718627526", "+263788843579"]),
+                SupportAdmin.phone.in_(["263783709724", "263788843579", "+263783709724", "+263788843579"]),
                 SupportAdmin.active == True
             )
             target_admins = list((await session.execute(kevin_ellias_stmt)).scalars().all())
