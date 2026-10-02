@@ -199,6 +199,127 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
 
     return True
 
+KEVIN_PHONE = "263783709724"
+KEVIN_WATCH_TICKET = "TKT-103"  # Latest ticket Kevin should always see on Hi
+
+async def send_tkt103_update_to_kevin(session: AsyncSession, kevin_phone: str):
+    """Fetches TKT-103 (any suffix match) and sends its latest status card to Kevin on every Hi."""
+    try:
+        # Try IT ticket first
+        from app.database import TicketAssignment, AdminNotificationLog
+        tkt_stmt = (
+            select(Ticket)
+            .options(
+                selectinload(Ticket.employee).selectinload(Employee.department),
+                selectinload(Ticket.employee).selectinload(Employee.location),
+                selectinload(Ticket.category),
+                selectinload(Ticket.subcategory),
+                selectinload(Ticket.issue_type),
+                selectinload(Ticket.priority),
+            )
+            .where(
+                Ticket.ticket_number.endswith("-00103") |
+                (Ticket.ticket_number == "TKT-103") |
+                Ticket.ticket_number.endswith("-103")
+            )
+            .order_by(Ticket.created_at.desc())
+            .limit(1)
+        )
+        result = await session.execute(tkt_stmt)
+        t = result.scalars().first()
+
+        if not t:
+            # Try maintenance ticket
+            mnt_stmt = (
+                select(MaintenanceTicket)
+                .options(
+                    selectinload(MaintenanceTicket.employee).selectinload(Employee.department),
+                    selectinload(MaintenanceTicket.employee).selectinload(Employee.location),
+                    selectinload(MaintenanceTicket.category),
+                    selectinload(MaintenanceTicket.subcategory),
+                    selectinload(MaintenanceTicket.issue_type),
+                    selectinload(MaintenanceTicket.priority),
+                )
+                .where(
+                    MaintenanceTicket.ticket_number.endswith("-00103") |
+                    (MaintenanceTicket.ticket_number == "TKT-MNT-103") |
+                    MaintenanceTicket.ticket_number.endswith("-103")
+                )
+                .order_by(MaintenanceTicket.created_at.desc())
+                .limit(1)
+            )
+            mnt_result = await session.execute(mnt_stmt)
+            t = mnt_result.scalars().first()
+
+        if not t:
+            await meta_api.send_text_message(
+                kevin_phone,
+                "📋 *Ticket TKT-103*\n\nTicket not found in the system yet."
+            )
+            return
+
+        emp = t.employee
+        emp_name = emp.full_name if emp else "Staff Reporter"
+        emp_phone = emp.phone if emp else ""
+        dept_name = emp.department.department_name if emp and emp.department else ""
+        loc_name = (
+            t.location.location_name if getattr(t, "location", None) and t.location
+            else (emp.location.location_name if emp and emp.location else "")
+        )
+        cat_name = t.category.category_name if t.category else "N/A"
+        sub_name = t.subcategory.subcategory_name if t.subcategory else "N/A"
+        issue_name = t.issue_type.issue_name if t.issue_type else "Custom Issue"
+        p_name = t.priority.priority_name if t.priority else "Medium"
+        status_str = STATUS_NAMES.get(t.status_id, "🟡 Open")
+        desc = getattr(t, "description", "") or ""
+        res_note = getattr(t, "resolution_note", None)
+
+        is_maint_t = "TKT-MNT" in t.ticket_number
+        domain_label = "🏗️ PROJECTS" if is_maint_t else "💻 IT"
+        dept_str = f" ({dept_name})" if dept_name else ""
+        loc_line = f"🏢 *Location:* {loc_name}\n" if loc_name else ""
+        room_area_val = getattr(t, "room_area", None)
+        if is_maint_t and room_area_val and room_area_val != "N/A":
+            loc_line += f"📍 *Room/Area:* {room_area_val}\n"
+        hazard_info = "\n⚠️ *SAFETY HAZARD FLAG!*" if is_maint_t and getattr(t, "is_safety_hazard", False) else ""
+        note_line = f"\n✅ *Resolution Note:* {res_note}" if res_note else ""
+
+        header = f"🔔 TICKET UPDATE — {t.ticket_number} ({domain_label})"
+        body = (
+            f"👤 *Reporter:* {emp_name}{dept_str} (`+{emp_phone}`)\n"
+            f"{loc_line}"
+            f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
+            f"⚙️ *Issue:* {issue_name}\n"
+            f"🚨 *Priority:* {p_name} | Status: *{status_str}*{hazard_info}\n"
+            f"📝 *Description:* {desc}"
+            f"{note_line}"
+        )
+        footer = "Latest status of your watched ticket"
+
+        # Build action buttons based on current status
+        if t.status_id == 3:  # Resolved
+            buttons = [{"id": f"resolve_{t.ticket_number}", "title": "🟢 View/Re-resolve"}]
+        elif t.status_id == 2:  # In Progress (claimed)
+            buttons = [{"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"}]
+        else:  # Open/unassigned
+            buttons = [
+                {"id": f"claim_{t.ticket_number}", "title": "✅ Claim Ticket"},
+                {"id": f"resolve_{t.ticket_number}", "title": "🟢 Resolve Ticket"},
+            ]
+
+        await asyncio.sleep(0.4)
+        await meta_api.send_button_message(
+            to_phone=kevin_phone,
+            body_text=body,
+            buttons=buttons[:3],
+            header_text=header,
+            footer_text=footer,
+            image_id=getattr(t, "image_id", None)
+        )
+    except Exception as e:
+        logger.error(f"[Kevin TKT-103 update] Failed to send ticket update: {e}", exc_info=True)
+
+
 async def get_delivered_ticket_numbers_for_admin(session: AsyncSession, admin_phone: str) -> set:
     """Returns set of all ticket numbers already delivered/notified to this admin's phone."""
     if not admin_phone:
@@ -626,6 +747,11 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             header_text=header,
             footer_text=footer
         )
+
+        # Kevin always receives the latest TKT-103 status on every Hi
+        if sender_phone.replace("+", "").replace(" ", "").strip().endswith(KEVIN_PHONE[-9:]):
+            await send_tkt103_update_to_kevin(session, sender_phone)
+
         return True
 
     # 2. HANDLE MY ASSIGNED TICKETS
