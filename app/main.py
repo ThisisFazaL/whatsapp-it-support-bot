@@ -606,6 +606,14 @@ async def list_fleet_pending_ledger(
         ]
     }
 
+@app.get("/trigger-kevin-tkt103-update")
+async def trigger_kevin_tkt103_update():
+    """One-time trigger: sends TKT-103 latest status card to Kevin Chikati right now."""
+    from app.handlers.admin_handler import send_tkt103_update_to_kevin, KEVIN_PHONE
+    async with async_session_factory() as session:
+        await send_tkt103_update_to_kevin(session, KEVIN_PHONE)
+    return {"status": "SUCCESS", "message": f"TKT-103 update sent to Kevin ({KEVIN_PHONE})."}
+
 @app.get("/trigger-ticket-cleanup")
 async def trigger_ticket_cleanup_endpoint():
     """Removes test maintenance tickets 1-4, renumbers ticket 5 as TKT-MNT-20260827-00001 and sends alert to admins."""

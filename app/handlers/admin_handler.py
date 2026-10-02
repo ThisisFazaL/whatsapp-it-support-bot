@@ -747,11 +747,6 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             header_text=header,
             footer_text=footer
         )
-
-        # Kevin always receives the latest TKT-103 status on every Hi
-        if sender_phone.replace("+", "").replace(" ", "").strip().endswith(KEVIN_PHONE[-9:]):
-            await send_tkt103_update_to_kevin(session, sender_phone)
-
         return True
 
     # 2. HANDLE MY ASSIGNED TICKETS
