@@ -137,10 +137,15 @@ function escapeJsAttr(val) {
                         ? '<span class="text-emerald-600 font-bold text-[11px]">Active</span>'
                         : '<span class="text-rose-600 font-bold text-[11px]">Inactive</span>';
 
+                    const companyBadge = u.company ? `<span class="bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800 ml-1.5">${escapeJsAttr(u.company)}</span>` : '';
+
                     return `
                         <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
                             <td class="px-4 py-2.5">
-                                <div class="font-bold text-slate-900 dark:text-zinc-100">${u.username}</div>
+                                <div class="font-bold text-slate-900 dark:text-zinc-100 flex items-center flex-wrap gap-1">
+                                    <span>${u.username}</span>
+                                    ${companyBadge}
+                                </div>
                                 <div class="text-[11px] text-slate-500">${u.full_name || '--'}</div>
                             </td>
                             <td class="px-4 py-2.5">
@@ -148,10 +153,14 @@ function escapeJsAttr(val) {
                             </td>
                             <td class="px-4 py-2.5">${statusBadge}</td>
                             <td class="px-4 py-2.5">${overridesBadge}</td>
-                            <td class="px-4 py-2.5 text-right">
+                            <td class="px-4 py-2.5 text-right whitespace-nowrap">
                                 <button onclick="selectUserForEdit('${u.username}')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
                                     Manage
                                 </button>
+                                ${u.username !== 'admin' ? `
+                                <button onclick="deleteUserAccount('${u.username}')" class="bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-400 font-bold px-2.5 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="Remove User Account">
+                                    Remove
+                                </button>` : ''}
                             </td>
                         </tr>
                     `;
@@ -270,6 +279,36 @@ function escapeJsAttr(val) {
                 alert(`Error: ${err.message}`);
             }
         }
+
+        async function deleteUserAccount(uname) {
+            if (uname === 'admin') {
+                alert('Cannot delete super administrator admin.');
+                return;
+            }
+            if (!confirm(`Are you sure you want to remove user account '${uname}'?`)) return;
+            try {
+                const res = await fetch('/api/v2/admin/users/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: uname })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(`User account '${uname}' removed.`);
+                    if (selectedMgmtUsername === uname) {
+                        selectedMgmtUsername = null;
+                        const panel = document.getElementById('user-mgmt-detail-panel');
+                        if (panel) panel.classList.add('hidden');
+                    }
+                    await loadUsersList();
+                } else {
+                    alert(data.detail || 'Failed to remove user account.');
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+        window.deleteUserAccount = deleteUserAccount;
 
         async function toggleUserPermissionSubmit(username, permissionKey, isGranted) {
             const actionWord = isGranted ? 'grant' : 'revoke';
@@ -2360,6 +2399,9 @@ function escapeJsAttr(val) {
                                             <button onclick="openAddSalesRepModal('${sp.employee_id || ''}', '${escapeJsAttr(sp.name)}', '${sp.phone}', '${escapeJsAttr(sp.email)}', true, '${escapeJsAttr(comp)}', '${escapeJsAttr(sp.role || 'SALES_REP')}')" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs font-bold cursor-pointer">
                                                 Edit
                                             </button>
+                                            <button onclick="deleteSalesRep('${sp.phone}', '${escapeJsAttr(sp.name)}')" title="Remove Sales Rep" class="text-rose-600 hover:text-rose-800 dark:hover:text-rose-400 px-2 py-0.5 rounded-md border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition text-xs font-bold cursor-pointer">
+                                                ✕
+                                            </button>
                                             <span class="text-[10px] px-2 py-0.5 rounded-full border ${badgeClass} whitespace-nowrap">${badgeText}</span>
                                         </div>
                                     </div>
@@ -3769,6 +3811,27 @@ function escapeJsAttr(val) {
                 btn.innerHTML = 'Save Sales Rep';
             }
         }
+
+        async function deleteSalesRep(phone, name) {
+            if (!confirm(`Are you sure you want to remove sales representative ${name} (+${phone})?`)) return;
+            try {
+                const res = await fetch('/api/fleet/salespersons/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: phone })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(`Sales representative ${name} removed.`);
+                    await fetchDashboard();
+                } else {
+                    alert(data.detail || 'Failed to remove sales representative');
+                }
+            } catch (err) {
+                alert('Network error removing sales rep: ' + err.message);
+            }
+        }
+        window.deleteSalesRep = deleteSalesRep;
 
         // Initialize dashboard
         setupModalInteractions();

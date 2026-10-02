@@ -379,6 +379,7 @@ class WebUser(Base):
     role = Column(String(50), nullable=False, default="LOGISTICS_USER")  # MASTER_ADMIN, ACCOUNTS_USER, LOGISTICS_MANAGER, LOGISTICS_USER, SALES_ADMIN, IT_ADMIN, PROJECTS_ADMIN
     email = Column(String(100), nullable=True)
     phone = Column(String(30), nullable=True)
+    company = Column(String(100), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
@@ -494,6 +495,10 @@ async def init_db_models():
                 await conn.run_sync(Base.metadata.create_all)
                 try:
                     await conn.execute(text("ALTER TABLE audit_logs ADD COLUMN permission_used VARCHAR(100)"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE web_users ADD COLUMN company VARCHAR(100)"))
                 except Exception:
                     pass
         except Exception as e:
@@ -809,6 +814,10 @@ async def init_db_models():
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_module ON audit_logs(module)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_al_created_at ON audit_logs(created_at)"))
                 await conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS permission_used VARCHAR(100)"))
+                try:
+                    await conn.execute(text("ALTER TABLE web_users ADD COLUMN company VARCHAR(100)"))
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Database table init note: {e}")
             
@@ -1092,6 +1101,13 @@ async def init_db_models():
         if has_mappings:
             await session.execute(delete(AdminCategoryMapping))
             await session.commit()
+
+        # Remove legacy generic 'sales' web user to ensure only official sales admins exist
+        try:
+            await session.execute(delete(WebUser).where(func.lower(WebUser.username) == "sales"))
+            await session.commit()
+        except Exception:
+            pass
 
         # Sync Maintenance / Building Projects Categories (only if not seeded)
         try:

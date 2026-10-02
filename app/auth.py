@@ -47,13 +47,6 @@ USERS_DB = {
         "name": "Sujit (Fleet Admin)",
         "allowed_domains": ["fleet", "logistics"]
     },
-    "sales": {
-        "username": "sales",
-        "password": os.getenv("DASHBOARD_SALES_PASS", "Sales@Tagoneswa2026!"),
-        "role": "SALES_ADMIN",
-        "name": "Sales & Commercial Lead",
-        "allowed_domains": ["fleet"]
-    },
     "logistics": {
         "username": "logistics",
         "password": os.getenv("DASHBOARD_LOGISTICS_PASS", "Logistics@2026!"),

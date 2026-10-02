@@ -34,6 +34,8 @@ from app.dashboard import (
     api_save_truck,
     api_save_driver,
     api_save_sales_rep,
+    api_delete_user,
+    api_delete_sales_rep,
     dashboard_view,
     get_dashboard_data
 )
@@ -178,7 +180,7 @@ class TestRBACAndGovernance(unittest.IsolatedAsyncioTestCase):
     # -------------------------------------------------------------
     # 3. SALES_ADMIN Strict Lockdown
     # -------------------------------------------------------------
-    @patch("app.dashboard.get_current_user_from_request", return_value={"name": "Sales Lead", "username": "sales", "role": "SALES_ADMIN", "custom_permissions": {}})
+    @patch("app.dashboard.get_current_user_from_request", return_value={"name": "Everjoy Tias", "username": "everjoy", "role": "SALES_ADMIN", "company": "Kreckle Foods", "custom_permissions": {}})
     async def test_sales_admin_forbidden_from_all_pricing_and_debt_clearance(self, mock_user):
         async with async_session_factory() as session:
             # 1. Fuel price
@@ -389,6 +391,75 @@ class TestRBACAndGovernance(unittest.IsolatedAsyncioTestCase):
                 api_data = await get_dashboard_data(req, session)
                 fleet_data = api_data.get("fleet", {})
                 self.assertEqual(fleet_data.get("analytics"), {})
+
+    # -------------------------------------------------------------
+    # 9. Sales Admin and Sales Reps Strict Roster Verification
+    # -------------------------------------------------------------
+    async def test_sales_admin_and_sales_reps_strict_roster(self):
+        # 1. Verify User Management shows ONLY the 4 official Sales Admins with their company
+        master_user = {"name": "Master", "username": "admin", "role": "MASTER_ADMIN", "allowed_domains": ["fleet", "admin"], "custom_permissions": {}}
+        with patch("app.dashboard.get_current_user_from_request", return_value=master_user):
+            async with async_session_factory() as session:
+                users_res = await api_get_users(self.make_mock_request({}), session)
+                users = users_res.get("users", [])
+                sales_admins = [u for u in users if u["role"] == "SALES_ADMIN"]
+                sales_admin_usernames = {u["username"] for u in sales_admins}
+                
+                # Must contain the 4 official sales admins
+                self.assertIn("everjoy", sales_admin_usernames)
+                self.assertIn("onelly", sales_admin_usernames)
+                self.assertIn("christine", sales_admin_usernames)
+                self.assertIn("mazviita", sales_admin_usernames)
+                # Generic 'sales' must NOT be present
+                self.assertNotIn("sales", sales_admin_usernames)
+                
+                # Verify company mapping
+                everjoy = next(u for u in sales_admins if u["username"] == "everjoy")
+                onelly = next(u for u in sales_admins if u["username"] == "onelly")
+                christine = next(u for u in sales_admins if u["username"] == "christine")
+                mazviita = next(u for u in sales_admins if u["username"] == "mazviita")
+                self.assertEqual(everjoy["company"], "Kreckle Foods")
+                self.assertEqual(onelly["company"], "LG Plast")
+                self.assertEqual(christine["company"], "Tagoneswa Hardware")
+                self.assertEqual(mazviita["company"], "LG Plast")
+
+        # 2. Verify get_dashboard_data returns ONLY the 18 official sales reps
+        with patch("app.dashboard.get_current_user_from_request", return_value=master_user):
+            async with async_session_factory() as session:
+                data = await get_dashboard_data(self.make_mock_request({}), session)
+                salespersons = data.get("fleet", {}).get("salespersons", [])
+                rep_phones = {sp["phone"] for sp in salespersons}
+
+                # Sales Admin phones must NOT be in sales reps list
+                self.assertNotIn("263780216289", rep_phones) # Everjoy
+                self.assertNotIn("263787381215", rep_phones) # Onelly
+                self.assertNotIn("263783498457", rep_phones) # Christine
+                self.assertNotIn("263718174894", rep_phones) # Mazviita
+
+                # Verify 18 official reps present
+                expected_18 = {
+                    "263779214825", "263711421201", "263777425204", "263781337103",
+                    "263712498581", "263787448975", "263786032376",  # 7 LG
+                    "263718643451", "263782723251", "263717905914", "263717905915",
+                    "263788231069", "263780435477",                  # 6 TG
+                    "263780543771", "263780806954", "263783103611", "263784566997",
+                    "263780573092"                                   # 5 Kreckle
+                }
+                for exp_p in expected_18:
+                    self.assertIn(exp_p, rep_phones)
+                self.assertEqual(len(salespersons), 18)
+
+        # 3. Test removing a sales rep via API
+        with patch("app.dashboard.get_current_user_from_request", return_value=master_user):
+            async with async_session_factory() as session:
+                del_res = await api_delete_sales_rep(self.make_mock_request({"phone": "263780573092"}), session)
+                self.assertEqual(del_res["status"], "success")
+
+                # Re-fetch and verify length is 17
+                data = await get_dashboard_data(self.make_mock_request({}), session)
+                salespersons_after = data.get("fleet", {}).get("salespersons", [])
+                self.assertEqual(len(salespersons_after), 17)
+                self.assertNotIn("263780573092", {sp["phone"] for sp in salespersons_after})
 
 
 if __name__ == "__main__":

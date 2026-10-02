@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import datetime
+from typing import Set, Dict, List, Optional, Any
 from fastapi import APIRouter, Depends, Request, Response, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,15 @@ OFFICIAL_SALES_REPS_DIRECTORY = {
     "263784566997": {"name": "Kudzai Marevesa",          "company": "Kreckle Foods"},
     "263780573092": {"name": "Ndiwande Samihembo Rosa",  "company": "Kreckle Foods"},
 }
+
+SALES_ADMIN_PHONES = {
+    "263780216289",  # Everjoy Tias (Kreckle Foods)
+    "263787381215",  # Onelly Madziro (LG Plast)
+    "263783498457",  # Christine Chiweshe (Tagoneswa Hardware)
+    "263718174894",  # Mazviita Sibongile Ruzvidzo (LG Plast)
+}
+
+REMOVED_SALES_REPS: Set[str] = set()
 
 def get_client_ip(request: Request) -> str:
     """Extracts client IP address safely from headers or connection."""
@@ -632,6 +642,7 @@ async def api_get_users(request: Request, db: AsyncSession = Depends(get_db)):
             "role": wu.role,
             "email": wu.email or "",
             "phone": wu.phone or "",
+            "company": wu.company or USERS_DB.get(wu.username.lower(), {}).get("company", ""),
             "is_active": wu.is_active,
             "inherited_permissions": inherited,
             "custom_granted_permissions": custom_granted,
@@ -655,8 +666,9 @@ async def api_get_users(request: Request, db: AsyncSession = Depends(get_db)):
                 "username": uname,
                 "full_name": udata["name"],
                 "role": udata["role"],
+                "company": udata.get("company", ""),
                 "email": "",
-                "phone": "",
+                "phone": udata.get("phone", ""),
                 "is_active": True,
                 "inherited_permissions": inherited,
                 "custom_granted_permissions": custom_granted,
@@ -739,6 +751,56 @@ async def api_save_user(request: Request, db: AsyncSession = Depends(get_db)):
     await db.refresh(w_user)
 
     return {"status": "success", "username": username, "role": role, "is_active": is_active}
+
+
+@router.post("/api/v2/admin/users/delete")
+async def api_delete_user(request: Request, db: AsyncSession = Depends(get_db)):
+    """Permanently deletes or deactivates a user account (MASTER_ADMIN only)."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    body = await request.json()
+    username = body.get("username", "").strip().lower()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+    if username == "admin":
+        raise HTTPException(status_code=400, detail="Cannot delete super administrator 'admin'.")
+
+    # Delete from web_users table
+    stmt = select(WebUser).where(WebUser.username == username)
+    w_user = (await db.execute(stmt)).scalars().first()
+    deleted_role = "UNKNOWN"
+    if w_user:
+        deleted_role = w_user.role
+        await db.delete(w_user)
+
+    # Also remove from USERS_DB in memory if present (except core protected users)
+    if username in USERS_DB and username != "admin":
+        deleted_role = USERS_DB[username].get("role", deleted_role)
+        del USERS_DB[username]
+
+    # Clean in-memory permissions cache
+    if username in USER_CUSTOM_PERMISSIONS_CACHE:
+        del USER_CUSTOM_PERMISSIONS_CACHE[username]
+
+    # Audit log
+    audit = AuditLog(
+        username=user.get("username", "admin"),
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action="DELETE_USER_ACCOUNT",
+        module="USER_MANAGEMENT",
+        permission_used="manage_user_permissions",
+        entity_id=username,
+        previous_value={"role": deleted_role},
+        new_value=None,
+        remarks=f"Deleted user account '{username}' by {user.get('username')}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {"status": "success", "username": username, "message": f"User account '{username}' removed."}
 
 
 @router.post("/api/v2/admin/users/permissions")
@@ -1171,6 +1233,51 @@ async def api_save_sales_rep(request: Request, db: AsyncSession = Depends(get_db
     }
 
 
+@router.post("/api/fleet/salespersons/delete")
+async def api_delete_sales_rep(request: Request, db: AsyncSession = Depends(get_db)):
+    """Removes a sales representative from the directory and dashboard."""
+    user = get_current_user_from_request(request)
+    if not (user_has_permission(user, "manage_sales_pipeline") or user_has_permission(user, "manage_trucks") or user.get("role") == "MASTER_ADMIN"):
+        raise HTTPException(status_code=403, detail="You do not have permission to remove sales representatives.")
+
+    body = await request.json()
+    phone = str(body.get("phone", "")).strip().lstrip("+")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Sales rep phone number is required.")
+
+    removed_name = "Unknown"
+    if phone in OFFICIAL_SALES_REPS_DIRECTORY:
+        removed_name = OFFICIAL_SALES_REPS_DIRECTORY[phone].get("name", "Sales Rep")
+        del OFFICIAL_SALES_REPS_DIRECTORY[phone]
+
+    REMOVED_SALES_REPS.add(phone)
+
+    # Deactivate in Employee table if exists
+    stmt = select(Employee).where(Employee.phone == phone)
+    emp = (await db.execute(stmt)).scalars().first()
+    if emp:
+        emp.active = False
+        removed_name = emp.full_name
+
+    audit = AuditLog(
+        username=user.get("username", "admin"),
+        user_role=user.get("role", "SALES_ADMIN"),
+        action="REMOVE_SALES_REP",
+        module="SALES_MANAGEMENT",
+        permission_used="manage_sales_pipeline",
+        entity_id=phone,
+        previous_value={"name": removed_name, "phone": phone},
+        new_value=None,
+        remarks=f"Removed sales representative {removed_name} (+{phone}) by {user.get('username')}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {"status": "success", "phone": phone, "name": removed_name}
+
+
 # -------------------------------------------------------------
 # Data API: Partitioned & Role-Gated Metrics & Records
 # -------------------------------------------------------------
@@ -1488,14 +1595,18 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         ledger_stmt = select(FleetPendingLedger).order_by(FleetPendingLedger.created_at.desc())
         ledger_entries = (await db.execute(ledger_stmt)).scalars().all()
 
-        # A. Aggregate Salesperson Pending Balances & Performance
+        # A. Aggregate Salesperson Pending Balances & Performance (Only verified official sales reps)
         salesperson_map = {}
         for entry in ledger_entries:
             p = entry.salesperson_phone
+            if not p or p in SALES_ADMIN_PHONES or p in REMOVED_SALES_REPS or p not in OFFICIAL_SALES_REPS_DIRECTORY:
+                continue
             if p not in salesperson_map:
+                official = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {})
                 salesperson_map[p] = {
                     "phone": p,
-                    "name": entry.salesperson_name or "Sales Rep",
+                    "name": official.get("name", entry.salesperson_name or "Sales Rep"),
+                    "company": official.get("company", "Commercial Sales"),
                     "total_shortfalls": 0.0,
                     "total_recovered": 0.0,
                     "net_balance": 0.0,
@@ -1513,14 +1624,17 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 s_obj["total_recovered"] += abs(entry.amount)
             s_obj["net_balance"] += entry.amount
 
-        # Also register any salesperson who has trip approvals but no ledger entries yet
+        # Also register any official salesperson who has trip approvals
         for fa in fleet_approvals:
             p = fa.salesperson_phone
-            if p and p not in salesperson_map:
+            if not p or p in SALES_ADMIN_PHONES or p in REMOVED_SALES_REPS or p not in OFFICIAL_SALES_REPS_DIRECTORY:
+                continue
+            if p not in salesperson_map:
+                official = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {})
                 salesperson_map[p] = {
                     "phone": p,
-                    "name": fa.salesperson_name or "Sales Rep",
-                    "company": "Commercial Sales",
+                    "name": official.get("name", fa.salesperson_name or "Sales Rep"),
+                    "company": official.get("company", "Commercial Sales"),
                     "total_shortfalls": 0.0,
                     "total_recovered": 0.0,
                     "net_balance": 0.0,
@@ -1534,26 +1648,20 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         # Guarantee all registered commercial sales representatives from Employee directory are included
         sales_dept_stmt = (
             select(Employee)
-            .join(Department, Employee.department_id == Department.department_id, isouter=True)
             .options(selectinload(Employee.location), selectinload(Employee.department))
             .where(
-                (Department.department_name.ilike("%Sales%")) |
-                (Department.department_name.ilike("%Marketing%")) |
-                (Employee.phone.in_(list(OFFICIAL_SALES_REPS_DIRECTORY.keys())))
+                (Employee.phone.in_(list(OFFICIAL_SALES_REPS_DIRECTORY.keys()))) &
+                (~Employee.phone.in_(list(SALES_ADMIN_PHONES)))
             )
         )
         registered_sales_employees = (await db.execute(sales_dept_stmt)).scalars().all()
         for emp in registered_sales_employees:
             p = emp.phone
-            comp = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {}).get("company")
-            if not comp and emp.location:
-                comp = emp.location.location_name
-            if not comp and emp.department:
-                comp = emp.department.department_name
-            if not comp:
-                comp = "Commercial Sales"
-
-            official_name = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {}).get("name", emp.full_name)
+            if p in REMOVED_SALES_REPS or p in SALES_ADMIN_PHONES:
+                continue
+            official = OFFICIAL_SALES_REPS_DIRECTORY.get(p, {})
+            comp = official.get("company", "Commercial Sales")
+            official_name = official.get("name", emp.full_name)
 
             if p not in salesperson_map:
                 salesperson_map[p] = {
@@ -1577,8 +1685,28 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 salesperson_map[p]["email"] = emp.email or ""
                 salesperson_map[p]["active"] = emp.active
                 salesperson_map[p]["is_official"] = True
-                if str(salesperson_map[p].get("name", "")).startswith("Test Rep") or not salesperson_map[p].get("name"):
-                    salesperson_map[p]["name"] = official_name
+                salesperson_map[p]["name"] = official_name
+
+        # Ensure all official sales reps in OFFICIAL_SALES_REPS_DIRECTORY are present
+        for p, rep_info in OFFICIAL_SALES_REPS_DIRECTORY.items():
+            if p in SALES_ADMIN_PHONES or p in REMOVED_SALES_REPS:
+                continue
+            if p not in salesperson_map:
+                salesperson_map[p] = {
+                    "phone": p,
+                    "name": rep_info.get("name", "Sales Rep"),
+                    "company": rep_info.get("company", "Commercial Sales"),
+                    "total_shortfalls": 0.0,
+                    "total_recovered": 0.0,
+                    "net_balance": 0.0,
+                    "entries_count": 0,
+                    "trips": set(),
+                    "recent_date": "Active Commercial Roster",
+                    "employee_id": None,
+                    "email": "",
+                    "active": True,
+                    "is_official": True
+                }
 
         salespersons_list = []
         for p, s in salesperson_map.items():
@@ -1780,11 +1908,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         # G. Registered Sales Representatives
         sales_reps_stmt = (
             select(Employee)
-            .join(Department, Employee.department_id == Department.department_id, isouter=True)
-            .where(
-                (Department.department_name.ilike("%Sales%")) |
-                (Employee.phone.in_({sp["phone"] for sp in salespersons_list}))
-            )
+            .where(Employee.phone.in_({sp["phone"] for sp in salespersons_list}))
         )
         raw_reps = (await db.execute(sales_reps_stmt)).scalars().all()
         reps_map = {}
