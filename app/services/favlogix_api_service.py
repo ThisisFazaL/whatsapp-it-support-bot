@@ -273,6 +273,16 @@ class FavlogixAPIService:
             })
             self.tenants["LG"].device_key = "01a1103f-7aed-77d9-afc1-af2bc926fd1f"
 
+        # Pre-seed verified Kreckle Foods session cookies if not already configured
+        if not self.tenants["KRECKLE"].cookies.get("session"):
+            self.tenants["KRECKLE"].cookies.update({
+                "device_id": "01a1103b-da5c-7de5-95bb-81631456a4e7",
+                "session": "bd80af2d-c0d1-422c-a146-1074eff6d017",
+                "tenant": "kreckle",
+                "csrf_token": "887cc8eda442715fd32194281257ba29b2c26da89d8f1758812fa1e10f4baf7d"
+            })
+            self.tenants["KRECKLE"].device_key = "01a1103b-da5c-7de5-95bb-81631456a4e7"
+
     async def sync_vaults_from_db(self):
         """Restores any enrolled device vaults from database into tenant sessions."""
         try:
