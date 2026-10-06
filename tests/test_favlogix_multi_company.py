@@ -99,6 +99,8 @@ class TestFavlogixMultiCompany(unittest.IsolatedAsyncioTestCase):
         self.service.tenants["LG"].email = ""
         self.service.tenants["LG"].password = ""
         self.service.tenants["LG"].auth_token = ""
+        self.service.tenants["LG"].cookies.clear()
+        self.service.tenants["LG"].reg_code = ""
 
         tenant = self.service.get_tenant(company_name="B. LG Plast")
         self.assertEqual(tenant.company_key, "DEFAULT")

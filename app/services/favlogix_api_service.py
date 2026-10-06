@@ -263,6 +263,16 @@ class FavlogixAPIService:
             })
             self.tenants["TG"].device_key = "01a11041-9f57-770c-ad86-795b1169d6dc"
 
+        # Pre-seed verified LG Plast session cookies if not already configured
+        if not self.tenants["LG"].cookies.get("session"):
+            self.tenants["LG"].cookies.update({
+                "device_id": "01a1103f-7aed-77d9-afc1-af2bc926fd1f",
+                "session": "cc741b93-056e-479d-889f-0fc5ee6b1f13",
+                "tenant": "lgplast",
+                "csrf_token": "31d74b16d72fda9e62a0a298517114497075749d85e55f6294f77c86a06daf8b"
+            })
+            self.tenants["LG"].device_key = "01a1103f-7aed-77d9-afc1-af2bc926fd1f"
+
     async def sync_vaults_from_db(self):
         """Restores any enrolled device vaults from database into tenant sessions."""
         try:
