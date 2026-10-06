@@ -71,6 +71,7 @@ class CompanyTenantSession:
         self.cookies: Dict[str, str] = {}
         self.device_key: Optional[str] = None
         self.private_key: Optional[Any] = None
+        self.last_enroll_error: Optional[str] = None
         self._load_vault()
 
     @property
@@ -466,6 +467,7 @@ class FavlogixAPIService:
                 try:
                     await self.enroll_device(tenant, tenant.reg_code)
                 except Exception as enroll_err:
+                    tenant.last_enroll_error = str(enroll_err)
                     logger.warning(f"Auto-enrollment attempt failed for '{tenant.display_name}': {enroll_err}")
 
             login_cookies = dict(tenant.cookies)

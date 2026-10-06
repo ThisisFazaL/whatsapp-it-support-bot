@@ -538,6 +538,7 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
                 "enrolled": bool(tenant.device_key),
                 "device_key": tenant.device_key,
                 "reg_code_configured": bool(tenant.reg_code),
+                "last_enroll_error": tenant.last_enroll_error,
                 "status": "AUTHENTICATED" if token else "NO_TOKEN",
                 "error": None
             }
@@ -550,6 +551,7 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
                 "enrolled": bool(tenant.device_key),
                 "device_key": tenant.device_key,
                 "reg_code_configured": bool(tenant.reg_code),
+                "last_enroll_error": tenant.last_enroll_error,
                 "status": "FAILED",
                 "error": str(err)
             }
