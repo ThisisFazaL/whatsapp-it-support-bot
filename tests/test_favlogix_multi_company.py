@@ -32,6 +32,29 @@ class TestFavlogixMultiCompany(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.tenants["TG"].display_name, "Tagoneswa Hardware")
         self.assertEqual(self.service.tenants["KRECKLE"].display_name, "Kreckle Foods")
 
+    @patch.dict("os.environ", {
+        "LGPLAST_EMAIL": "lg_user@render.com",
+        "LGPLAST_PASSWORD": "render_lg_pass",
+        "TAGONESWA_EMAIL": "tg_user@render.com",
+        "TAGONESWA_PASSWORD": "render_tg_pass",
+        "KRECKLE_EMAIL": "kr_user@render.com",
+        "KRECKLE_PASSWORD": "render_kr_pass",
+    })
+    def test_render_environment_aliases_initialization(self):
+        """Verifies direct Render variable names (LGPLAST_EMAIL, etc.) correctly initialize the tenants."""
+        service = FavlogixAPIService()
+        self.assertEqual(service.tenants["LG"].email, "lg_user@render.com")
+        self.assertEqual(service.tenants["LG"].password, "render_lg_pass")
+        self.assertTrue(service.tenants["LG"].is_configured)
+
+        self.assertEqual(service.tenants["TG"].email, "tg_user@render.com")
+        self.assertEqual(service.tenants["TG"].password, "render_tg_pass")
+        self.assertTrue(service.tenants["TG"].is_configured)
+
+        self.assertEqual(service.tenants["KRECKLE"].email, "kr_user@render.com")
+        self.assertEqual(service.tenants["KRECKLE"].password, "render_kr_pass")
+        self.assertTrue(service.tenants["KRECKLE"].is_configured)
+
     def test_tenant_routing_by_company_name(self):
         """Verifies get_tenant routes correctly when company credentials are configured."""
         # Configure test credentials

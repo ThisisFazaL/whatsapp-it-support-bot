@@ -60,6 +60,19 @@ class Settings(BaseSettings):
     favlogix_kreckle_auth_token: str = ""
     favlogix_kreckle_api_url: str = ""
 
+    # Direct Render Environment Variable Aliases
+    lgplast_email: str = ""
+    lgplast_password: str = ""
+    lgplast_org: str = ""
+
+    tagoneswa_email: str = ""
+    tagoneswa_password: str = ""
+    tagoneswa_org: str = ""
+
+    kreckle_email: str = ""
+    kreckle_password: str = ""
+    kreckle_org: str = ""
+
     # Favlogix Automation & Bridge Configuration (Fallback)
     favlogix_bridge_url: str = "https://uninjured-seducing-cycle.ngrok-free.dev"  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome
     favlogix_url: str = "https://erp.favlogix.com"

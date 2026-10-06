@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import json
@@ -83,32 +84,44 @@ class FavlogixAPIService:
 
     def _init_tenants(self):
         """Initializes tenant configurations for the 3 operating companies and a fallback default."""
+        lg_email = (getattr(settings, "lgplast_email", "") or getattr(settings, "favlogix_lg_email", "") or os.getenv("LGPLAST_EMAIL", "") or os.getenv("FAVLOGIX_LG_EMAIL", "")).strip()
+        lg_pass = (getattr(settings, "lgplast_password", "") or getattr(settings, "favlogix_lg_password", "") or os.getenv("LGPLAST_PASSWORD", "") or os.getenv("FAVLOGIX_LG_PASSWORD", "")).strip()
+        lg_org = (getattr(settings, "lgplast_org", "") or getattr(settings, "favlogix_lg_org", "") or os.getenv("LGPLAST_ORG", "") or os.getenv("FAVLOGIX_LG_ORG", "") or "lgplast").strip()
+
+        tg_email = (getattr(settings, "tagoneswa_email", "") or getattr(settings, "favlogix_tg_email", "") or os.getenv("TAGONESWA_EMAIL", "") or os.getenv("FAVLOGIX_TG_EMAIL", "")).strip()
+        tg_pass = (getattr(settings, "tagoneswa_password", "") or getattr(settings, "favlogix_tg_password", "") or os.getenv("TAGONESWA_PASSWORD", "") or os.getenv("FAVLOGIX_TG_PASSWORD", "")).strip()
+        tg_org = (getattr(settings, "tagoneswa_org", "") or getattr(settings, "favlogix_tg_org", "") or os.getenv("TAGONESWA_ORG", "") or os.getenv("FAVLOGIX_TG_ORG", "") or "tagoneswa").strip()
+
+        kr_email = (getattr(settings, "kreckle_email", "") or getattr(settings, "favlogix_kreckle_email", "") or os.getenv("KRECKLE_EMAIL", "") or os.getenv("FAVLOGIX_KRECKLE_EMAIL", "")).strip()
+        kr_pass = (getattr(settings, "kreckle_password", "") or getattr(settings, "favlogix_kreckle_password", "") or os.getenv("KRECKLE_PASSWORD", "") or os.getenv("FAVLOGIX_KRECKLE_PASSWORD", "")).strip()
+        kr_org = (getattr(settings, "kreckle_org", "") or getattr(settings, "favlogix_kreckle_org", "") or os.getenv("KRECKLE_ORG", "") or os.getenv("FAVLOGIX_KRECKLE_ORG", "") or "kreckle").strip()
+
         self.tenants = {
             "LG": CompanyTenantSession(
                 company_key="LG",
                 display_name="LG Plast",
-                org_name_or_id=getattr(settings, "favlogix_lg_org", "") or "lgplast",
-                email=getattr(settings, "favlogix_lg_email", ""),
-                password=getattr(settings, "favlogix_lg_password", ""),
-                auth_token=getattr(settings, "favlogix_lg_auth_token", ""),
+                org_name_or_id=lg_org,
+                email=lg_email,
+                password=lg_pass,
+                auth_token=getattr(settings, "favlogix_lg_auth_token", "") or os.getenv("LGPLAST_AUTH_TOKEN", ""),
                 api_url=getattr(settings, "favlogix_lg_api_url", "") or self.default_api_url
             ),
             "TG": CompanyTenantSession(
                 company_key="TG",
                 display_name="Tagoneswa Hardware",
-                org_name_or_id=getattr(settings, "favlogix_tg_org", "") or "tagoneswa",
-                email=getattr(settings, "favlogix_tg_email", ""),
-                password=getattr(settings, "favlogix_tg_password", ""),
-                auth_token=getattr(settings, "favlogix_tg_auth_token", ""),
+                org_name_or_id=tg_org,
+                email=tg_email,
+                password=tg_pass,
+                auth_token=getattr(settings, "favlogix_tg_auth_token", "") or os.getenv("TAGONESWA_AUTH_TOKEN", ""),
                 api_url=getattr(settings, "favlogix_tg_api_url", "") or self.default_api_url
             ),
             "KRECKLE": CompanyTenantSession(
                 company_key="KRECKLE",
                 display_name="Kreckle Foods",
-                org_name_or_id=getattr(settings, "favlogix_kreckle_org", "") or "kreckle",
-                email=getattr(settings, "favlogix_kreckle_email", ""),
-                password=getattr(settings, "favlogix_kreckle_password", ""),
-                auth_token=getattr(settings, "favlogix_kreckle_auth_token", ""),
+                org_name_or_id=kr_org,
+                email=kr_email,
+                password=kr_pass,
+                auth_token=getattr(settings, "favlogix_kreckle_auth_token", "") or os.getenv("KRECKLE_AUTH_TOKEN", ""),
                 api_url=getattr(settings, "favlogix_kreckle_api_url", "") or self.default_api_url
             ),
             "DEFAULT": CompanyTenantSession(
