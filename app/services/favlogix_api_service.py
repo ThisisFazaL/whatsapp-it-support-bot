@@ -408,35 +408,56 @@ class FavlogixAPIService:
             "key_ops": ["verify"]
         }
 
-        slug = tenant.org_name_or_id
-        payload = {
-            "slug": slug,
-            "code": reg_code.strip(),
-            "publicKey": json.dumps(jwk)
-        }
+        slug = (tenant.org_name_or_id or "").strip().lower()
+        if not slug:
+            if tenant.company_key == "LG":
+                slug = "lgplast"
+            elif tenant.company_key == "TG":
+                slug = "tagoneswa"
+            elif tenant.company_key == "KRECKLE":
+                slug = "kreckle"
 
-        logger.info(f"Enrolling device for tenant '{tenant.display_name}' with slug '{slug}' and code '{reg_code.strip()}'...")
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post(enroll_url, json=payload)
-            if res.status_code == 200:
-                res_data = res.json().get("data", {})
-                device_key = res_data.get("device", {}).get("key")
-                if not device_key:
-                    raise FavlogixAuthError(f"Enrollment succeeded but returned no device key: {res.text}")
-                tenant.device_key = device_key
-                tenant.reg_code = reg_code.strip()
-                tenant.cookies["device_id"] = device_key
-                tenant._save_vault()
-                try:
-                    from app.database import async_session_factory
-                    async with async_session_factory() as db_session:
-                        await tenant.save_to_db(db_session)
-                except Exception as dbe:
-                    logger.warning(f"Could not persist vault to DB for '{tenant.display_name}': {dbe}")
-                logger.info(f"Device successfully enrolled for '{tenant.display_name}'! Device Key: {device_key}")
-                return True
-            else:
-                raise FavlogixAuthError(f"Device enrollment failed for '{tenant.display_name}' (HTTP {res.status_code}): {res.text}")
+        raw_code = reg_code.strip().strip("'\"").strip()
+        candidate_codes = [raw_code]
+        if raw_code.upper() not in candidate_codes:
+            candidate_codes.append(raw_code.upper())
+        if raw_code.lower() not in candidate_codes:
+            candidate_codes.append(raw_code.lower())
+
+        last_res = None
+        for code_attempt in candidate_codes:
+            payload = {
+                "slug": slug,
+                "code": code_attempt,
+                "publicKey": json.dumps(jwk)
+            }
+            logger.info(f"Enrolling device for tenant '{tenant.display_name}' with slug '{slug}' and code '{code_attempt}'...")
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(enroll_url, json=payload)
+                last_res = res
+                if res.status_code == 200:
+                    res_data = res.json().get("data", {})
+                    device_key = res_data.get("device", {}).get("key")
+                    if not device_key:
+                        raise FavlogixAuthError(f"Enrollment succeeded but returned no device key: {res.text}")
+                    tenant.device_key = device_key
+                    tenant.reg_code = code_attempt
+                    tenant.cookies["device_id"] = device_key
+                    tenant._save_vault()
+                    try:
+                        from app.database import async_session_factory
+                        async with async_session_factory() as db_session:
+                            await tenant.save_to_db(db_session)
+                    except Exception as dbe:
+                        logger.warning(f"Could not persist vault to DB for '{tenant.display_name}': {dbe}")
+                    logger.info(f"Device successfully enrolled for '{tenant.display_name}'! Device Key: {device_key}")
+                    return True
+                elif res.status_code == 422 and "InvalidRegistrationCode" in res.text:
+                    continue
+                else:
+                    break
+
+        raise FavlogixAuthError(f"Device enrollment failed for '{tenant.display_name}' (HTTP {last_res.status_code if last_res else 'unknown'}): {last_res.text if last_res else 'no response'}")
 
     async def _login(self, tenant: Optional[CompanyTenantSession] = None) -> str:
         """Authenticates against Favlogix auth API for a specific tenant session."""
