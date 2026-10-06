@@ -530,6 +530,7 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
             continue
         try:
             token = await favlogix_api_service._ensure_valid_token(tenant)
+            has_session = bool(tenant.cookies.get("session"))
             results[key] = {
                 "display_name": tenant.display_name,
                 "configured": tenant.is_configured,
@@ -537,9 +538,8 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
                 "org": tenant.org_name_or_id,
                 "enrolled": bool(tenant.device_key),
                 "device_key": tenant.device_key,
+                "has_session_cookie": has_session,
                 "reg_code_configured": bool(tenant.reg_code),
-                "reg_code_len": len(tenant.reg_code),
-                "reg_code_repr": repr(tenant.reg_code),
                 "last_enroll_error": tenant.last_enroll_error,
                 "status": "AUTHENTICATED" if token else "NO_TOKEN",
                 "error": None
@@ -552,9 +552,8 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
                 "org": tenant.org_name_or_id,
                 "enrolled": bool(tenant.device_key),
                 "device_key": tenant.device_key,
+                "has_session_cookie": bool(tenant.cookies.get("session")),
                 "reg_code_configured": bool(tenant.reg_code),
-                "reg_code_len": len(tenant.reg_code),
-                "reg_code_repr": repr(tenant.reg_code),
                 "last_enroll_error": tenant.last_enroll_error,
                 "status": "FAILED",
                 "error": str(err)
@@ -602,6 +601,121 @@ async def enroll_favlogix_device_endpoint(
             "tenant_key": tenant.company_key,
             "error": str(e)
         }
+
+@app.get("/api/favlogix/set-session")
+@app.post("/api/favlogix/set-session")
+async def set_favlogix_session_endpoint(
+    company: str,
+    cookie: Optional[str] = None,
+    session_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    csrf_token: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+    curl: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sets session cookies for a Favlogix company tenant (LG, TG, or KRECKLE) and tests the live connection.
+    Accepts either full cookie/curl string or individual cookie parameters.
+    Saves to local vault and persists into PostgreSQL system_vault table.
+    """
+    import re
+    import httpx
+    from app.services.favlogix_api_service import favlogix_api_service
+    tenant = favlogix_api_service.get_tenant(company_name=company)
+    if not tenant or tenant.company_key == "DEFAULT":
+        key = company.strip().upper()
+        if key in favlogix_api_service.tenants:
+            tenant = favlogix_api_service.tenants[key]
+        else:
+            return {"success": False, "error": f"Unknown company tenant '{company}'. Valid: LG, TG, KRECKLE"}
+
+    raw_text = (curl or "") + " " + (cookie or "")
+
+    extracted_session = session_id
+    extracted_device = device_id
+    extracted_csrf = csrf_token
+    extracted_slug = tenant_slug
+
+    if not extracted_session and raw_text.strip():
+        m = re.search(r"session=([a-zA-Z0-9\-_]+)", raw_text)
+        if m:
+            extracted_session = m.group(1)
+
+    if not extracted_device and raw_text.strip():
+        m = re.search(r"device_id=([a-zA-Z0-9\-_]+)", raw_text)
+        if m:
+            extracted_device = m.group(1)
+
+    if not extracted_csrf and raw_text.strip():
+        m = re.search(r"(?:csrf_token|x-csrf-token)[\s:=]+([a-zA-Z0-9\-_]+)", raw_text, re.IGNORECASE)
+        if m:
+            extracted_csrf = m.group(1)
+
+    if not extracted_slug and raw_text.strip():
+        m = re.search(r"tenant=([a-zA-Z0-9\-_]+)", raw_text)
+        if m:
+            extracted_slug = m.group(1)
+
+    if not extracted_session:
+        return {
+            "success": False,
+            "company": tenant.display_name,
+            "error": "No session ID found. Please provide 'session_id', 'cookie', or full 'curl'."
+        }
+
+    # Update tenant cookies
+    tenant.cookies["session"] = extracted_session
+    if extracted_device:
+        tenant.cookies["device_id"] = extracted_device
+        tenant.device_key = extracted_device
+    if extracted_csrf:
+        tenant.cookies["csrf_token"] = extracted_csrf
+    if extracted_slug:
+        tenant.cookies["tenant"] = extracted_slug
+        tenant.org_name_or_id = extracted_slug
+
+    # Persist locally and in database
+    tenant._save_vault()
+    await tenant.save_to_db(db)
+
+    # Perform live verification against fio.favlogix.com/api/tenant/sales/trip
+    test_result = {}
+    try:
+        base = favlogix_api_service._base_url(tenant)
+        headers = {
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+            "Referer": "https://fio.favlogix.com/sales/trips",
+            "Origin": "https://fio.favlogix.com"
+        }
+        if "csrf_token" in tenant.cookies:
+            headers["x-csrf-token"] = tenant.cookies["csrf_token"]
+
+        async with httpx.AsyncClient(timeout=10.0, cookies=tenant.cookies) as client:
+            resp = await client.get(f"{base}/tenant/sales/trip", params={"limit": 5}, headers=headers)
+            test_result["http_status"] = resp.status_code
+            if resp.status_code == 200:
+                test_result["verified"] = True
+                test_result["body"] = resp.json()
+            else:
+                test_result["verified"] = False
+                test_result["error"] = resp.text[:200]
+    except Exception as exc:
+        test_result["verified"] = False
+        test_result["exception"] = str(exc)
+
+    return {
+        "success": test_result.get("verified", False),
+        "company": tenant.display_name,
+        "tenant_key": tenant.company_key,
+        "device_id": tenant.device_key,
+        "session_configured": bool(tenant.cookies.get("session")),
+        "csrf_configured": bool(tenant.cookies.get("csrf_token")),
+        "verification_result": test_result,
+        "message": f"Session configured for {tenant.display_name}! (Verified: {test_result.get('verified')})"
+    }
 
 @app.get("/api/favlogix/test-trip")
 async def test_favlogix_trip_endpoint(trip_id: str, company: Optional[str] = None):

@@ -72,12 +72,20 @@ class CompanyTenantSession:
         self.device_key: Optional[str] = None
         self.private_key: Optional[Any] = None
         self.last_enroll_error: Optional[str] = None
+        # Parse cookie string in auth_token if provided
+        if self.auth_token and ("=" in self.auth_token or ";" in self.auth_token):
+            for part in self.auth_token.split(";"):
+                if "=" in part:
+                    k, v = part.strip().split("=", 1)
+                    self.cookies[k.strip()] = v.strip()
+                    if k.strip() == "device_id":
+                        self.device_key = v.strip()
         self._load_vault()
 
     @property
     def is_configured(self) -> bool:
         """Returns True if minimum credentials exist to authenticate this tenant."""
-        return bool(self.auth_token or (self.email and self.password) or self.reg_code)
+        return bool(self.auth_token or (self.email and self.password) or self.reg_code or self.cookies.get("session"))
 
     def _vault_path(self) -> str:
         vault_dir = os.path.join(os.path.dirname(__file__), "..", "..", ".device_vault")
@@ -85,73 +93,76 @@ class CompanyTenantSession:
         return os.path.join(vault_dir, f"{self.company_key}.json")
 
     def _load_vault(self):
-        """Loads cached enrolled device key and private key from local vault file."""
+        """Loads cached enrolled device key, private key, and session cookies from local vault file."""
         try:
             p = self._vault_path()
             if os.path.exists(p):
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    self.device_key = data.get("device_key")
+                    self.device_key = data.get("device_key") or self.device_key
+                    saved_cookies = data.get("cookies", {})
+                    if saved_cookies:
+                        self.cookies.update(saved_cookies)
                     pem = data.get("private_key_pem")
                     if pem and HAS_CRYPTO:
                         self.private_key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
-                        if self.device_key:
-                            self.cookies["device_id"] = self.device_key
-                        logger.info(f"Loaded vault device key for {self.company_key}: {self.device_key}")
+                    if self.device_key:
+                        self.cookies["device_id"] = self.device_key
+                    logger.info(f"Loaded vault device key for {self.company_key}: {self.device_key}")
         except Exception as e:
             logger.debug(f"Vault load note for {self.company_key}: {e}")
 
     def _save_vault(self):
-        """Saves enrolled device key and private key to vault file."""
+        """Saves enrolled device key, private key, and session cookies to vault file."""
         try:
-            if not self.device_key or not self.private_key or not HAS_CRYPTO:
-                return
-            pem = self.private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()
-            ).decode("utf-8")
+            vault_dict = {"device_key": self.device_key, "cookies": self.cookies}
+            if self.private_key and HAS_CRYPTO:
+                pem = self.private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                ).decode("utf-8")
+                vault_dict["private_key_pem"] = pem
             p = self._vault_path()
             with open(p, "w", encoding="utf-8") as f:
-                json.dump({"device_key": self.device_key, "private_key_pem": pem}, f)
+                json.dump(vault_dict, f)
         except Exception as e:
             logger.warning(f"Vault save note for {self.company_key}: {e}")
 
     async def load_from_db(self, session):
         """Loads enrolled credentials from PostgreSQL database if not present locally."""
-        if self.device_key and self.private_key:
-            return
         try:
             from app.database import get_system_vault_entry
             raw = await get_system_vault_entry(session, f"DEVICE_VAULT_{self.company_key}")
             if raw:
                 data = json.loads(raw)
-                self.device_key = data.get("device_key")
+                self.device_key = data.get("device_key") or self.device_key
+                saved_cookies = data.get("cookies", {})
+                if saved_cookies:
+                    self.cookies.update(saved_cookies)
                 pem = data.get("private_key_pem")
                 if pem and HAS_CRYPTO:
                     self.private_key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
-                    if self.device_key:
-                        self.cookies["device_id"] = self.device_key
-                    self._save_vault()
-                    logger.info(f"Restored vault device key for {self.company_key} from database: {self.device_key}")
+                if self.device_key:
+                    self.cookies["device_id"] = self.device_key
+                self._save_vault()
+                logger.info(f"Restored vault device key & cookies for {self.company_key} from database.")
         except Exception as e:
             logger.debug(f"Vault DB load note for {self.company_key}: {e}")
 
     async def save_to_db(self, session):
-        """Saves enrolled credentials to PostgreSQL database."""
+        """Saves enrolled credentials and session cookies to PostgreSQL database."""
         try:
-            if not self.device_key or not self.private_key or not HAS_CRYPTO:
-                return
-            pem = self.private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()
-            ).decode("utf-8")
+            vault_dict = {"device_key": self.device_key, "cookies": self.cookies}
+            if self.private_key and HAS_CRYPTO:
+                pem = self.private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                ).decode("utf-8")
+                vault_dict["private_key_pem"] = pem
             from app.database import save_system_vault_entry
-            await save_system_vault_entry(session, f"DEVICE_VAULT_{self.company_key}", json.dumps({
-                "device_key": self.device_key,
-                "private_key_pem": pem
-            }))
+            await save_system_vault_entry(session, f"DEVICE_VAULT_{self.company_key}", json.dumps(vault_dict))
             logger.info(f"Persisted vault credentials for {self.company_key} into database.")
         except Exception as e:
             logger.warning(f"Vault DB save note for {self.company_key}: {e}")
@@ -241,6 +252,16 @@ class FavlogixAPIService:
         for t in self.tenants.values():
             if t.auth_token:
                 t.token_expiry = self._decode_token_expiry(t.auth_token)
+
+        # Pre-seed verified Tagoneswa session cookies if not already configured
+        if not self.tenants["TG"].cookies.get("session"):
+            self.tenants["TG"].cookies.update({
+                "device_id": "01a11041-9f57-770c-ad86-795b1169d6dc",
+                "session": "1453d8df-eb60-4e45-bd8c-ab0717164a6c",
+                "tenant": "tagoneswa",
+                "csrf_token": "6c0ca903eb1dc4182bcbe84df98a234d79ea6a005677b942ccb7dff7526b6e04"
+            })
+            self.tenants["TG"].device_key = "01a11041-9f57-770c-ad86-795b1169d6dc"
 
     async def sync_vaults_from_db(self):
         """Restores any enrolled device vaults from database into tenant sessions."""
@@ -644,8 +665,16 @@ class FavlogixAPIService:
             clean_trip = trip_id.strip().upper().replace("TRIP-", "").strip()
             sales_trip_url = f"{base}/tenant/sales/trip"
             detail_url = f"{base}/tenant/sales/trip/detail"
-            headers = {"Accept": "application/json"}
-            if tenant.auth_token and not tenant.auth_token.startswith("cookie-"):
+            headers = {
+                "Accept": "*/*",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+                "Referer": "https://fio.favlogix.com/sales/trips",
+                "Origin": "https://fio.favlogix.com"
+            }
+            if "csrf_token" in tenant.cookies:
+                headers["x-csrf-token"] = tenant.cookies["csrf_token"]
+            if tenant.auth_token and not ("=" in tenant.auth_token or ";" in tenant.auth_token) and not tenant.auth_token.startswith("cookie-"):
                 headers["Authorization"] = f"Bearer {tenant.auth_token}"
 
             async with httpx.AsyncClient(timeout=15.0, cookies=tenant.cookies) as client:
