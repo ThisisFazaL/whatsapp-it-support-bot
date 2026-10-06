@@ -256,22 +256,22 @@ class FavlogixAPIService:
         # Pre-seed verified Tagoneswa session cookies if not already configured
         if not self.tenants["TG"].cookies.get("session"):
             self.tenants["TG"].cookies.update({
-                "device_id": "01a11041-9f57-770c-ad86-795b1169d6dc",
-                "session": "1453d8df-eb60-4e45-bd8c-ab0717164a6c",
+                "device_id": "01a1115f-b837-7790-af5a-69a84cd1fe56",
+                "session": "593e1403-5bd3-4186-956c-6e86f62bb91b",
                 "tenant": "tagoneswa",
-                "csrf_token": "6c0ca903eb1dc4182bcbe84df98a234d79ea6a005677b942ccb7dff7526b6e04"
+                "csrf_token": "da2a9d99cccd04e7919691463cee0c062caf52f2a41b8af86378922f0be72406"
             })
-            self.tenants["TG"].device_key = "01a11041-9f57-770c-ad86-795b1169d6dc"
+            self.tenants["TG"].device_key = "01a1115f-b837-7790-af5a-69a84cd1fe56"
 
         # Pre-seed verified LG Plast session cookies if not already configured
         if not self.tenants["LG"].cookies.get("session"):
             self.tenants["LG"].cookies.update({
-                "device_id": "01a1103f-7aed-77d9-afc1-af2bc926fd1f",
-                "session": "cc741b93-056e-479d-889f-0fc5ee6b1f13",
+                "device_id": "01a11162-97d3-7d4a-845a-6bf8fc413a6a",
+                "session": "7242ad0b-1aa6-413c-af56-e473e0b0ba19",
                 "tenant": "lgplast",
-                "csrf_token": "31d74b16d72fda9e62a0a298517114497075749d85e55f6294f77c86a06daf8b"
+                "csrf_token": "d4d272384c5da814246628eaa136094a02899566dd70049cc4e58d3aac332eb9"
             })
-            self.tenants["LG"].device_key = "01a1103f-7aed-77d9-afc1-af2bc926fd1f"
+            self.tenants["LG"].device_key = "01a11162-97d3-7d4a-845a-6bf8fc413a6a"
 
         # Pre-seed verified Kreckle Foods session cookies if not already configured
         if not self.tenants["KRECKLE"].cookies.get("session"):
