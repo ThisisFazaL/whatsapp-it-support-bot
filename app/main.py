@@ -510,6 +510,49 @@ async def verify_favlogix_trip_endpoint(trip_id: str):
         logger.error(f"Bridge extraction failed for trip '{trip_id}': {e}")
         return {"success": False, "trip_id": trip_id, "error": str(e)}
 
+@app.get("/api/favlogix/test-connections")
+async def test_favlogix_company_connections(secret: Optional[str] = None):
+    """
+    Tests connectivity and authentication for all configured company tenants.
+    Can be called to verify LG Plast, Tagoneswa, and Kreckle logins on Render.
+    """
+    from app.services.favlogix_api_service import favlogix_api_service
+    results = {}
+    for key, tenant in favlogix_api_service.tenants.items():
+        if key == "DEFAULT" and not tenant.is_configured:
+            continue
+        try:
+            token = await favlogix_api_service._ensure_valid_token(tenant)
+            results[key] = {
+                "display_name": tenant.display_name,
+                "configured": tenant.is_configured,
+                "email": tenant.email,
+                "org": tenant.org_name_or_id,
+                "status": "AUTHENTICATED" if token else "NO_TOKEN",
+                "error": None
+            }
+        except Exception as err:
+            results[key] = {
+                "display_name": tenant.display_name,
+                "configured": tenant.is_configured,
+                "email": tenant.email,
+                "org": tenant.org_name_or_id,
+                "status": "FAILED",
+                "error": str(err)
+            }
+    return {"status": "success", "tenants": results}
+
+@app.get("/api/favlogix/test-trip")
+async def test_favlogix_trip_endpoint(trip_id: str, company: Optional[str] = None):
+    """Direct API trip verification test endpoint across company tenants."""
+    from app.services.trip_verification_service import TripVerificationService
+    try:
+        tvs = TripVerificationService()
+        data = await tvs.verify_trip(trip_id=trip_id, company_name=company)
+        return data
+    except Exception as e:
+        return {"success": False, "trip_id": trip_id, "error": str(e)}
+
 @app.get("/api/fleet/trip-approvals")
 async def list_fleet_trip_approvals(
     limit: int = 50,
