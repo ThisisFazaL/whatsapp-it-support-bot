@@ -1179,6 +1179,13 @@ async def process_webhook_payload(body: dict):
             )
 
             if is_global_greeting:
+                # 0. Commercial Driver role takes absolute precedence: starts driver trip flow directly without portal menus
+                if workshop_user and workshop_user.role.upper() == "DRIVER":
+                    await clear_user_state(db, sender_phone)
+                    from app.workshop.flow_handler import start_workshop_flow
+                    await start_workshop_flow(db, workshop_user, is_start_shift=is_start_shift)
+                    return
+
                 if is_dual_domain:
                     # Dual-Domain Staff (e.g. Panashe Logistics Assistant, Edward Supervisor, Lydon Purchasing)
                     user_name = workshop_user.full_name or (employee.full_name if employee else (admin.full_name if admin else "Staff Member"))

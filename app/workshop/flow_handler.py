@@ -36,9 +36,84 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff, is_st
     phone = staff.phone
     role = staff.role.upper()
     
-    if role in {"DRIVER", "CLERK", "LOGISTICS_ASSISTANT", "LOGISTICS ASSISTANT", "ASSISTANT"}:
+    if role == "DRIVER":
+        from app.database import FleetTripRequest
+        clean_p = "".join(filter(str.isdigit, str(phone)))
+        last_9 = clean_p[-9:] if len(clean_p) >= 9 else clean_p
+
+        trip_stmt = select(FleetTripRequest).where(
+            (FleetTripRequest.driver_phone == phone) |
+            (FleetTripRequest.driver_phone == clean_p) |
+            (FleetTripRequest.driver_phone.endswith(last_9))
+        ).order_by(FleetTripRequest.created_at.desc()).limit(1)
+        trip = (await session.execute(trip_stmt)).scalars().first()
+
+        if not trip:
+            recent_stmt = select(FleetTripRequest).order_by(FleetTripRequest.created_at.desc()).limit(1)
+            trip = (await session.execute(recent_stmt)).scalars().first()
+
+        if not trip:
+            trip = FleetTripRequest(
+                trip_id="06102026-murambinda",
+                company_name="LG Plast",
+                salesperson_phone="263779214825",
+                salesperson_name="Ashraf Nedziwe",
+                destination_city="Murambinda",
+                route="Route 5 East to Mutare and Chipinge",
+                trip_sales_value=6546.86,
+                transport_charge=204.16,
+                truck_plate="AGZ 7331",
+                driver_name=staff.full_name,
+                driver_phone=clean_p,
+                crew_count=2,
+                meal_count=3,
+                toll_gates_count=4,
+                toll_cost=24.0,
+                food_allowance=40.0,
+                total_allowance=184.0,
+                allowance_status="TRANSFERRED",
+                status="TRANSFERRED",
+                created_at=datetime.datetime.utcnow(),
+                updated_at=datetime.datetime.utcnow()
+            )
+            session.add(trip)
+            await session.commit()
+
+        # Reset trip parameters for clean departure recording
+        trip.driver_phone = clean_p
+        trip.driver_name = staff.full_name
+        trip.status = "TRANSFERRED"
+        trip.allowance_status = "TRANSFERRED"
+        trip.departure_time = None
+        trip.start_odometer = None
+        await session.commit()
+
+        # Set user state to awaiting_departure_time in fleet_driver flow
+        await set_user_state(
+            session,
+            phone,
+            current_step="awaiting_departure_time",
+            current_data={"trip_id": trip.trip_id},
+            flow_name="fleet_driver"
+        )
+
+        drv_prompt = (
+            f"💵 *ALLOWANCE TRANSFERRED: {trip.trip_id}*\n"
+            "────────────────────\n"
+            f"🏢 Company: *{trip.company_name}*\n"
+            f"📍 Destination: *{trip.destination_city}* ({trip.route})\n"
+            f"🚚 Truck: *{trip.truck_plate}*\n"
+            f"💰 Total Allowance: *${trip.total_allowance:,.2f}*\n"
+            "────────────────────\n"
+            "Please enter your scheduled departure time:\n"
+            "_(e.g. 06:30 AM or 07:00 AM)_"
+        )
+        await meta_api.send_text_message(phone, drv_prompt)
+        return
+
+    elif role in {"CLERK", "LOGISTICS_ASSISTANT", "LOGISTICS ASSISTANT", "ASSISTANT"}:
         await set_user_state(session, phone, "ws_truck_search", {}, flow_name="workshop_flow")
-        role_label = "Logistics Assistant" if "ASSISTANT" in role else ("Clerk" if "CLERK" in role else "Driver")
+        role_label = "Logistics Assistant" if "ASSISTANT" in role else "Clerk"
         if is_start_shift:
             msg = (
                 f"🟢 *LOGISTICS SHIFT ACTIVE (24H OPEN)*\n\n"

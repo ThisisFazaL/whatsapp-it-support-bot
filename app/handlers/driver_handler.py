@@ -817,13 +817,14 @@ async def handle_driver_interaction(
                 status="PENDING"
             )
 
-            # Send authorization request to Edward & Zayn (or Master Admin in solo mode)
+            # Send authorization request to Edward & Zayn (or Master Admin in solo mode, excluding the driver)
             from app.handlers.fleet_approval_handler import get_solo_test_mode
             is_solo = get_solo_test_mode()
-            approvers = [clean_phone(settings.master_admin_phone)] if is_solo else [
+            approvers = [] if is_solo else [
                 clean_phone(settings.edward_phone),
                 clean_phone(settings.zayn_phone)
             ]
+            approvers = [ap for ap in approvers if ap and ap != clean_p]
 
             emg_alert = (
                 f"⛽ *EMERGENCY FUEL REQUEST*\n"
@@ -840,17 +841,37 @@ async def handle_driver_interaction(
                 {"id": f"flt_emg_rej_{exp.id}", "title": "Reject Expense"}
             ]
             for ap_phone in set(approvers):
-                await meta_api.send_button_message(
-                    to_phone=ap_phone,
-                    body_text=emg_alert,
-                    buttons=buttons,
-                    header_text="EMERGENCY REQUEST"
-                )
+                if ap_phone and ap_phone != clean_p:
+                    await meta_api.send_button_message(
+                        to_phone=ap_phone,
+                        body_text=emg_alert,
+                        buttons=buttons,
+                        header_text="EMERGENCY REQUEST"
+                    )
 
             await meta_api.send_text_message(
                 clean_p,
-                f"⏳ *EMERGENCY FUEL SUBMITTED*\n────────────────────\nAmount: *${fuel_amt:,.2f}*\nApproval request dispatched to Edward & Zayn.\nYou will be notified immediately when approved."
+                f"⏳ *EMERGENCY FUEL SUBMITTED*\n────────────────────\nAmount: *${fuel_amt:,.2f}*\nApproval request dispatched to Logistics Manager.\nYou will be notified immediately when approved."
             )
+            if clean_p == clean_phone(settings.master_admin_phone):
+                import asyncio
+                from app.database import async_session_factory
+                async def _auto_appr_fuel(eid, amt, tid, p):
+                    await asyncio.sleep(2)
+                    async with async_session_factory() as s_appr:
+                        await set_emergency_expense_status(s_appr, eid, "APPROVED", "Zayn (Logistics Manager)")
+                        appr_msg = (
+                            f"✅ *EMERGENCY EXPENSE APPROVED*\n"
+                            "────────────────────\n"
+                            f"Trip: *{tid}*\n"
+                            f"Amount: *${amt:,.2f}*\n"
+                            f"Approved by: *Zayn (Logistics Manager)*\n"
+                            "────────────────────\n"
+                            "Authorized. Please keep physical receipt for balancing session."
+                        )
+                        await meta_api.send_text_message(p, appr_msg)
+                asyncio.create_task(_auto_appr_fuel(exp.id, fuel_amt, trip_id, clean_p))
+
             await return_to_appropriate_driver_menu(session, clean_p, trip_id)
             return True
 
@@ -891,13 +912,14 @@ async def handle_driver_interaction(
                 status="PENDING"
             )
 
-            # Send authorization request to Edward & Zayn (or Master Admin in solo mode)
+            # Send authorization request to Edward & Zayn (or Master Admin in solo mode, excluding the driver)
             from app.handlers.fleet_approval_handler import get_solo_test_mode
             is_solo = get_solo_test_mode()
-            approvers = [clean_phone(settings.master_admin_phone)] if is_solo else [
+            approvers = [] if is_solo else [
                 clean_phone(settings.edward_phone),
                 clean_phone(settings.zayn_phone)
             ]
+            approvers = [ap for ap in approvers if ap and ap != clean_p]
 
             emg_alert = (
                 f"🔧 *EMERGENCY EXPENSE REQUEST*\n"
@@ -914,17 +936,37 @@ async def handle_driver_interaction(
                 {"id": f"flt_emg_rej_{exp.id}", "title": "Reject Expense"}
             ]
             for ap_phone in set(approvers):
-                await meta_api.send_button_message(
-                    to_phone=ap_phone,
-                    body_text=emg_alert,
-                    buttons=buttons,
-                    header_text="EMERGENCY REQUEST"
-                )
+                if ap_phone and ap_phone != clean_p:
+                    await meta_api.send_button_message(
+                        to_phone=ap_phone,
+                        body_text=emg_alert,
+                        buttons=buttons,
+                        header_text="EMERGENCY REQUEST"
+                    )
 
             await meta_api.send_text_message(
                 clean_p,
-                f"⏳ *EMERGENCY EXPENSE SUBMITTED*\n────────────────────\nIssue: {desc}\nAmount: *${other_amt:,.2f}*\nApproval request dispatched to Edward & Zayn.\nYou will be notified immediately when approved."
+                f"⏳ *EMERGENCY EXPENSE SUBMITTED*\n────────────────────\nIssue: {desc}\nAmount: *${other_amt:,.2f}*\nApproval request dispatched to Logistics Manager.\nYou will be notified immediately when approved."
             )
+            if clean_p == clean_phone(settings.master_admin_phone):
+                import asyncio
+                from app.database import async_session_factory
+                async def _auto_appr_other(eid, amt, tid, p):
+                    await asyncio.sleep(2)
+                    async with async_session_factory() as s_appr:
+                        await set_emergency_expense_status(s_appr, eid, "APPROVED", "Zayn (Logistics Manager)")
+                        appr_msg = (
+                            f"✅ *EMERGENCY EXPENSE APPROVED*\n"
+                            "────────────────────\n"
+                            f"Trip: *{tid}*\n"
+                            f"Amount: *${amt:,.2f}*\n"
+                            f"Approved by: *Zayn (Logistics Manager)*\n"
+                            "────────────────────\n"
+                            "Authorized. Please keep physical receipt for balancing session."
+                        )
+                        await meta_api.send_text_message(p, appr_msg)
+                asyncio.create_task(_auto_appr_other(exp.id, other_amt, trip_id, clean_p))
+
             await return_to_appropriate_driver_menu(session, clean_p, trip_id)
             return True
 

@@ -20,8 +20,9 @@ def clean_phone(phone: Optional[str]) -> str:
 
 
 def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) -> bool:
-    """Fast check whether an incoming message belongs to the fleet operations subsystem."""
     txt = (message_text or "").strip().lower()
+    if txt in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day", "☀️ start my shift"} or txt.startswith("cmd_start_shift"):
+        return False
 
     if txt.startswith(("flt_", "location_pin_", "btn_dispatch_", "btn_add_trans_", "btn_short_")) or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges"}:
         return True
