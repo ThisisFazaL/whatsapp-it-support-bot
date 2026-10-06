@@ -315,6 +315,13 @@ async def lifespan(app: FastAPI):
     await init_db_models()
     logger.info("Database initialized successfully.")
 
+    # Restore any enrolled Favlogix ERP device vaults from DB
+    try:
+        from app.services.favlogix_api_service import favlogix_api_service
+        await favlogix_api_service.sync_vaults_from_db()
+    except Exception as e:
+        logger.warning(f"Vault sync on startup note: {e}")
+
     # Start 8 PM IST EOD report background task loop
     report_task = asyncio.create_task(scheduled_daily_report_loop())
     # Start Keep-Alive self-ping background loop to prevent Render spin-downs (every 4 min)
@@ -528,6 +535,9 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
                 "configured": tenant.is_configured,
                 "email": tenant.email,
                 "org": tenant.org_name_or_id,
+                "enrolled": bool(tenant.device_key),
+                "device_key": tenant.device_key,
+                "reg_code_configured": bool(tenant.reg_code),
                 "status": "AUTHENTICATED" if token else "NO_TOKEN",
                 "error": None
             }
@@ -537,10 +547,55 @@ async def test_favlogix_company_connections(secret: Optional[str] = None):
                 "configured": tenant.is_configured,
                 "email": tenant.email,
                 "org": tenant.org_name_or_id,
+                "enrolled": bool(tenant.device_key),
+                "device_key": tenant.device_key,
+                "reg_code_configured": bool(tenant.reg_code),
                 "status": "FAILED",
                 "error": str(err)
             }
     return {"status": "success", "tenants": results}
+
+@app.get("/api/favlogix/enroll-device")
+@app.post("/api/favlogix/enroll-device")
+async def enroll_favlogix_device_endpoint(
+    company: str,
+    code: str,
+    slug: Optional[str] = None
+):
+    """
+    Enrolls a virtual ECDSA P-256 device for a company tenant using an 8-character Favlogix registration code.
+    Example: GET /api/favlogix/enroll-device?company=LG&code=ABC12345
+    """
+    from app.services.favlogix_api_service import favlogix_api_service
+    tenant = favlogix_api_service.get_tenant(company_name=company)
+    if not tenant or tenant.company_key == "DEFAULT":
+        key = company.strip().upper()
+        if key in favlogix_api_service.tenants:
+            tenant = favlogix_api_service.tenants[key]
+        else:
+            return {"success": False, "error": f"Unknown company tenant '{company}'. Valid: LG, TG, KRECKLE"}
+
+    if slug:
+        tenant.org_name_or_id = slug.strip()
+
+    try:
+        await favlogix_api_service.enroll_device(tenant, reg_code=code.strip())
+        token = await favlogix_api_service._ensure_valid_token(tenant)
+        return {
+            "success": True,
+            "company": tenant.display_name,
+            "tenant_key": tenant.company_key,
+            "device_key": tenant.device_key,
+            "status": "AUTHENTICATED" if token else "ENROLLED",
+            "message": f"Device successfully enrolled and verified for {tenant.display_name}!"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "company": tenant.display_name,
+            "tenant_key": tenant.company_key,
+            "error": str(e)
+        }
 
 @app.get("/api/favlogix/test-trip")
 async def test_favlogix_trip_endpoint(trip_id: str, company: Optional[str] = None):

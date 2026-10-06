@@ -463,6 +463,12 @@ class AuditLog(Base):
     ip_address = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow, index=True)
 
+class SystemVault(Base):
+    __tablename__ = "system_vault"
+    vault_key = Column(String(100), primary_key=True)
+    vault_data = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
 engine_kwargs = {
     "echo": False,
     "pool_pre_ping": True,
@@ -792,6 +798,14 @@ async def init_db_models():
                     )
                 """))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_srp_phone ON sales_rep_payments(salesperson_phone)"))
+
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS system_vault (
+                        vault_key VARCHAR(100) PRIMARY KEY,
+                        vault_data TEXT NOT NULL,
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
+                    )
+                """))
 
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -1534,5 +1548,38 @@ async def get_trip_reconciliation_summary(session: AsyncSession, trip_id: str) -
         "total_allowance": round(total_allowance, 2),
         "net_cash_due_to_admin": round(cash_collected, 2)
     }
+
+
+async def get_system_vault_entry(session: AsyncSession, vault_key: str) -> Optional[str]:
+    """Retrieves vault payload string for the given vault_key from system_vault table."""
+    try:
+        stmt = select(SystemVault.vault_data).where(SystemVault.vault_key == vault_key.strip())
+        res = await session.execute(stmt)
+        return res.scalar_one_or_none()
+    except Exception as e:
+        return None
+
+
+async def save_system_vault_entry(session: AsyncSession, vault_key: str, vault_data: str):
+    """Upserts vault data string into system_vault table."""
+    try:
+        stmt = select(SystemVault).where(SystemVault.vault_key == vault_key.strip())
+        res = await session.execute(stmt)
+        entry = res.scalar_one_or_none()
+        if entry:
+            entry.vault_data = vault_data
+            entry.updated_at = datetime.datetime.utcnow()
+        else:
+            entry = SystemVault(
+                vault_key=vault_key.strip(),
+                vault_data=vault_data,
+                updated_at=datetime.datetime.utcnow()
+            )
+            session.add(entry)
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        raise e
+
 
 

@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     kreckle_password: str = ""
     kreckle_org: str = ""
 
+    lgplast_auth_token: str = ""
+    tagoneswa_auth_token: str = ""
+    kreckle_auth_token: str = ""
+    # Registration Codes for Device Enrollment
+    lgplast_reg_code: str = ""
+    tagoneswa_reg_code: str = ""
+    kreckle_reg_code: str = ""
+    favlogix_lg_reg_code: str = ""
+    favlogix_tg_reg_code: str = ""
+    favlogix_kreckle_reg_code: str = ""
+
     # Favlogix Automation & Bridge Configuration (Fallback)
     favlogix_bridge_url: str = "https://uninjured-seducing-cycle.ngrok-free.dev"  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome
     favlogix_url: str = "https://erp.favlogix.com"

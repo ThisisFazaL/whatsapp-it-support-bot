@@ -2,6 +2,7 @@
 .env
 *.env
 !.env.example
+.device_vault/
 
 # Python Cache
 __pycache__/

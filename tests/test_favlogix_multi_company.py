@@ -167,6 +167,56 @@ class TestFavlogixMultiCompany(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["company_name"], "Tagoneswa Hardware")
         self.assertEqual(res["total_amount"], 3500.0)
 
+    @patch("httpx.AsyncClient.post")
+    async def test_enroll_device_and_challenge_login(self, mock_post):
+        """Tests ECDSA key generation, device enrollment, and challenge signature verification flow."""
+        from unittest.mock import MagicMock
+        tenant = self.service.tenants["LG"]
+        tenant.password = "secret123"
+
+        # Mock enrollment response
+        mock_enroll_resp = MagicMock()
+        mock_enroll_resp.status_code = 200
+        mock_enroll_resp.json.return_value = {
+            "data": {"device": {"key": "test_device_key_12345"}}
+        }
+
+        mock_post.return_value = mock_enroll_resp
+        enrolled = await self.service.enroll_device(tenant, reg_code="ABC12345")
+        self.assertTrue(enrolled)
+        self.assertEqual(tenant.device_key, "test_device_key_12345")
+        self.assertEqual(tenant.cookies.get("device_id"), "test_device_key_12345")
+        self.assertIsNotNone(tenant.private_key)
+
+        # Mock login response returning challenge
+        mock_login_resp = MagicMock()
+        mock_login_resp.status_code = 200
+        mock_login_resp.cookies = {"session": "pre_session_cookie"}
+        mock_login_resp.text = '{"data": {"challenge": "random_test_challenge_string", "slug": "lgplast", "deviceKey": "test_device_key_12345"}}'
+        mock_login_resp.json.return_value = {
+            "data": {
+                "challenge": "random_test_challenge_string",
+                "slug": "lgplast",
+                "deviceKey": "test_device_key_12345",
+                "employeeConfigKey": "emp_123"
+            }
+        }
+
+        # Mock verify response returning authenticated token
+        mock_verify_resp = MagicMock()
+        mock_verify_resp.status_code = 200
+        mock_verify_resp.cookies = {"session": "auth_cookie_final"}
+        mock_verify_resp.text = '{"data": {"token": "header.payload.signature"}}'
+        mock_verify_resp.json.return_value = {
+            "data": {"token": "header.payload.signature"}
+        }
+
+        mock_post.side_effect = [mock_login_resp, mock_verify_resp]
+        token = await self.service._login(tenant)
+        self.assertEqual(token, "header.payload.signature")
+        self.assertEqual(tenant.auth_token, "header.payload.signature")
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -11,6 +11,18 @@ from app.config import settings
 
 logger = logging.getLogger("favlogix_api")
 
+try:
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    HAS_CRYPTO = True
+except ImportError:
+    ec = None
+    hashes = None
+    serialization = None
+    decode_dss_signature = None
+    HAS_CRYPTO = False
+
 
 class FavlogixAPIError(Exception):
     """Base error for Favlogix API operations."""
@@ -33,7 +45,7 @@ class FavlogixCalculationPendingError(FavlogixAPIError):
 
 
 class CompanyTenantSession:
-    """Encapsulates authentication state and credentials for a single company tenant."""
+    """Encapsulates authentication state, ECDSA keypair, and credentials for a single company tenant."""
 
     def __init__(
         self,
@@ -43,7 +55,8 @@ class CompanyTenantSession:
         email: str,
         password: str,
         auth_token: str = "",
-        api_url: str = ""
+        api_url: str = "",
+        reg_code: str = ""
     ):
         self.company_key = company_key.upper()  # 'LG', 'TG', 'KRECKLE', 'DEFAULT'
         self.display_name = display_name
@@ -52,17 +65,98 @@ class CompanyTenantSession:
         self.password = (password or "").strip()
         self.auth_token = (auth_token or "").strip()
         self.api_url = (api_url or "").rstrip("/")
+        self.reg_code = (reg_code or "").strip()
         self.token_expiry: float = 0.0
         self.resolved_org_id: Optional[str] = None
         self.cookies: Dict[str, str] = {}
+        self.device_key: Optional[str] = None
+        self.private_key: Optional[Any] = None
+        self._load_vault()
 
     @property
     def is_configured(self) -> bool:
         """Returns True if minimum credentials exist to authenticate this tenant."""
-        return bool(self.auth_token or (self.email and self.password))
+        return bool(self.auth_token or (self.email and self.password) or self.reg_code)
+
+    def _vault_path(self) -> str:
+        vault_dir = os.path.join(os.path.dirname(__file__), "..", "..", ".device_vault")
+        os.makedirs(vault_dir, exist_ok=True)
+        return os.path.join(vault_dir, f"{self.company_key}.json")
+
+    def _load_vault(self):
+        """Loads cached enrolled device key and private key from local vault file."""
+        try:
+            p = self._vault_path()
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.device_key = data.get("device_key")
+                    pem = data.get("private_key_pem")
+                    if pem and HAS_CRYPTO:
+                        self.private_key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
+                        if self.device_key:
+                            self.cookies["device_id"] = self.device_key
+                        logger.info(f"Loaded vault device key for {self.company_key}: {self.device_key}")
+        except Exception as e:
+            logger.debug(f"Vault load note for {self.company_key}: {e}")
+
+    def _save_vault(self):
+        """Saves enrolled device key and private key to vault file."""
+        try:
+            if not self.device_key or not self.private_key or not HAS_CRYPTO:
+                return
+            pem = self.private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode("utf-8")
+            p = self._vault_path()
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({"device_key": self.device_key, "private_key_pem": pem}, f)
+        except Exception as e:
+            logger.warning(f"Vault save note for {self.company_key}: {e}")
+
+    async def load_from_db(self, session):
+        """Loads enrolled credentials from PostgreSQL database if not present locally."""
+        if self.device_key and self.private_key:
+            return
+        try:
+            from app.database import get_system_vault_entry
+            raw = await get_system_vault_entry(session, f"DEVICE_VAULT_{self.company_key}")
+            if raw:
+                data = json.loads(raw)
+                self.device_key = data.get("device_key")
+                pem = data.get("private_key_pem")
+                if pem and HAS_CRYPTO:
+                    self.private_key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
+                    if self.device_key:
+                        self.cookies["device_id"] = self.device_key
+                    self._save_vault()
+                    logger.info(f"Restored vault device key for {self.company_key} from database: {self.device_key}")
+        except Exception as e:
+            logger.debug(f"Vault DB load note for {self.company_key}: {e}")
+
+    async def save_to_db(self, session):
+        """Saves enrolled credentials to PostgreSQL database."""
+        try:
+            if not self.device_key or not self.private_key or not HAS_CRYPTO:
+                return
+            pem = self.private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ).decode("utf-8")
+            from app.database import save_system_vault_entry
+            await save_system_vault_entry(session, f"DEVICE_VAULT_{self.company_key}", json.dumps({
+                "device_key": self.device_key,
+                "private_key_pem": pem
+            }))
+            logger.info(f"Persisted vault credentials for {self.company_key} into database.")
+        except Exception as e:
+            logger.warning(f"Vault DB save note for {self.company_key}: {e}")
 
     def __repr__(self) -> str:
-        return f"<CompanyTenantSession key={self.company_key} name='{self.display_name}' org='{self.org_name_or_id}' email='{self.email}'>"
+        return f"<CompanyTenantSession key={self.company_key} name='{self.display_name}' org='{self.org_name_or_id}' email='{self.email}' device_key={self.device_key}>"
 
 
 class FavlogixAPIService:
@@ -73,8 +167,9 @@ class FavlogixAPIService:
 
     Supports:
     1. Multi-Company Tenants (LG Plast, Tagoneswa Hardware, Kreckle Foods)
-    2. Modern Platform (fio.favlogix.com): Dedicated `/api/tenant/sales/trip` endpoints
-    3. Legacy Platform (erp.favlogix.com): PocketBase `/api/pb/api/collections/sales_order/records`
+    2. Virtual Device Enrollment (ECDSA P-256 Keypair generation & verification)
+    3. Modern Platform (fio.favlogix.com): Dedicated `/api/tenant/sales/trip` endpoints
+    4. Legacy Platform (erp.favlogix.com): PocketBase `/api/pb/api/collections/sales_order/records`
     """
 
     def __init__(self):
@@ -87,14 +182,17 @@ class FavlogixAPIService:
         lg_email = (getattr(settings, "lgplast_email", "") or getattr(settings, "favlogix_lg_email", "") or os.getenv("LGPLAST_EMAIL", "") or os.getenv("FAVLOGIX_LG_EMAIL", "")).strip()
         lg_pass = (getattr(settings, "lgplast_password", "") or getattr(settings, "favlogix_lg_password", "") or os.getenv("LGPLAST_PASSWORD", "") or os.getenv("FAVLOGIX_LG_PASSWORD", "")).strip()
         lg_org = (getattr(settings, "lgplast_org", "") or getattr(settings, "favlogix_lg_org", "") or os.getenv("LGPLAST_ORG", "") or os.getenv("FAVLOGIX_LG_ORG", "") or "lgplast").strip()
+        lg_reg = (getattr(settings, "lgplast_reg_code", "") or getattr(settings, "favlogix_lg_reg_code", "") or os.getenv("LGPLAST_REG_CODE", "") or os.getenv("FAVLOGIX_LG_REG_CODE", "")).strip()
 
         tg_email = (getattr(settings, "tagoneswa_email", "") or getattr(settings, "favlogix_tg_email", "") or os.getenv("TAGONESWA_EMAIL", "") or os.getenv("FAVLOGIX_TG_EMAIL", "")).strip()
         tg_pass = (getattr(settings, "tagoneswa_password", "") or getattr(settings, "favlogix_tg_password", "") or os.getenv("TAGONESWA_PASSWORD", "") or os.getenv("FAVLOGIX_TG_PASSWORD", "")).strip()
         tg_org = (getattr(settings, "tagoneswa_org", "") or getattr(settings, "favlogix_tg_org", "") or os.getenv("TAGONESWA_ORG", "") or os.getenv("FAVLOGIX_TG_ORG", "") or "tagoneswa").strip()
+        tg_reg = (getattr(settings, "tagoneswa_reg_code", "") or getattr(settings, "favlogix_tg_reg_code", "") or os.getenv("TAGONESWA_REG_CODE", "") or os.getenv("FAVLOGIX_TG_REG_CODE", "")).strip()
 
         kr_email = (getattr(settings, "kreckle_email", "") or getattr(settings, "favlogix_kreckle_email", "") or os.getenv("KRECKLE_EMAIL", "") or os.getenv("FAVLOGIX_KRECKLE_EMAIL", "")).strip()
         kr_pass = (getattr(settings, "kreckle_password", "") or getattr(settings, "favlogix_kreckle_password", "") or os.getenv("KRECKLE_PASSWORD", "") or os.getenv("FAVLOGIX_KRECKLE_PASSWORD", "")).strip()
         kr_org = (getattr(settings, "kreckle_org", "") or getattr(settings, "favlogix_kreckle_org", "") or os.getenv("KRECKLE_ORG", "") or os.getenv("FAVLOGIX_KRECKLE_ORG", "") or "kreckle").strip()
+        kr_reg = (getattr(settings, "kreckle_reg_code", "") or getattr(settings, "favlogix_kreckle_reg_code", "") or os.getenv("KRECKLE_REG_CODE", "") or os.getenv("FAVLOGIX_KRECKLE_REG_CODE", "")).strip()
 
         self.tenants = {
             "LG": CompanyTenantSession(
@@ -103,8 +201,9 @@ class FavlogixAPIService:
                 org_name_or_id=lg_org,
                 email=lg_email,
                 password=lg_pass,
-                auth_token=getattr(settings, "favlogix_lg_auth_token", "") or os.getenv("LGPLAST_AUTH_TOKEN", ""),
-                api_url=getattr(settings, "favlogix_lg_api_url", "") or self.default_api_url
+                auth_token=getattr(settings, "lgplast_auth_token", "") or getattr(settings, "favlogix_lg_auth_token", "") or os.getenv("LGPLAST_AUTH_TOKEN", ""),
+                api_url=getattr(settings, "favlogix_lg_api_url", "") or self.default_api_url,
+                reg_code=lg_reg
             ),
             "TG": CompanyTenantSession(
                 company_key="TG",
@@ -112,8 +211,9 @@ class FavlogixAPIService:
                 org_name_or_id=tg_org,
                 email=tg_email,
                 password=tg_pass,
-                auth_token=getattr(settings, "favlogix_tg_auth_token", "") or os.getenv("TAGONESWA_AUTH_TOKEN", ""),
-                api_url=getattr(settings, "favlogix_tg_api_url", "") or self.default_api_url
+                auth_token=getattr(settings, "tagoneswa_auth_token", "") or getattr(settings, "favlogix_tg_auth_token", "") or os.getenv("TAGONESWA_AUTH_TOKEN", ""),
+                api_url=getattr(settings, "favlogix_tg_api_url", "") or self.default_api_url,
+                reg_code=tg_reg
             ),
             "KRECKLE": CompanyTenantSession(
                 company_key="KRECKLE",
@@ -121,8 +221,9 @@ class FavlogixAPIService:
                 org_name_or_id=kr_org,
                 email=kr_email,
                 password=kr_pass,
-                auth_token=getattr(settings, "favlogix_kreckle_auth_token", "") or os.getenv("KRECKLE_AUTH_TOKEN", ""),
-                api_url=getattr(settings, "favlogix_kreckle_api_url", "") or self.default_api_url
+                auth_token=getattr(settings, "kreckle_auth_token", "") or getattr(settings, "favlogix_kreckle_auth_token", "") or os.getenv("KRECKLE_AUTH_TOKEN", ""),
+                api_url=getattr(settings, "favlogix_kreckle_api_url", "") or self.default_api_url,
+                reg_code=kr_reg
             ),
             "DEFAULT": CompanyTenantSession(
                 company_key="DEFAULT",
@@ -139,6 +240,16 @@ class FavlogixAPIService:
         for t in self.tenants.values():
             if t.auth_token:
                 t.token_expiry = self._decode_token_expiry(t.auth_token)
+
+    async def sync_vaults_from_db(self):
+        """Restores any enrolled device vaults from database into tenant sessions."""
+        try:
+            from app.database import async_session_factory
+            async with async_session_factory() as session:
+                for tenant in self.tenants.values():
+                    await tenant.load_from_db(session)
+        except Exception as e:
+            logger.warning(f"Could not sync device vaults from DB: {e}")
 
     # ----------------------------------------------------
     # Backwards-compatible properties
@@ -267,6 +378,65 @@ class FavlogixAPIService:
         tenant.resolved_org_id = target
         return target
 
+    async def enroll_device(self, tenant: CompanyTenantSession, reg_code: str) -> bool:
+        """
+        Enrolls a virtual device with Favlogix fio platform using an 8-character registration code.
+        Generates ECDSA P-256 keypair, exports JWK, and calls /tenant/device/enroll.
+        """
+        if not HAS_CRYPTO:
+            raise FavlogixAuthError("cryptography library is required for device enrollment.")
+
+        base = self._base_url(tenant)
+        enroll_url = f"{base}/tenant/device/enroll"
+
+        if not tenant.private_key:
+            tenant.private_key = ec.generate_private_key(ec.SECP256R1())
+
+        pn = tenant.private_key.public_key().public_numbers()
+
+        def b64url(n: int) -> str:
+            b = n.to_bytes(32, "big")
+            return base64.urlsafe_b64encode(b).decode("ascii").rstrip("=")
+
+        jwk = {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": b64url(pn.x),
+            "y": b64url(pn.y),
+            "ext": True,
+            "key_ops": ["verify"]
+        }
+
+        slug = tenant.org_name_or_id
+        payload = {
+            "slug": slug,
+            "code": reg_code.strip(),
+            "publicKey": json.dumps(jwk)
+        }
+
+        logger.info(f"Enrolling device for tenant '{tenant.display_name}' with slug '{slug}' and code '{reg_code.strip()}'...")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(enroll_url, json=payload)
+            if res.status_code == 200:
+                res_data = res.json().get("data", {})
+                device_key = res_data.get("device", {}).get("key")
+                if not device_key:
+                    raise FavlogixAuthError(f"Enrollment succeeded but returned no device key: {res.text}")
+                tenant.device_key = device_key
+                tenant.reg_code = reg_code.strip()
+                tenant.cookies["device_id"] = device_key
+                tenant._save_vault()
+                try:
+                    from app.database import async_session_factory
+                    async with async_session_factory() as db_session:
+                        await tenant.save_to_db(db_session)
+                except Exception as dbe:
+                    logger.warning(f"Could not persist vault to DB for '{tenant.display_name}': {dbe}")
+                logger.info(f"Device successfully enrolled for '{tenant.display_name}'! Device Key: {device_key}")
+                return True
+            else:
+                raise FavlogixAuthError(f"Device enrollment failed for '{tenant.display_name}' (HTTP {res.status_code}): {res.text}")
+
     async def _login(self, tenant: Optional[CompanyTenantSession] = None) -> str:
         """Authenticates against Favlogix auth API for a specific tenant session."""
         tenant = tenant or self.tenants["DEFAULT"]
@@ -291,15 +461,62 @@ class FavlogixAPIService:
                     f"Favlogix password is empty for tenant '{tenant.display_name}'. Please set password in environment."
                 )
 
-            logger.info(f"Authenticating with fio.favlogix.com for tenant '{tenant.display_name}' as '{username}'...")
+            # Auto-enroll if reg_code is set but device not yet enrolled
+            if not tenant.device_key and tenant.reg_code:
+                try:
+                    await self.enroll_device(tenant, tenant.reg_code)
+                except Exception as enroll_err:
+                    logger.warning(f"Auto-enrollment attempt failed for '{tenant.display_name}': {enroll_err}")
+
+            login_cookies = dict(tenant.cookies)
+            if tenant.device_key:
+                login_cookies["device_id"] = tenant.device_key
+
+            logger.info(f"Authenticating with fio.favlogix.com for tenant '{tenant.display_name}' as '{username}' (device_id: {tenant.device_key})...")
             payload = {"username": username, "password": tenant.password}
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
-                    res = await client.post(login_url, json=payload)
+                    res = await client.post(login_url, json=payload, cookies=login_cookies)
                     if res.status_code == 200:
-                        tenant.cookies = dict(res.cookies)
+                        tenant.cookies.update(res.cookies)
                         data = res.json() if res.text.startswith("{") else {}
-                        token = data.get("token") or res.cookies.get("session") or ""
+                        inner_data = data.get("data", {}) if isinstance(data, dict) else {}
+
+                        # Handle ECDSA Challenge if device authentication verification is requested
+                        if "challenge" in inner_data:
+                            challenge = inner_data["challenge"]
+                            if not tenant.private_key or not HAS_CRYPTO:
+                                raise FavlogixAuthError(f"Challenge received for '{tenant.display_name}' but private key not found in vault.")
+                            der_sig = tenant.private_key.sign(challenge.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+                            r_val, s_val = decode_dss_signature(der_sig)
+                            raw_sig = r_val.to_bytes(32, "big") + s_val.to_bytes(32, "big")
+                            sig_b64 = base64.b64encode(raw_sig).decode("ascii")
+
+                            verify_url = f"{base}/tenant/auth/login/verify"
+                            verify_payload = {
+                                "signature": sig_b64,
+                                "slug": inner_data.get("slug") or tenant.org_name_or_id,
+                                "deviceKey": inner_data.get("deviceKey") or tenant.device_key,
+                                "employeeConfigKey": inner_data.get("employeeConfigKey")
+                            }
+                            verify_cookies = dict(tenant.cookies)
+                            verify_cookies.update(res.cookies)
+                            if tenant.device_key:
+                                verify_cookies["device_id"] = tenant.device_key
+                            res_verify = await client.post(verify_url, json=verify_payload, cookies=verify_cookies)
+                            if res_verify.status_code == 200:
+                                tenant.cookies.update(res_verify.cookies)
+                                v_data = res_verify.json().get("data", {}) if res_verify.text.startswith("{") else {}
+                                token = v_data.get("token") or res_verify.cookies.get("session") or ""
+                                if token:
+                                    tenant.auth_token = token
+                                    tenant.token_expiry = self._decode_token_expiry(token)
+                                logger.info(f"Challenge successfully verified for '{tenant.display_name}'!")
+                                return tenant.auth_token or "cookie-authenticated"
+                            else:
+                                raise FavlogixAuthError(f"Challenge verification failed for '{tenant.display_name}' ({res_verify.status_code}): {res_verify.text}")
+
+                        token = data.get("token") or inner_data.get("token") or res.cookies.get("session") or ""
                         if token:
                             tenant.auth_token = token
                             tenant.token_expiry = self._decode_token_expiry(token)
@@ -307,6 +524,8 @@ class FavlogixAPIService:
                         return tenant.auth_token or "cookie-authenticated"
                     elif res.status_code in (401, 422):
                         raise FavlogixAuthError(f"fio.favlogix.com login failed for tenant '{tenant.display_name}' ({res.status_code}): {res.text}")
+                    elif res.status_code == 403:
+                        raise FavlogixAuthError(f"fio.favlogix.com device enrollment required for tenant '{tenant.display_name}' (HTTP 403): {res.text}")
                     else:
                         raise FavlogixAuthError(f"fio.favlogix.com login returned HTTP {res.status_code} for tenant '{tenant.display_name}': {res.text}")
             except Exception as e:
@@ -380,7 +599,7 @@ class FavlogixAPIService:
             return await self._login(tenant)
         if tenant.token_expiry and now > tenant.token_expiry - 120:
             return await self._login(tenant)
-        return tenant.auth_token
+        return tenant.auth_token or ("cookie-authenticated" if tenant.cookies else "")
 
     async def _extract_from_tenant(self, tenant: CompanyTenantSession, trip_id: str) -> Dict[str, Any]:
         """Performs raw trip extraction against a specific company tenant."""
