@@ -28,7 +28,7 @@ class TripVerificationService:
         self.api_service = favlogix_api_service
         self.browser_service = FavlogixBrowserService()
 
-    async def verify_trip(self, trip_id: str) -> Dict[str, Any]:
+    async def verify_trip(self, trip_id: str, company_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Extracts trip valuation and executes pricing verification.
         Prioritizes direct background HTTP API (Option 1 - Headless).
@@ -40,7 +40,7 @@ class TripVerificationService:
         # 1. Primary: Direct Headless HTTP API (Fast ~0.2s, no browser required)
         if getattr(settings, "favlogix_api_enabled", True):
             try:
-                raw_trip_data = await self.api_service.extract_trip_data(trip_id)
+                raw_trip_data = await self.api_service.extract_trip_data(trip_id, company_name=company_name)
                 logger.info(f"Successfully extracted trip data via direct API for '{trip_id}': {raw_trip_data}")
             except APICalculationPendingError as pending_err:
                 error_reason = str(pending_err)
@@ -107,6 +107,7 @@ class TripVerificationService:
             return {
                 "success": True,
                 "trip_id": raw_trip_data.get("trip_id", trip_id),
+                "company_name": raw_trip_data.get("company_name", company_name or ""),
                 "total_amount": pricing["trip_value"],
                 "destination_city": pricing["city"],
                 "route": pricing["route"],
@@ -123,6 +124,7 @@ class TripVerificationService:
             return {
                 "success": True,
                 "trip_id": raw_trip_data.get("trip_id", trip_id),
+                "company_name": raw_trip_data.get("company_name", company_name or ""),
                 "total_amount": amount,
                 "destination_city": destination,
                 "route": "Custom Destination",

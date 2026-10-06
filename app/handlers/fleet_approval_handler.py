@@ -1797,8 +1797,13 @@ async def handle_fleet_approval_flow(
             f"⏳ *Verifying Trip `{trip_query}` with Favlogix ERP...*\n_Please wait while live order values and route thresholds are verified._"
         )
 
-        # Call Trip Verification Service
-        result = await trip_verification_service.verify_trip(trip_query)
+        # Resolve sales rep company context
+        company_name = (state.current_data or {}).get("company_name", "") if state else ""
+        if not company_name:
+            company_name = resolve_sales_rep_company(phone, employee)
+
+        # Call Trip Verification Service with company context
+        result = await trip_verification_service.verify_trip(trip_query, company_name=company_name)
 
         if not result.get("success"):
             err_msg = result.get("error", "Could not verify trip.")
@@ -1820,7 +1825,8 @@ async def handle_fleet_approval_flow(
             await handle_existing_trip_response(session, phone, employee, existing_canonical)
             return True
 
-        company_name = (state.current_data or {}).get("company_name", "A. TG Hardware") if state else "A. TG Hardware"
+        if not company_name:
+            company_name = result.get("company_name", "A. TG Hardware")
         dest = result.get("destination_city", "Unknown")
         route = result.get("route", "")
         route_str = f" ({route})" if route else ""

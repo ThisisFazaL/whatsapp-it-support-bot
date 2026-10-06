@@ -33,10 +33,32 @@ class Settings(BaseSettings):
     # Favlogix Direct Background API Configuration (Option 1 - Headless)
     favlogix_api_enabled: bool = True
     favlogix_api_url: str = "https://api.favlogix.com/api"
-    favlogix_organization: str = "sandbox"  # Organization name (e.g. 'sandbox') or organization ID ('019bdf9df302700')
+    favlogix_organization: str = "sandbox"  # Default org name or ID
     favlogix_email: str = "faizanpatel@favlogix.com"
     favlogix_password: str = ""
     favlogix_auth_token: str = ""
+
+    # Multi-Company Favlogix Direct API Credentials (Read-only accounts)
+    # LG Plast (LG)
+    favlogix_lg_org: str = ""
+    favlogix_lg_email: str = ""
+    favlogix_lg_password: str = ""
+    favlogix_lg_auth_token: str = ""
+    favlogix_lg_api_url: str = ""
+
+    # Tagoneswa Hardware (TG)
+    favlogix_tg_org: str = ""
+    favlogix_tg_email: str = ""
+    favlogix_tg_password: str = ""
+    favlogix_tg_auth_token: str = ""
+    favlogix_tg_api_url: str = ""
+
+    # Kreckle Foods (Kreckle)
+    favlogix_kreckle_org: str = ""
+    favlogix_kreckle_email: str = ""
+    favlogix_kreckle_password: str = ""
+    favlogix_kreckle_auth_token: str = ""
+    favlogix_kreckle_api_url: str = ""
 
     # Favlogix Automation & Bridge Configuration (Fallback)
     favlogix_bridge_url: str = "https://uninjured-seducing-cycle.ngrok-free.dev"  # Remote bridge URL (e.g. ngrok) when Render connects to local Chrome

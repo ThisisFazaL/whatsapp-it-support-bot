@@ -31,41 +31,150 @@ class FavlogixCalculationPendingError(FavlogixAPIError):
     pass
 
 
+class CompanyTenantSession:
+    """Encapsulates authentication state and credentials for a single company tenant."""
+
+    def __init__(
+        self,
+        company_key: str,
+        display_name: str,
+        org_name_or_id: str,
+        email: str,
+        password: str,
+        auth_token: str = "",
+        api_url: str = ""
+    ):
+        self.company_key = company_key.upper()  # 'LG', 'TG', 'KRECKLE', 'DEFAULT'
+        self.display_name = display_name
+        self.org_name_or_id = (org_name_or_id or "").strip()
+        self.email = (email or "").strip()
+        self.password = (password or "").strip()
+        self.auth_token = (auth_token or "").strip()
+        self.api_url = (api_url or "").rstrip("/")
+        self.token_expiry: float = 0.0
+        self.resolved_org_id: Optional[str] = None
+        self.cookies: Dict[str, str] = {}
+
+    @property
+    def is_configured(self) -> bool:
+        """Returns True if minimum credentials exist to authenticate this tenant."""
+        return bool(self.auth_token or (self.email and self.password))
+
+    def __repr__(self) -> str:
+        return f"<CompanyTenantSession key={self.company_key} name='{self.display_name}' org='{self.org_name_or_id}' email='{self.email}'>"
+
+
 class FavlogixAPIService:
     """
     Direct background HTTP client for Favlogix ERP (Option 1 - Headless).
     Communicates directly with Favlogix backend without requiring
     a local browser, Chrome window, or display server.
 
-    Supports dual modes:
-    1. Modern New Platform (fio.favlogix.com): Dedicated `/api/tenant/inventory/packaging-list/trip-totals`
-    2. Legacy Platform (erp.favlogix.com): PocketBase `/api/pb/api/collections/sales_order/records`
+    Supports:
+    1. Multi-Company Tenants (LG Plast, Tagoneswa Hardware, Kreckle Foods)
+    2. Modern Platform (fio.favlogix.com): Dedicated `/api/tenant/sales/trip` endpoints
+    3. Legacy Platform (erp.favlogix.com): PocketBase `/api/pb/api/collections/sales_order/records`
     """
 
     def __init__(self):
-        self.api_url: str = settings.favlogix_api_url.rstrip("/")
-        self.org_name_or_id: str = settings.favlogix_organization
-        self.email: str = settings.favlogix_email
-        self.password: str = settings.favlogix_password
-        self.auth_token: str = settings.favlogix_auth_token
-        self.token_expiry: float = 0.0
-        self.resolved_org_id: Optional[str] = None
-        self.cookies: Dict[str, str] = {}
+        self.default_api_url: str = settings.favlogix_api_url.rstrip("/")
+        self.tenants: Dict[str, CompanyTenantSession] = {}
+        self._init_tenants()
 
-        if self.auth_token:
-            self.token_expiry = self._decode_token_expiry(self.auth_token)
+    def _init_tenants(self):
+        """Initializes tenant configurations for the 3 operating companies and a fallback default."""
+        self.tenants = {
+            "LG": CompanyTenantSession(
+                company_key="LG",
+                display_name="LG Plast",
+                org_name_or_id=getattr(settings, "favlogix_lg_org", "") or "lgplast",
+                email=getattr(settings, "favlogix_lg_email", ""),
+                password=getattr(settings, "favlogix_lg_password", ""),
+                auth_token=getattr(settings, "favlogix_lg_auth_token", ""),
+                api_url=getattr(settings, "favlogix_lg_api_url", "") or self.default_api_url
+            ),
+            "TG": CompanyTenantSession(
+                company_key="TG",
+                display_name="Tagoneswa Hardware",
+                org_name_or_id=getattr(settings, "favlogix_tg_org", "") or "tagoneswa",
+                email=getattr(settings, "favlogix_tg_email", ""),
+                password=getattr(settings, "favlogix_tg_password", ""),
+                auth_token=getattr(settings, "favlogix_tg_auth_token", ""),
+                api_url=getattr(settings, "favlogix_tg_api_url", "") or self.default_api_url
+            ),
+            "KRECKLE": CompanyTenantSession(
+                company_key="KRECKLE",
+                display_name="Kreckle Foods",
+                org_name_or_id=getattr(settings, "favlogix_kreckle_org", "") or "kreckle",
+                email=getattr(settings, "favlogix_kreckle_email", ""),
+                password=getattr(settings, "favlogix_kreckle_password", ""),
+                auth_token=getattr(settings, "favlogix_kreckle_auth_token", ""),
+                api_url=getattr(settings, "favlogix_kreckle_api_url", "") or self.default_api_url
+            ),
+            "DEFAULT": CompanyTenantSession(
+                company_key="DEFAULT",
+                display_name="Default Tenant",
+                org_name_or_id=settings.favlogix_organization,
+                email=settings.favlogix_email,
+                password=settings.favlogix_password,
+                auth_token=settings.favlogix_auth_token,
+                api_url=self.default_api_url
+            )
+        }
+
+        # Pre-decode token expiries if tokens were pre-supplied
+        for t in self.tenants.values():
+            if t.auth_token:
+                t.token_expiry = self._decode_token_expiry(t.auth_token)
+
+    # ----------------------------------------------------
+    # Backwards-compatible properties
+    # ----------------------------------------------------
+    @property
+    def api_url(self) -> str:
+        return self.default_api_url
+
+    @property
+    def org_name_or_id(self) -> str:
+        return self.tenants["DEFAULT"].org_name_or_id
+
+    @property
+    def email(self) -> str:
+        return self.tenants["DEFAULT"].email
+
+    @property
+    def password(self) -> str:
+        return self.tenants["DEFAULT"].password
+
+    @property
+    def auth_token(self) -> str:
+        return self.tenants["DEFAULT"].auth_token
+
+    @property
+    def cookies(self) -> Dict[str, str]:
+        return self.tenants["DEFAULT"].cookies
+
+    @property
+    def token_expiry(self) -> float:
+        return self.tenants["DEFAULT"].token_expiry
 
     @property
     def is_fio(self) -> bool:
-        """Returns True if connected to the new fio.favlogix.com platform."""
-        return "fio" in self.api_url or "/tenant" in self.api_url or "fio" in getattr(settings, "favlogix_url", "")
+        """Returns True if default connected URL is fio.favlogix.com."""
+        return self._is_fio(self.tenants["DEFAULT"])
 
     @property
     def base_url(self) -> str:
-        """Normalized base URL without trailing slash."""
-        # Ensure base URL ends with /api if connecting to fio
-        clean = self.api_url.rstrip("/")
-        if self.is_fio and not clean.endswith("/api"):
+        """Normalized base URL without trailing slash for default tenant."""
+        return self._base_url(self.tenants["DEFAULT"])
+
+    def _is_fio(self, tenant: CompanyTenantSession) -> bool:
+        url = tenant.api_url or self.default_api_url
+        return "fio" in url or "/tenant" in url or "fio" in getattr(settings, "favlogix_url", "")
+
+    def _base_url(self, tenant: CompanyTenantSession) -> str:
+        clean = (tenant.api_url or self.default_api_url).rstrip("/")
+        if self._is_fio(tenant) and not clean.endswith("/api"):
             clean = f"{clean}/api"
         return clean
 
@@ -82,90 +191,128 @@ class FavlogixAPIService:
             logger.warning(f"Could not decode token expiry from JWT: {e}")
         return 0.0
 
-    async def _resolve_organization_id(self) -> str:
-        """Resolves organization friendly name to ID for legacy erp.favlogix.com."""
-        if self.resolved_org_id:
-            return self.resolved_org_id
+    def get_tenant(self, company_name: Optional[str] = None, trip_id: Optional[str] = None) -> CompanyTenantSession:
+        """
+        Resolves the appropriate CompanyTenantSession based on:
+        1. Explicit company_name (e.g. 'LG Plast', 'B. LG Plast', 'Tagoneswa Hardware', 'A. TG Hardware', 'Kreckle Foods').
+        2. Prefix of trip_id (e.g. 'LG-2026-001', 'TG-20042026', 'KR-01').
+        3. Fallback to DEFAULT tenant.
+        """
+        c_str = (company_name or "").strip().lower()
+        key = None
 
-        target = self.org_name_or_id.strip()
+        if "lg" in c_str or "plast" in c_str:
+            key = "LG"
+        elif "tg" in c_str or "tagoneswa" in c_str or "hardware" in c_str:
+            key = "TG"
+        elif "kreckle" in c_str or "food" in c_str or "kr" in c_str:
+            key = "KRECKLE"
+
+        # Check trip_id prefix if key not resolved from company_name
+        if not key and trip_id:
+            t_upper = trip_id.strip().upper()
+            if t_upper.startswith(("LG-", "LG_", "LGP-")):
+                key = "LG"
+            elif t_upper.startswith(("TG-", "TG_", "TGH-")):
+                key = "TG"
+            elif t_upper.startswith(("KR-", "KF-", "KRECKLE-")):
+                key = "KRECKLE"
+
+        if key and key in self.tenants:
+            tenant = self.tenants[key]
+            if tenant.is_configured:
+                return tenant
+            logger.info(f"Tenant '{key}' matched for '{company_name or trip_id}', but specific credentials not set. Falling back to DEFAULT tenant.")
+
+        return self.tenants["DEFAULT"]
+
+    async def _resolve_organization_id(self, tenant: Optional[CompanyTenantSession] = None) -> str:
+        """Resolves organization friendly name to ID for legacy erp.favlogix.com."""
+        tenant = tenant or self.tenants["DEFAULT"]
+        if tenant.resolved_org_id:
+            return tenant.resolved_org_id
+
+        target = tenant.org_name_or_id.strip()
         if len(target) == 15 and all(c in "0123456789abcdef" for c in target.lower()):
-            self.resolved_org_id = target
+            tenant.resolved_org_id = target
             return target
 
+        base = self._base_url(tenant)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.get(f"{self.base_url}/organizations")
+                res = await client.get(f"{base}/organizations")
                 if res.status_code == 200:
                     orgs = res.json()
                     for org in orgs:
                         if org.get("name", "").lower() == target.lower():
-                            self.resolved_org_id = org.get("id")
-                            logger.info(f"Resolved Favlogix organization '{target}' to ID '{self.resolved_org_id}'")
-                            return self.resolved_org_id
+                            tenant.resolved_org_id = org.get("id")
+                            logger.info(f"Resolved Favlogix organization '{target}' to ID '{tenant.resolved_org_id}'")
+                            return tenant.resolved_org_id
         except Exception as e:
-            logger.error(f"Error fetching Favlogix organizations: {e}")
+            logger.error(f"Error fetching Favlogix organizations for tenant {tenant.company_key}: {e}")
 
-        self.resolved_org_id = target
+        tenant.resolved_org_id = target
         return target
 
-    async def _login(self) -> str:
-        """Authenticates against Favlogix auth API using password or session refresh."""
+    async def _login(self, tenant: Optional[CompanyTenantSession] = None) -> str:
+        """Authenticates against Favlogix auth API for a specific tenant session."""
+        tenant = tenant or self.tenants["DEFAULT"]
+        base = self._base_url(tenant)
+        is_fio = self._is_fio(tenant)
+
         # ----------------------------------------------------
         # Mode A: New Platform (fio.favlogix.com)
         # ----------------------------------------------------
-        if self.is_fio:
-            login_url = f"{self.base_url}/tenant/auth/login"
-            # Format username: e.g. faizan@sandbox
-            username = self.email.strip()
+        if is_fio:
+            login_url = f"{base}/tenant/auth/login"
+            username = tenant.email.strip()
             if "@" in username:
                 parts = username.split("@")
-                # If username is an email like faizanpatel@favlogix.com, format as faizanpatel@sandbox
-                if "." in parts[1] and self.org_name_or_id:
-                    username = f"{parts[0]}@{self.org_name_or_id.strip()}"
-            elif self.org_name_or_id:
-                username = f"{username}@{self.org_name_or_id.strip()}"
+                if "." in parts[1] and tenant.org_name_or_id:
+                    username = f"{parts[0]}@{tenant.org_name_or_id.strip()}"
+            elif tenant.org_name_or_id:
+                username = f"{username}@{tenant.org_name_or_id.strip()}"
 
-            if not self.password:
+            if not tenant.password:
                 raise FavlogixAuthError(
-                    f"Favlogix password is empty in .env. Please set FAVLOGIX_PASSWORD for '{username}'."
+                    f"Favlogix password is empty for tenant '{tenant.display_name}'. Please set password in environment."
                 )
 
-            logger.info(f"Authenticating with fio.favlogix.com as '{username}'...")
-            payload = {"username": username, "password": self.password}
+            logger.info(f"Authenticating with fio.favlogix.com for tenant '{tenant.display_name}' as '{username}'...")
+            payload = {"username": username, "password": tenant.password}
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     res = await client.post(login_url, json=payload)
                     if res.status_code == 200:
-                        # Extract cookies (session token)
-                        self.cookies = dict(res.cookies)
+                        tenant.cookies = dict(res.cookies)
                         data = res.json() if res.text.startswith("{") else {}
                         token = data.get("token") or res.cookies.get("session") or ""
                         if token:
-                            self.auth_token = token
-                            self.token_expiry = self._decode_token_expiry(token)
-                        logger.info("Successfully authenticated with fio.favlogix.com.")
-                        return self.auth_token or "cookie-authenticated"
-                    elif res.status_code == 401 or res.status_code == 422:
-                        raise FavlogixAuthError(f"fio.favlogix.com login failed ({res.status_code}): {res.text}")
+                            tenant.auth_token = token
+                            tenant.token_expiry = self._decode_token_expiry(token)
+                        logger.info(f"Successfully authenticated tenant '{tenant.display_name}' with fio.favlogix.com.")
+                        return tenant.auth_token or "cookie-authenticated"
+                    elif res.status_code in (401, 422):
+                        raise FavlogixAuthError(f"fio.favlogix.com login failed for tenant '{tenant.display_name}' ({res.status_code}): {res.text}")
                     else:
-                        raise FavlogixAuthError(f"fio.favlogix.com login returned HTTP {res.status_code}: {res.text}")
+                        raise FavlogixAuthError(f"fio.favlogix.com login returned HTTP {res.status_code} for tenant '{tenant.display_name}': {res.text}")
             except Exception as e:
                 if isinstance(e, FavlogixAuthError):
                     raise
-                raise FavlogixAuthError(f"Network error logging in to fio.favlogix.com: {e}")
+                raise FavlogixAuthError(f"Network error logging in to fio.favlogix.com for tenant '{tenant.display_name}': {e}")
 
         # ----------------------------------------------------
         # Mode B: Legacy Platform (erp.favlogix.com)
         # ----------------------------------------------------
-        org_id = await self._resolve_organization_id()
-        if self.password:
-            login_url = f"{self.base_url}/auth/login"
+        org_id = await self._resolve_organization_id(tenant)
+        if tenant.password:
+            login_url = f"{base}/auth/login"
             payload = {
                 "organizationId": org_id,
-                "email": self.email,
-                "password": self.password
+                "email": tenant.email,
+                "password": tenant.password
             }
-            logger.info(f"Attempting Favlogix auth login for '{self.email}' (Org ID: {org_id})...")
+            logger.info(f"Attempting Favlogix auth login for '{tenant.email}' (Tenant: {tenant.display_name}, Org ID: {org_id})...")
             try:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     res = await client.post(login_url, json=payload)
@@ -173,23 +320,23 @@ class FavlogixAPIService:
                         data = res.json()
                         token = data.get("token")
                         if token:
-                            self.auth_token = token
-                            self.token_expiry = self._decode_token_expiry(token)
-                            logger.info("Successfully authenticated with Favlogix API via password.")
-                            return self.auth_token
+                            tenant.auth_token = token
+                            tenant.token_expiry = self._decode_token_expiry(token)
+                            logger.info(f"Successfully authenticated tenant '{tenant.display_name}' via password.")
+                            return tenant.auth_token
                         else:
-                            raise FavlogixAuthError("Favlogix login succeeded but returned no token.")
+                            raise FavlogixAuthError(f"Favlogix login succeeded for '{tenant.display_name}' but returned no token.")
                     else:
-                        raise FavlogixAuthError(f"Favlogix login failed with status {res.status_code}: {res.text}")
+                        raise FavlogixAuthError(f"Favlogix login failed for '{tenant.display_name}' with status {res.status_code}: {res.text}")
             except Exception as e:
                 if isinstance(e, FavlogixAuthError):
                     raise
-                raise FavlogixAuthError(f"Network error during Favlogix login: {e}")
+                raise FavlogixAuthError(f"Network error during Favlogix login for '{tenant.display_name}': {e}")
 
         # Refresh existing token if available
-        if self.auth_token:
-            refresh_url = f"{self.base_url}/auth/token"
-            headers = {"Authorization": self.auth_token, "Accept": "application/json"}
+        if tenant.auth_token:
+            refresh_url = f"{base}/auth/token"
+            headers = {"Authorization": tenant.auth_token, "Accept": "application/json"}
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(refresh_url, headers=headers)
@@ -197,40 +344,39 @@ class FavlogixAPIService:
                         data = res.json()
                         token = data.get("token")
                         if token:
-                            self.auth_token = token
-                            self.token_expiry = self._decode_token_expiry(token)
-                            logger.info("Successfully refreshed Favlogix session token.")
-                            return self.auth_token
+                            tenant.auth_token = token
+                            tenant.token_expiry = self._decode_token_expiry(token)
+                            logger.info(f"Successfully refreshed Favlogix session token for '{tenant.display_name}'.")
+                            return tenant.auth_token
             except Exception as e:
-                logger.warning(f"Could not refresh Favlogix token: {e}")
+                logger.warning(f"Could not refresh Favlogix token for '{tenant.display_name}': {e}")
 
-            if self.token_expiry and time.time() < self.token_expiry - 60:
-                return self.auth_token
+            if tenant.token_expiry and time.time() < tenant.token_expiry - 60:
+                return tenant.auth_token
 
         raise FavlogixAuthError(
-            "Favlogix credentials not configured or expired. "
-            "Please provide FAVLOGIX_PASSWORD in your .env file."
+            f"Favlogix credentials not configured or expired for tenant '{tenant.display_name}'. "
+            "Please provide credentials in environment variables."
         )
 
-    async def _ensure_valid_token(self) -> str:
-        """Ensures an unexpired token or active session is ready."""
+    async def _ensure_valid_token(self, tenant: Optional[CompanyTenantSession] = None) -> str:
+        """Ensures an unexpired token or active session is ready for a given tenant."""
+        tenant = tenant or self.tenants["DEFAULT"]
         now = time.time()
-        if not self.auth_token and not self.cookies:
-            return await self._login()
-        if self.token_expiry and now > self.token_expiry - 120:
-            return await self._login()
-        return self.auth_token
+        if not tenant.auth_token and not tenant.cookies:
+            return await self._login(tenant)
+        if tenant.token_expiry and now > tenant.token_expiry - 120:
+            return await self._login(tenant)
+        return tenant.auth_token
 
-    async def extract_trip_data(self, trip_id: str) -> Dict[str, Any]:
-        """
-        Extracts trip valuation and orders for a given trip ID.
-        Automatically branches between fio.favlogix.com (trip-totals endpoint)
-        and erp.favlogix.com (PocketBase sales_order query).
-        """
+    async def _extract_from_tenant(self, tenant: CompanyTenantSession, trip_id: str) -> Dict[str, Any]:
+        """Performs raw trip extraction against a specific company tenant."""
         clean_trip = trip_id.strip()
-        await self._ensure_valid_token()
+        await self._ensure_valid_token(tenant)
+        base = self._base_url(tenant)
+        is_fio = self._is_fio(tenant)
 
-        # Extract destination city (e.g. 17092026-byo -> Byo -> Bulawayo, 20042026-BINDURA -> Bindura)
+        # Extract destination city heuristic from trip name (e.g. 17092026-byo -> Bulawayo)
         dest_city = ""
         city_match = re.search(r"[-_]([A-Za-z]+)", clean_trip)
         if city_match:
@@ -239,36 +385,40 @@ class FavlogixAPIService:
         # ----------------------------------------------------
         # Mode A: New Platform (fio.favlogix.com)
         # ----------------------------------------------------
-        if self.is_fio:
+        if is_fio:
             clean_trip = trip_id.strip().upper().replace("TRIP-", "").strip()
-            sales_trip_url = f"{self.base_url}/tenant/sales/trip"
-            detail_url = f"{self.base_url}/tenant/sales/trip/detail"
+            sales_trip_url = f"{base}/tenant/sales/trip"
+            detail_url = f"{base}/tenant/sales/trip/detail"
             headers = {"Accept": "application/json"}
-            if self.auth_token and not self.auth_token.startswith("cookie-"):
-                headers["Authorization"] = f"Bearer {self.auth_token}"
+            if tenant.auth_token and not tenant.auth_token.startswith("cookie-"):
+                headers["Authorization"] = f"Bearer {tenant.auth_token}"
 
-            async with httpx.AsyncClient(timeout=15.0, cookies=self.cookies) as client:
+            async with httpx.AsyncClient(timeout=15.0, cookies=tenant.cookies) as client:
                 trip_data = None
                 orders_data = []
 
-                # 1. Try direct detail lookup (if full trip ID like 22092026-TEST2 was provided)
+                # 1. Direct detail lookup
                 res_detail = await client.get(detail_url, params={"tripId": clean_trip}, headers=headers)
                 if res_detail.status_code == 401:
-                    logger.warning("fio.favlogix.com session expired. Re-authenticating...")
-                    await self._login()
-                    res_detail = await client.get(detail_url, params={"tripId": clean_trip}, headers=headers, cookies=self.cookies)
+                    logger.warning(f"fio.favlogix.com session expired for '{tenant.display_name}'. Re-authenticating...")
+                    await self._login(tenant)
+                    if tenant.auth_token and not tenant.auth_token.startswith("cookie-"):
+                        headers["Authorization"] = f"Bearer {tenant.auth_token}"
+                    res_detail = await client.get(detail_url, params={"tripId": clean_trip}, headers=headers, cookies=tenant.cookies)
 
                 if res_detail.status_code == 200:
                     d_json = res_detail.json()
                     trip_data = d_json.get("trip")
                     orders_data = d_json.get("orders", [])
                 elif res_detail.status_code == 404:
-                    # 2. Try sales/trip search (e.g. user typed 'TEST2' or partial name)
+                    # 2. Search sales/trip
                     search_params = {"trip": clean_trip, "search": clean_trip, "limit": 100}
                     res_search = await client.get(sales_trip_url, params=search_params, headers=headers)
                     if res_search.status_code == 401:
-                        await self._login()
-                        res_search = await client.get(sales_trip_url, params=search_params, headers=headers, cookies=self.cookies)
+                        await self._login(tenant)
+                        if tenant.auth_token and not tenant.auth_token.startswith("cookie-"):
+                            headers["Authorization"] = f"Bearer {tenant.auth_token}"
+                        res_search = await client.get(sales_trip_url, params=search_params, headers=headers, cookies=tenant.cookies)
 
                     if res_search.status_code == 200:
                         s_json = res_search.json()
@@ -280,7 +430,7 @@ class FavlogixAPIService:
                         ]
                         if matching:
                             real_trip_id = matching[0].get("tripId")
-                            res_real = await client.get(detail_url, params={"tripId": real_trip_id}, headers=headers, cookies=self.cookies)
+                            res_real = await client.get(detail_url, params={"tripId": real_trip_id}, headers=headers, cookies=tenant.cookies)
                             if res_real.status_code == 200:
                                 d_json = res_real.json()
                                 trip_data = d_json.get("trip")
@@ -289,8 +439,8 @@ class FavlogixAPIService:
                                 trip_data = matching[0]
 
                 if not trip_data:
-                    # 3. Final fallback: List recent trips and match locally
-                    res_all = await client.get(sales_trip_url, params={"limit": 200}, headers=headers, cookies=self.cookies)
+                    # 3. List recent trips and match locally
+                    res_all = await client.get(sales_trip_url, params={"limit": 200}, headers=headers, cookies=tenant.cookies)
                     if res_all.status_code == 200:
                         s_json = res_all.json()
                         items = s_json.get("data", []) if isinstance(s_json, dict) else s_json
@@ -301,7 +451,7 @@ class FavlogixAPIService:
                         ]
                         if matching:
                             real_trip_id = matching[0].get("tripId")
-                            res_real = await client.get(detail_url, params={"tripId": real_trip_id}, headers=headers, cookies=self.cookies)
+                            res_real = await client.get(detail_url, params={"tripId": real_trip_id}, headers=headers, cookies=tenant.cookies)
                             if res_real.status_code == 200:
                                 d_json = res_real.json()
                                 trip_data = d_json.get("trip")
@@ -311,7 +461,7 @@ class FavlogixAPIService:
 
                 if not trip_data:
                     raise FavlogixCalculationPendingError(
-                        f"Trip '{clean_trip}' was not found in Favlogix Sales Trips."
+                        f"Trip '{clean_trip}' was not found in Favlogix ({tenant.display_name})."
                     )
 
                 actual_trip_id = trip_data.get("tripId") or clean_trip
@@ -350,12 +500,14 @@ class FavlogixAPIService:
                     })
 
                 logger.info(
-                    f"fio.favlogix.com: Trip '{actual_trip_id}' found with {total_orders} orders, "
-                    f"total amount: ${total_amount:,.2f}, destination: {resolved_city} (Customers: {[c['customer_name'] for c in customers_list]})"
+                    f"fio.favlogix.com [{tenant.display_name}]: Trip '{actual_trip_id}' found with {total_orders} orders, "
+                    f"total: ${total_amount:,.2f}, destination: {resolved_city}"
                 )
 
                 return {
                     "trip_id": actual_trip_id,
+                    "company_name": tenant.display_name,
+                    "company_key": tenant.company_key,
                     "total_amount": round(total_amount, 2),
                     "destination_city": resolved_city,
                     "route": "",
@@ -368,9 +520,9 @@ class FavlogixAPIService:
         # ----------------------------------------------------
         # Mode B: Legacy Platform (erp.favlogix.com)
         # ----------------------------------------------------
-        records_url = f"{self.base_url}/pb/api/collections/sales_order/records"
+        records_url = f"{base}/pb/api/collections/sales_order/records"
         headers = {
-            "Authorization": self.auth_token,
+            "Authorization": tenant.auth_token,
             "Accept": "application/json"
         }
 
@@ -383,9 +535,9 @@ class FavlogixAPIService:
             res = await client.get(records_url, params=params, headers=headers)
 
             if res.status_code == 401:
-                logger.warning("Favlogix returned HTTP 401. Re-authenticating token...")
-                await self._login()
-                headers["Authorization"] = self.auth_token
+                logger.warning(f"Favlogix returned HTTP 401 for '{tenant.display_name}'. Re-authenticating token...")
+                await self._login(tenant)
+                headers["Authorization"] = tenant.auth_token
                 res = await client.get(records_url, params=params, headers=headers)
 
             if res.status_code != 200:
@@ -408,7 +560,7 @@ class FavlogixAPIService:
 
             if not items:
                 raise FavlogixCalculationPendingError(
-                    f"Trip '{clean_trip}' currently has 0 active sales orders in Favlogix."
+                    f"Trip '{clean_trip}' currently has 0 active sales orders in Favlogix ({tenant.display_name})."
                 )
 
             total_amount = sum(float(item.get("total", 0.0)) for item in items)
@@ -429,6 +581,8 @@ class FavlogixAPIService:
 
             return {
                 "trip_id": clean_trip,
+                "company_name": tenant.display_name,
+                "company_key": tenant.company_key,
                 "total_amount": round(total_amount, 2),
                 "destination_city": dest_city or "Bulawayo",
                 "route": "",
@@ -438,21 +592,58 @@ class FavlogixAPIService:
                 "customers": customers_list
             }
 
-    async def list_active_trips(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Lists active delivery trips from either fio.favlogix.com or erp.favlogix.com."""
-        await self._ensure_valid_token()
+    async def extract_trip_data(self, trip_id: str, company_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Extracts trip valuation and orders for a given trip ID.
+        Uses company_name or trip_id to route to the correct company tenant (LG, TG, Kreckle).
+        If the primary tenant does not find the trip, gracefully falls back across other configured tenants.
+        """
+        primary_tenant = self.get_tenant(company_name, trip_id)
+        last_error: Optional[Exception] = None
 
-        if self.is_fio:
-            sales_trip_url = f"{self.base_url}/tenant/sales/trip"
+        try:
+            return await self._extract_from_tenant(primary_tenant, trip_id)
+        except (FavlogixCalculationPendingError, FavlogixTripNotFoundError, FavlogixAuthError) as err:
+            last_error = err
+            logger.info(f"Trip '{trip_id}' not resolved on primary tenant '{primary_tenant.display_name}' ({err}). Checking other tenants...")
+
+        # Multi-company fallback search across other configured tenants
+        for key in ["LG", "TG", "KRECKLE", "DEFAULT"]:
+            tenant = self.tenants.get(key)
+            if tenant and tenant != primary_tenant and tenant.is_configured:
+                try:
+                    alt_result = await self._extract_from_tenant(tenant, trip_id)
+                    if alt_result and alt_result.get("status") == "CALCULATED":
+                        logger.info(f"Trip '{trip_id}' successfully discovered under '{tenant.display_name}' tenant!")
+                        return alt_result
+                except Exception as alt_err:
+                    logger.debug(f"Search for '{trip_id}' under alternative tenant '{tenant.display_name}' failed: {alt_err}")
+
+        # If all failed, re-raise the original primary error
+        if last_error:
+            raise last_error
+        raise FavlogixCalculationPendingError(f"Trip '{trip_id}' was not found in Favlogix.")
+
+    async def list_active_trips(self, company_name: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Lists active delivery trips for a specific company tenant or default."""
+        tenant = self.get_tenant(company_name)
+        await self._ensure_valid_token(tenant)
+        base = self._base_url(tenant)
+        is_fio = self._is_fio(tenant)
+
+        if is_fio:
+            sales_trip_url = f"{base}/tenant/sales/trip"
             headers = {"Accept": "application/json"}
-            if self.auth_token and not self.auth_token.startswith("cookie-"):
-                headers["Authorization"] = f"Bearer {self.auth_token}"
+            if tenant.auth_token and not tenant.auth_token.startswith("cookie-"):
+                headers["Authorization"] = f"Bearer {tenant.auth_token}"
 
-            async with httpx.AsyncClient(timeout=15.0, cookies=self.cookies) as client:
+            async with httpx.AsyncClient(timeout=15.0, cookies=tenant.cookies) as client:
                 res = await client.get(sales_trip_url, headers=headers)
                 if res.status_code == 401:
-                    await self._login()
-                    res = await client.get(sales_trip_url, headers=headers, cookies=self.cookies)
+                    await self._login(tenant)
+                    if tenant.auth_token and not tenant.auth_token.startswith("cookie-"):
+                        headers["Authorization"] = f"Bearer {tenant.auth_token}"
+                    res = await client.get(sales_trip_url, headers=headers, cookies=tenant.cookies)
                 if res.status_code != 200:
                     return []
                 s_json = res.json()
@@ -461,6 +652,7 @@ class FavlogixAPIService:
                 return [
                     {
                         "trip_id": it.get("tripId"),
+                        "company": tenant.display_name,
                         "order_count": int(it.get("orderCount") or 1),
                         "total_amount": float(it.get("totalAmount") or 0.0),
                         "currency": it.get("currencyCode", "USD"),
@@ -469,9 +661,9 @@ class FavlogixAPIService:
                     for it in items[:limit]
                 ]
 
-        # Legacy
-        records_url = f"{self.base_url}/pb/api/collections/sales_order/records"
-        headers = {"Authorization": self.auth_token, "Accept": "application/json"}
+        # Legacy PocketBase
+        records_url = f"{base}/pb/api/collections/sales_order/records"
+        headers = {"Authorization": tenant.auth_token, "Accept": "application/json"}
         params = {
             "filter": 'trip_id != "" && is_deleted = false',
             "fields": "trip_id,total,status",
@@ -493,13 +685,14 @@ class FavlogixAPIService:
                 if not tid:
                     continue
                 if tid not in trips:
-                    trips[tid] = {"trip_id": tid, "order_count": 0, "total_amount": 0.0}
+                    trips[tid] = {"trip_id": tid, "company": tenant.display_name, "order_count": 0, "total_amount": 0.0}
                 trips[tid]["order_count"] += 1
                 trips[tid]["total_amount"] += float(it.get("total", 0.0))
 
             return [
                 {
                     "trip_id": t["trip_id"],
+                    "company": t.get("company", tenant.display_name),
                     "order_count": t["order_count"],
                     "total_amount": round(t["total_amount"], 2)
                 }
