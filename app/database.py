@@ -381,8 +381,19 @@ class WebUser(Base):
     phone = Column(String(30), nullable=True)
     company = Column(String(100), nullable=True)
     is_active = Column(Boolean, default=True)
+    current_session_token = Column(String(100), nullable=True)
+    session_version = Column(Integer, default=1, nullable=False)
+    last_login_at = Column(DateTime, nullable=True)
+    last_login_ip = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class RevokedUser(Base):
+    __tablename__ = "revoked_users"
+    username = Column(String(50), primary_key=True)
+    revoked_at = Column(DateTime, default=datetime.datetime.utcnow)
+    revoked_by = Column(String(100), nullable=True)
+    reason = Column(Text, nullable=True)
 
 class UserCustomPermission(Base):
     __tablename__ = "user_custom_permissions"

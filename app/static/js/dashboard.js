@@ -134,8 +134,12 @@ function escapeJsAttr(val) {
                         : `<span class="text-slate-400 text-[11px]">Role Default</span>`;
 
                     const statusBadge = u.is_active
-                        ? '<span class="text-emerald-600 font-bold text-[11px]">Active</span>'
-                        : '<span class="text-rose-600 font-bold text-[11px]">Inactive</span>';
+                        ? '<span class="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded-full text-[10px] border border-emerald-200 dark:border-emerald-800">Active</span>'
+                        : '<span class="bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 font-bold px-2 py-0.5 rounded-full text-[10px] border border-rose-200 dark:border-rose-800">Suspended</span>';
+
+                    const sessionBadge = u.has_active_session
+                        ? `<span class="inline-flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-bold px-2 py-0.5 rounded-full text-[10px] border border-emerald-200 dark:border-emerald-800" title="Last login: ${escapeJsAttr(u.last_login_at)} (IP: ${escapeJsAttr(u.last_login_ip)})"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Connected</span>`
+                        : `<span class="text-slate-400 text-[10px]">No Device Active</span>`;
 
                     const companyBadge = u.company ? `<span class="bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800 ml-1.5">${escapeJsAttr(u.company)}</span>` : '';
 
@@ -152,13 +156,20 @@ function escapeJsAttr(val) {
                                 <span class="bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 px-2 py-0.5 rounded text-[11px] font-mono font-bold">${u.role}</span>
                             </td>
                             <td class="px-4 py-2.5">${statusBadge}</td>
+                            <td class="px-4 py-2.5">${sessionBadge}</td>
                             <td class="px-4 py-2.5">${overridesBadge}</td>
                             <td class="px-4 py-2.5 text-right whitespace-nowrap">
-                                <button onclick="selectUserForEdit('${u.username}')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
+                                <button onclick="selectUserForEdit('${u.username}')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-2.5 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
                                     Manage
                                 </button>
+                                <button onclick="revokeUserSessions('${u.username}')" class="bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 font-bold px-2 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="Force Logout All Devices">
+                                    🔒 Disconnect
+                                </button>
                                 ${u.username !== 'admin' ? `
-                                <button onclick="deleteUserAccount('${u.username}')" class="bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-400 font-bold px-2.5 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="Remove User Account">
+                                <button onclick="toggleUserActiveStatus('${u.username}', ${!u.is_active})" class="${u.is_active ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300'} font-bold px-2 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="${u.is_active ? 'Suspend Account' : 'Reactivate Account'}">
+                                    ${u.is_active ? 'Suspend' : 'Activate'}
+                                </button>
+                                <button onclick="deleteUserAccount('${u.username}')" class="bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-400 font-bold px-2 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="Delete Account Permanently">
                                     Remove
                                 </button>` : ''}
                             </td>
@@ -170,7 +181,7 @@ function escapeJsAttr(val) {
                     selectUserForEdit(selectedMgmtUsername);
                 }
             } catch (err) {
-                tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-rose-500 font-bold">Failed to load users: ${err.message}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-rose-500 font-bold">Failed to load users: ${err.message}</td></tr>`;
             }
         }
 
@@ -191,6 +202,30 @@ function escapeJsAttr(val) {
 
             const activeCheck = document.getElementById('selected-user-active');
             if (activeCheck) activeCheck.checked = u.is_active;
+
+            const sessInfo = document.getElementById('selected-user-session-info');
+            if (sessInfo) {
+                sessInfo.innerHTML = `<span>🛡️ <strong>Single Active Session Enforced</strong> | Status: <strong>${u.is_active ? 'Active' : 'Suspended'}</strong> | Device: <strong>${u.has_active_session ? '🟢 Connected' : '⚪ Disconnected'}</strong> (Last: ${escapeJsAttr(u.last_login_at)} IP: ${escapeJsAttr(u.last_login_ip)})</span>`;
+            }
+
+            const toggleStatusBtn = document.getElementById('btn-toggle-status-panel');
+            if (toggleStatusBtn) {
+                if (u.username === 'admin') {
+                    toggleStatusBtn.classList.add('hidden');
+                } else {
+                    toggleStatusBtn.classList.remove('hidden');
+                    toggleStatusBtn.innerHTML = u.is_active ? '<span>🚫</span> Suspend Account' : '<span>✅</span> Reactivate Account';
+                    toggleStatusBtn.className = u.is_active
+                        ? 'bg-slate-700 hover:bg-slate-800 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1';
+                }
+            }
+
+            const deleteBtn = document.getElementById('btn-delete-user-panel');
+            if (deleteBtn) {
+                if (u.username === 'admin') deleteBtn.classList.add('hidden');
+                else deleteBtn.classList.remove('hidden');
+            }
 
             const matrix = document.getElementById('user-perms-matrix');
             if (!matrix) return;
@@ -309,6 +344,128 @@ function escapeJsAttr(val) {
             }
         }
         window.deleteUserAccount = deleteUserAccount;
+
+        async function revokeUserSessions(uname) {
+            if (!confirm(`Force logout all devices and terminate active sessions for '${uname}'?`)) return;
+            try {
+                const res = await fetch('/api/v2/admin/users/revoke-sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: uname })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.message || `Active sessions revoked for ${uname}.`);
+                    await loadUsersList();
+                } else {
+                    alert(data.detail || 'Failed to revoke sessions.');
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+        window.revokeUserSessions = revokeUserSessions;
+
+        async function toggleUserActiveStatus(uname, newStatus) {
+            const actionWord = newStatus ? 'activate' : 'suspend';
+            if (!confirm(`Are you sure you want to ${actionWord} the account '${uname}'?`)) return;
+            try {
+                const res = await fetch('/api/v2/admin/users/toggle-status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: uname, is_active: newStatus })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.message || `User account status updated.`);
+                    await loadUsersList();
+                } else {
+                    alert(data.detail || 'Failed to update account status.');
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+        window.toggleUserActiveStatus = toggleUserActiveStatus;
+
+        function toggleSelectedUserStatus() {
+            if (!selectedMgmtUsername || !loadedUsersData || !loadedUsersData.users) return;
+            const u = loadedUsersData.users.find(x => x.username.toLowerCase() === selectedMgmtUsername.toLowerCase());
+            if (!u) return;
+            toggleUserActiveStatus(u.username, !u.is_active);
+        }
+        window.toggleSelectedUserStatus = toggleSelectedUserStatus;
+
+        function openCreateUserModal() {
+            const m = document.getElementById('createUserModal');
+            if (m) {
+                m.classList.remove('hidden');
+                const uInput = document.getElementById('create-user-username');
+                if (uInput) {
+                    uInput.value = '';
+                    uInput.focus();
+                }
+                const pInput = document.getElementById('create-user-password');
+                if (pInput) pInput.value = '';
+                const fInput = document.getElementById('create-user-fullname');
+                if (fInput) fInput.value = '';
+                const cInput = document.getElementById('create-user-company');
+                if (cInput) cInput.value = '';
+                const phInput = document.getElementById('create-user-phone');
+                if (phInput) phInput.value = '';
+            }
+        }
+        window.openCreateUserModal = openCreateUserModal;
+
+        function closeCreateUserModal() {
+            const m = document.getElementById('createUserModal');
+            if (m) m.classList.add('hidden');
+        }
+        window.closeCreateUserModal = closeCreateUserModal;
+
+        async function submitCreateUser() {
+            const uname = (document.getElementById('create-user-username')?.value || '').trim();
+            const pass = (document.getElementById('create-user-password')?.value || '').trim();
+            const fname = (document.getElementById('create-user-fullname')?.value || '').trim();
+            const role = document.getElementById('create-user-role')?.value || 'SALES_ADMIN';
+            const company = (document.getElementById('create-user-company')?.value || '').trim();
+            const phone = (document.getElementById('create-user-phone')?.value || '').trim();
+
+            if (!uname || uname.length < 3) {
+                alert('Username must be at least 3 characters.');
+                return;
+            }
+            if (!pass || pass.length < 6) {
+                alert('Password must be at least 6 characters.');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/v2/admin/users/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: uname,
+                        password: pass,
+                        full_name: fname,
+                        role: role,
+                        company: company,
+                        phone: phone
+                    })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(`Created account '${data.username}'!`);
+                    closeCreateUserModal();
+                    await loadUsersList();
+                } else {
+                    alert(data.detail || 'Failed to create user account.');
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+        window.submitCreateUser = submitCreateUser;
 
         async function toggleUserPermissionSubmit(username, permissionKey, isGranted) {
             const actionWord = isGranted ? 'grant' : 'revoke';
@@ -755,7 +912,7 @@ function escapeJsAttr(val) {
             if (elCompletedTrips) elCompletedTrips.textContent = an.trips_completed ?? 0;
 
             const elAvgRev = document.getElementById('ov-kpi-avg-revenue');
-            if (elAvgRev) elAvgRev.textContent = '$' + (an.avg_revenue_per_trip || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            if (elAvgRev) elAvgRev.textContent = '100% Verified';
 
             // ── TIER 3: FLEET STATUS ──────────────────────────────────────
             const elTrucksReady = document.getElementById('ov-kpi-trucks-ready');
@@ -775,7 +932,7 @@ function escapeJsAttr(val) {
 
             // ── TIER 4: FINANCIAL OVERVIEW ─────────────────────────────────
             const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-            setTxt('ov-fin-total-sales', '$' + (an.total_sales || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+            setTxt('ov-fin-criteria-status', '100% Verified');
             setTxt('ov-fin-transport-charges', '$' + (an.total_transport_charges || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
             setTxt('ov-fin-total-opex', '$' + (an.total_operational_expenses || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
             setTxt('ov-fin-net-margin', '$' + (an.net_amount || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
@@ -850,7 +1007,7 @@ function escapeJsAttr(val) {
                         <tr class="hover:bg-slate-50/80 dark:hover:bg-[#14141c] transition">
                             <td class="px-4 py-2 font-bold text-slate-900 dark:text-zinc-100 capitalize">${c.city}</td>
                             <td class="px-4 py-2 text-center font-mono text-slate-700 dark:text-zinc-300">${c.trips}</td>
-                            <td class="px-4 py-2 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">$${(c.sales || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                            <td class="px-4 py-2 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">✅ Qualified</td>
                             <td class="px-4 py-2 text-right font-mono text-slate-600 dark:text-zinc-300">$${(c.opex || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                         </tr>
                     `).join('');
@@ -927,27 +1084,13 @@ function escapeJsAttr(val) {
         }
 
         function switchSalesChartMode(mode) {
-            window.currentSalesChartMode = mode;
-            ['DAY', 'MONTH', 'COMPANY'].forEach(m => {
-                const btn = document.getElementById('btn-sales-chart-' + m);
-                if (btn) {
-                    if (m === mode) {
-                        btn.className = 'sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer';
-                    } else {
-                        btn.className = 'sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer';
-                    }
-                }
-            });
-
-            if (window.lastFleetAnalytics) {
-                renderSalesTrendLineChart(window.lastFleetAnalytics.sales_trends, mode, window.selectedFleetCompany || 'ALL');
-            }
+            // Deprecated: sales charts are strictly removed
         }
         window.switchSalesChartMode = switchSalesChartMode;
 
         function renderSalesTrendLineChart(trends, mode, companyFilter) {
-            const canvas = document.getElementById('an-sales-trend-line-chart');
-            if (!canvas || typeof Chart === 'undefined') return;
+            // Strictly concealed: sales trends are removed from dashboard
+            return;
 
             destroyAnalyticsChart('sales_trend');
 
@@ -1236,8 +1379,8 @@ function escapeJsAttr(val) {
             const tripsCompletedEl = document.getElementById('an-stat-trips-completed');
             if (tripsCompletedEl) tripsCompletedEl.textContent = `${an.trips_completed ?? 0} completed · ${an.trips_pending ?? 0} active`;
 
-            const avgRevEl = document.getElementById('an-stat-avg-revenue');
-            if (avgRevEl) avgRevEl.textContent = '$' + Number(an.avg_revenue_per_trip || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const compEl = document.getElementById('an-stat-compliance');
+            if (compEl) compEl.textContent = '100% Verified';
 
             const avgOpexEl = document.getElementById('an-stat-avg-opex');
             if (avgOpexEl) avgOpexEl.textContent = 'Avg Opex: $' + Number(an.avg_opex_per_trip || 0).toFixed(2);

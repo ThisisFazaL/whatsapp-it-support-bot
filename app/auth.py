@@ -4,6 +4,7 @@ import hashlib
 import time
 import json
 import base64
+import secrets
 from typing import Optional, Dict, Set, List, Any
 from fastapi import Request, HTTPException
 
@@ -307,11 +308,91 @@ def require_permission(user: Optional[Dict], permission_key: str):
             detail=f"Permission denied: '{permission_key}' required. Role '{role}' is not authorized."
         )
 
-def create_session_token(username: str, role: str) -> str:
-    """Creates a cryptographically signed, timestamped session token."""
+# =========================================================================
+# Session Tracking & Account Revocation Blacklist (Synchronized with DB)
+# =========================================================================
+REVOKED_USERS: Set[str] = set()
+ACTIVE_USER_SESSIONS: Dict[str, str] = {}
+USER_STATUS_CACHE: Dict[str, bool] = {}
+
+def generate_session_id() -> str:
+    """Generates a high-entropy cryptographically unique session identifier."""
+    return f"sess_{secrets.token_hex(20)}"
+
+def load_revocation_and_sessions(revoked: List[str], sessions: Dict[str, str], statuses: Dict[str, bool]):
+    """Bulk loads revocation blacklist, active sessions, and active statuses from database into auth memory cache."""
+    global REVOKED_USERS, ACTIVE_USER_SESSIONS, USER_STATUS_CACHE
+    REVOKED_USERS = set(u.strip().lower() for u in revoked if u)
+    for u, sid in sessions.items():
+        if sid:
+            ACTIVE_USER_SESSIONS[u.strip().lower()] = str(sid)
+    for u, st in statuses.items():
+        USER_STATUS_CACHE[u.strip().lower()] = bool(st)
+
+def is_user_active(username: str) -> bool:
+    """Returns True if the user account is active and has not been revoked/blacklisted."""
+    u = username.strip().lower()
+    if u in REVOKED_USERS:
+        return False
+    if USER_STATUS_CACHE.get(u) is False:
+        return False
+    if u in USERS_DB and not USERS_DB[u].get("is_active", True):
+        return False
+    return True
+
+def set_user_session(username: str, session_id: str):
+    """Sets current active session ID for a user in memory."""
+    u = username.strip().lower()
+    ACTIVE_USER_SESSIONS[u] = session_id
+
+def invalidate_user_session(username: str):
+    """Invalidates the active session for a user, causing any logged in device to immediately expire."""
+    u = username.strip().lower()
+    ACTIVE_USER_SESSIONS[u] = f"revoked_{secrets.token_hex(8)}"
+
+def revoke_user_account(username: str):
+    """Revokes user access completely: blacklists username and terminates any active sessions."""
+    u = username.strip().lower()
+    REVOKED_USERS.add(u)
+    USER_STATUS_CACHE[u] = False
+    ACTIVE_USER_SESSIONS[u] = f"revoked_{secrets.token_hex(8)}"
+    if u in USERS_DB and u != "admin":
+        USERS_DB[u]["is_active"] = False
+    if u in USER_CUSTOM_PERMISSIONS_CACHE:
+        del USER_CUSTOM_PERMISSIONS_CACHE[u]
+
+def restore_user_account(username: str):
+    """Restores user access from blacklist and marks account active."""
+    u = username.strip().lower()
+    REVOKED_USERS.discard(u)
+    USER_STATUS_CACHE[u] = True
+    if u in USERS_DB:
+        USERS_DB[u]["is_active"] = True
+
+def register_user_in_memory(username: str, user_data: Dict[str, Any]):
+    """Registers or updates a dynamic user into runtime USERS_DB."""
+    u = username.strip().lower()
+    USERS_DB[u] = {
+        "username": u,
+        "password": user_data.get("password") or user_data.get("password_hash", ""),
+        "role": user_data.get("role", "LOGISTICS_USER"),
+        "name": user_data.get("name") or user_data.get("full_name") or u.title(),
+        "company": user_data.get("company", ""),
+        "phone": user_data.get("phone", ""),
+        "is_active": user_data.get("is_active", True),
+        "allowed_domains": ["fleet", "logistics"]
+    }
+    USER_STATUS_CACHE[u] = bool(user_data.get("is_active", True))
+
+def create_session_token(username: str, role: str, session_id: Optional[str] = None) -> str:
+    """Creates a cryptographically signed, timestamped session token bound to a specific session ID."""
+    u = username.strip().lower()
+    sid = session_id or generate_session_id()
+    ACTIVE_USER_SESSIONS[u] = sid
     payload = {
-        "sub": username,
+        "sub": u,
         "role": role,
+        "sid": sid,
         "exp": int(time.time()) + SESSION_MAX_AGE
     }
     json_bytes = json.dumps(payload).encode("utf-8")
@@ -320,7 +401,12 @@ def create_session_token(username: str, role: str) -> str:
     return f"{b64_payload}.{signature}"
 
 def verify_session_token(token: str) -> Optional[Dict]:
-    """Verifies a signed session token using constant-time comparison and expiry check."""
+    """
+    Verifies a signed session token:
+    1. Validates cryptographic signature and expiration.
+    2. Enforces account active status and revocation blacklist check.
+    3. Enforces single-active-device binding (token must match current active session).
+    """
     if not token or "." not in token:
         return None
     try:
@@ -335,6 +421,18 @@ def verify_session_token(token: str) -> Optional[Dict]:
         if payload.get("exp", 0) < time.time():
             return None  # Expired
             
+        sub = payload.get("sub", "").strip().lower()
+        if not is_user_active(sub):
+            return None  # Account deactivated, suspended, or revoked
+            
+        sid = payload.get("sid")
+        # Enforce single active session per user if active session tracking is present
+        if sid and sub in ACTIVE_USER_SESSIONS:
+            active_sid = ACTIVE_USER_SESSIONS.get(sub)
+            if active_sid and sid != active_sid:
+                # Logged in from another device or session explicitly revoked by administrator!
+                return None
+                
         return payload
     except Exception:
         return None
@@ -342,11 +440,14 @@ def verify_session_token(token: str) -> Optional[Dict]:
 def authenticate_user(username: str, password: str) -> Optional[Dict]:
     """Authenticates credentials against high-entropy store using constant-time comparison."""
     u = username.strip().lower()
+    if not is_user_active(u):
+        return None
     if u in USERS_DB:
         user = dict(USERS_DB[u])
-        if hmac.compare_digest(user["password"], password.strip()):
+        if hmac.compare_digest(str(user["password"]), password.strip()):
             user["custom_permissions"] = USER_CUSTOM_PERMISSIONS_CACHE.get(u, {})
             user["effective_permissions"] = list(get_effective_permissions(user))
+            user["is_active"] = True
             return user
     return None
 
@@ -361,8 +462,9 @@ def get_current_user_from_request(request: Request) -> Optional[Dict]:
     payload = verify_session_token(token)
     if payload:
         username = payload.get("sub", "").strip().lower()
-        if username in USERS_DB:
+        if username in USERS_DB and is_user_active(username):
             user = dict(USERS_DB[username])
+            user["session_id"] = payload.get("sid")
             user["custom_permissions"] = USER_CUSTOM_PERMISSIONS_CACHE.get(username, {})
             user["effective_permissions"] = list(get_effective_permissions(user))
             return user

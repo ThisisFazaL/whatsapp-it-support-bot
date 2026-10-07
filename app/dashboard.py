@@ -13,7 +13,7 @@ from app.database import (
     SupportAdmin, Employee, Department, Location, Category, Subcategory, IssueType, Priority, TicketStatus,
     FleetTripApproval, FleetPendingLedger, FleetTripRequest, FleetCustomerSchedule,
     FleetEmergencyExpense, SalesRepPayment, AuditLog, FleetRouteRule, SystemSetting,
-    WebUser, UserCustomPermission, get_sales_rep_pending_balance
+    WebUser, UserCustomPermission, RevokedUser, get_sales_rep_pending_balance
 )
 from app.workshop.models import (
     WorkshopTicket, WorkshopTruck, WorkshopStaff, WorkshopPartsRequest
@@ -23,7 +23,9 @@ from app.auth import (
     COOKIE_NAME, SESSION_MAX_AGE, USERS_DB,
     require_permission, user_has_permission, get_effective_permissions,
     ALL_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS, set_user_custom_permission,
-    USER_CUSTOM_PERMISSIONS_CACHE
+    USER_CUSTOM_PERMISSIONS_CACHE, generate_session_id, set_user_session,
+    invalidate_user_session, revoke_user_account, restore_user_account,
+    register_user_in_memory, is_user_active, ACTIVE_USER_SESSIONS, REVOKED_USERS
 )
 from app.services.config_service import (
     get_fuel_price, get_meal_rate, get_accommodation_rate, get_expense_budget_pct, get_van_minimum_surcharge,
@@ -233,7 +235,7 @@ async def login_page(request: Request):
 
 @router.post("/login")
 async def process_login(request: Request):
-    """Verifies credentials via JSON or Form, generates signed session token, and sets HttpOnly cookie."""
+    """Verifies credentials, enforces single-active-session per account, updates session tokens, and sets HttpOnly cookie."""
     content_type = request.headers.get("content-type", "")
     username = ""
     password = ""
@@ -257,6 +259,13 @@ async def process_login(request: Request):
             username = parsed.get("username", [""])[0]
             password = parsed.get("password", [""])[0]
 
+    clean_user = str(username).strip().lower()
+    if not is_user_active(clean_user):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account deactivated or access has been revoked. Contact system administrator."
+        )
+
     user = authenticate_user(str(username), str(password))
     if not user:
         raise HTTPException(
@@ -264,7 +273,27 @@ async def process_login(request: Request):
             detail="Invalid credentials. Access restricted to authorized personnel."
         )
 
-    token = create_session_token(user["username"], user["role"])
+    # Generate a cryptographically unique session ID for this login
+    sid = generate_session_id()
+
+    # Persist session token and device login telemetry into database
+    try:
+        async with async_session_factory() as db_session:
+            stmt = select(WebUser).where(func.lower(WebUser.username) == clean_user)
+            wu = (await db_session.execute(stmt)).scalars().first()
+            if wu:
+                wu.current_session_token = sid
+                wu.session_version = (wu.session_version or 1) + 1
+                wu.last_login_at = datetime.datetime.utcnow()
+                wu.last_login_ip = get_client_ip(request)
+                await db_session.commit()
+    except Exception as db_err:
+        logger.warning(f"Could not persist session token for {clean_user}: {db_err}")
+
+    # Set in memory active session cache
+    set_user_session(clean_user, sid)
+
+    token = create_session_token(user["username"], user["role"], session_id=sid)
     default_tab = "fleet" if user["role"] in ("FLEET_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "LOGISTICS_MANAGER") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
     
     resp = JSONResponse({
@@ -285,15 +314,41 @@ async def process_login(request: Request):
     return resp
 
 @router.get("/logout")
-async def logout():
-    """Invalidates session cookie and redirects directly to login."""
+async def logout(request: Request):
+    """Invalidates session cookie, revokes active session, and redirects directly to login."""
+    user = get_current_user_from_request(request)
+    if user:
+        uname = user.get("username", "").strip().lower()
+        invalidate_user_session(uname)
+        try:
+            async with async_session_factory() as db_session:
+                stmt = select(WebUser).where(func.lower(WebUser.username) == uname)
+                wu = (await db_session.execute(stmt)).scalars().first()
+                if wu:
+                    wu.current_session_token = None
+                    await db_session.commit()
+        except Exception:
+            pass
     resp = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     resp.delete_cookie(key=COOKIE_NAME, path="/")
     return resp
 
 @router.post("/api/logout")
-async def api_logout():
+async def api_logout(request: Request):
     """API endpoint to explicitly invalidate session."""
+    user = get_current_user_from_request(request)
+    if user:
+        uname = user.get("username", "").strip().lower()
+        invalidate_user_session(uname)
+        try:
+            async with async_session_factory() as db_session:
+                stmt = select(WebUser).where(func.lower(WebUser.username) == uname)
+                wu = (await db_session.execute(stmt)).scalars().first()
+                if wu:
+                    wu.current_session_token = None
+                    await db_session.commit()
+        except Exception:
+            pass
     resp = JSONResponse({"status": "logged_out"})
     resp.delete_cookie(key=COOKIE_NAME, path="/")
     return resp
@@ -643,7 +698,10 @@ async def api_get_users(request: Request, db: AsyncSession = Depends(get_db)):
             "email": wu.email or "",
             "phone": wu.phone or "",
             "company": wu.company or USERS_DB.get(wu.username.lower(), {}).get("company", ""),
-            "is_active": wu.is_active,
+            "is_active": wu.is_active and (u_clean not in REVOKED_USERS),
+            "has_active_session": bool(ACTIVE_USER_SESSIONS.get(u_clean)),
+            "last_login_at": wu.last_login_at.strftime("%Y-%m-%d %H:%M") if wu.last_login_at else "--",
+            "last_login_ip": wu.last_login_ip or "--",
             "inherited_permissions": inherited,
             "custom_granted_permissions": custom_granted,
             "custom_revoked_permissions": custom_revoked,
@@ -669,7 +727,10 @@ async def api_get_users(request: Request, db: AsyncSession = Depends(get_db)):
                 "company": udata.get("company", ""),
                 "email": "",
                 "phone": udata.get("phone", ""),
-                "is_active": True,
+                "is_active": is_user_active(uname),
+                "has_active_session": bool(ACTIVE_USER_SESSIONS.get(uname.lower())),
+                "last_login_at": "--",
+                "last_login_ip": "--",
                 "inherited_permissions": inherited,
                 "custom_granted_permissions": custom_granted,
                 "custom_revoked_permissions": custom_revoked,
@@ -684,6 +745,189 @@ async def api_get_users(request: Request, db: AsyncSession = Depends(get_db)):
         "all_permissions": ALL_PERMISSIONS,
         "role_default_permissions": {r: list(p) for r, p in ROLE_DEFAULT_PERMISSIONS.items()}
     }
+
+
+@router.post("/api/v2/admin/users/create")
+async def api_create_user(request: Request, db: AsyncSession = Depends(get_db)):
+    """Creates a new user account with role, password, and optional company/phone (MASTER_ADMIN only)."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    body = await request.json()
+    username = body.get("username", "").strip().lower()
+    password = body.get("password", "").strip()
+    full_name = body.get("full_name", "").strip()
+    role = body.get("role", "").strip()
+    company = body.get("company", "").strip()
+    phone = body.get("phone", "").strip()
+
+    if not username or len(username) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters long.")
+    if not password or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+    if role not in ROLE_DEFAULT_PERMISSIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid role '{role}'.")
+
+    # Check if user already exists
+    stmt = select(WebUser).where(func.lower(WebUser.username) == username)
+    existing = (await db.execute(stmt)).scalars().first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"User account '{username}' already exists.")
+
+    # Remove from revoked_users if present
+    stmt_rev = select(RevokedUser).where(func.lower(RevokedUser.username) == username)
+    rev_record = (await db.execute(stmt_rev)).scalars().first()
+    if rev_record:
+        await db.delete(rev_record)
+    restore_user_account(username)
+
+    new_user = WebUser(
+        username=username,
+        password_hash=password,
+        full_name=full_name or username.title(),
+        role=role,
+        company=company or None,
+        phone=phone or None,
+        is_active=True,
+        session_version=1,
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow()
+    )
+    db.add(new_user)
+
+    register_user_in_memory(username, {
+        "password": password,
+        "role": role,
+        "name": full_name or username.title(),
+        "company": company,
+        "phone": phone,
+        "is_active": True
+    })
+
+    audit = AuditLog(
+        username=user.get("username", "admin"),
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action="CREATE_USER_ACCOUNT",
+        module="USER_MANAGEMENT",
+        permission_used="manage_user_permissions",
+        entity_id=username,
+        previous_value=None,
+        new_value={"role": role, "company": company, "phone": phone},
+        remarks=f"Created user account '{username}' ({role}) by {user.get('username')}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    await db.refresh(new_user)
+
+    return {"status": "success", "username": username, "message": f"User account '{username}' created successfully."}
+
+
+@router.post("/api/v2/admin/users/revoke-sessions")
+async def api_revoke_user_sessions(request: Request, db: AsyncSession = Depends(get_db)):
+    """Terminates active sessions across all devices for a given user account (MASTER_ADMIN only)."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    body = await request.json()
+    username = body.get("username", "").strip().lower()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+
+    stmt = select(WebUser).where(func.lower(WebUser.username) == username)
+    w_user = (await db.execute(stmt)).scalars().first()
+    if w_user:
+        w_user.current_session_token = None
+        w_user.session_version = (w_user.session_version or 1) + 1
+        w_user.updated_at = datetime.datetime.utcnow()
+
+    invalidate_user_session(username)
+
+    audit = AuditLog(
+        username=user.get("username", "admin"),
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action="REVOKE_USER_SESSIONS",
+        module="SECURITY",
+        permission_used="manage_user_permissions",
+        entity_id=username,
+        previous_value=None,
+        new_value={"sessions_revoked": True},
+        remarks=f"Revoked active device sessions for '{username}' by {user.get('username')}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {
+        "status": "success",
+        "username": username,
+        "message": f"Active sessions revoked for '{username}'. Any active device is now disconnected."
+    }
+
+
+@router.post("/api/v2/admin/users/toggle-status")
+async def api_toggle_user_status(request: Request, db: AsyncSession = Depends(get_db)):
+    """Deactivates/suspends or reactivates a user account (MASTER_ADMIN only)."""
+    user = get_current_user_from_request(request)
+    require_permission(user, "manage_user_permissions")
+
+    body = await request.json()
+    username = body.get("username", "").strip().lower()
+    is_active = bool(body.get("is_active", False))
+
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required.")
+    if username == "admin" and not is_active:
+        raise HTTPException(status_code=400, detail="Cannot deactivate super administrator 'admin'.")
+
+    stmt = select(WebUser).where(func.lower(WebUser.username) == username)
+    w_user = (await db.execute(stmt)).scalars().first()
+    if not w_user:
+        if username in USERS_DB:
+            u_data = USERS_DB[username]
+            w_user = WebUser(
+                username=username,
+                password_hash=u_data.get("password", "TempPass@2026!"),
+                full_name=u_data.get("name", username.title()),
+                role=u_data.get("role", "LOGISTICS_USER"),
+                is_active=is_active,
+                created_at=datetime.datetime.utcnow()
+            )
+            db.add(w_user)
+        else:
+            raise HTTPException(status_code=404, detail=f"User '{username}' not found.")
+    else:
+        w_user.is_active = is_active
+        w_user.updated_at = datetime.datetime.utcnow()
+
+    if not is_active:
+        w_user.current_session_token = None
+        invalidate_user_session(username)
+        if username in USERS_DB:
+            USERS_DB[username]["is_active"] = False
+    else:
+        restore_user_account(username)
+
+    audit = AuditLog(
+        username=user.get("username", "admin"),
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action="SUSPEND_USER_ACCOUNT" if not is_active else "ACTIVATE_USER_ACCOUNT",
+        module="USER_MANAGEMENT",
+        permission_used="manage_user_permissions",
+        entity_id=username,
+        previous_value={"is_active": not is_active},
+        new_value={"is_active": is_active},
+        remarks=f"{'Deactivated/Suspended' if not is_active else 'Reactivated'} account '{username}' by {user.get('username')}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    action_text = "activated" if is_active else "deactivated and disconnected"
+    return {"status": "success", "username": username, "is_active": is_active, "message": f"Account '{username}' has been {action_text}."}
 
 
 @router.post("/api/v2/admin/users/save")
@@ -715,6 +959,9 @@ async def api_save_user(request: Request, db: AsyncSession = Depends(get_db)):
         w_user.role = role
         w_user.is_active = is_active
         w_user.updated_at = datetime.datetime.utcnow()
+        if not is_active:
+            w_user.current_session_token = None
+            invalidate_user_session(username)
     else:
         w_user = WebUser(
             username=username,
@@ -730,8 +977,14 @@ async def api_save_user(request: Request, db: AsyncSession = Depends(get_db)):
     # Sync USERS_DB in memory
     if username in USERS_DB:
         USERS_DB[username]["role"] = role
+        USERS_DB[username]["is_active"] = is_active
         if full_name:
             USERS_DB[username]["name"] = full_name
+
+    if not is_active:
+        invalidate_user_session(username)
+    else:
+        restore_user_account(username)
 
     audit = AuditLog(
         username=user.get("name", "Admin"),
@@ -755,16 +1008,28 @@ async def api_save_user(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/api/v2/admin/users/delete")
 async def api_delete_user(request: Request, db: AsyncSession = Depends(get_db)):
-    """Permanently deletes or deactivates a user account (MASTER_ADMIN only)."""
+    """Permanently deletes or deactivates a user account and blacklists it from logins (MASTER_ADMIN only)."""
     user = get_current_user_from_request(request)
     require_permission(user, "manage_user_permissions")
 
     body = await request.json()
     username = body.get("username", "").strip().lower()
+    reason = str(body.get("reason", "Deleted by administrator")).strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username is required.")
     if username == "admin":
         raise HTTPException(status_code=400, detail="Cannot delete super administrator 'admin'.")
+
+    # Record tombstone in revoked_users
+    stmt_rev = select(RevokedUser).where(func.lower(RevokedUser.username) == username)
+    existing_rev = (await db.execute(stmt_rev)).scalars().first()
+    if not existing_rev:
+        db.add(RevokedUser(
+            username=username,
+            revoked_at=datetime.datetime.utcnow(),
+            revoked_by=user.get("username", "admin"),
+            reason=reason
+        ))
 
     # Delete from web_users table
     stmt = select(WebUser).where(WebUser.username == username)
@@ -774,14 +1039,8 @@ async def api_delete_user(request: Request, db: AsyncSession = Depends(get_db)):
         deleted_role = w_user.role
         await db.delete(w_user)
 
-    # Also remove from USERS_DB in memory if present (except core protected users)
-    if username in USERS_DB and username != "admin":
-        deleted_role = USERS_DB[username].get("role", deleted_role)
-        del USERS_DB[username]
-
-    # Clean in-memory permissions cache
-    if username in USER_CUSTOM_PERMISSIONS_CACHE:
-        del USER_CUSTOM_PERMISSIONS_CACHE[username]
+    # Invalidate runtime memory security caches
+    revoke_user_account(username)
 
     # Audit log
     audit = AuditLog(
@@ -793,14 +1052,14 @@ async def api_delete_user(request: Request, db: AsyncSession = Depends(get_db)):
         entity_id=username,
         previous_value={"role": deleted_role},
         new_value=None,
-        remarks=f"Deleted user account '{username}' by {user.get('username')}",
+        remarks=f"Permanently deleted and revoked user account '{username}': {reason}",
         ip_address=get_client_ip(request),
         created_at=datetime.datetime.utcnow()
     )
     db.add(audit)
     await db.commit()
 
-    return {"status": "success", "username": username, "message": f"User account '{username}' removed."}
+    return {"status": "success", "username": username, "message": f"User account '{username}' permanently removed and revoked."}
 
 
 @router.post("/api/v2/admin/users/permissions")
@@ -1797,7 +2056,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "salesperson_phone": fa.salesperson_phone,
                 "destination_city": fa.destination_city,
                 "route": fa.route or "--",
-                "trip_sales_value": round(s_val, 2),
+                "trip_sales_value": 0.0,
                 "required_minimum": round(fa.required_minimum or 0.0, 2),
                 "shortfall": round(fa.shortfall or 0.0, 2),
                 "transport_charge": round(t_charge, 2),
@@ -1812,7 +2071,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "date_only": fa.created_at.strftime("%Y-%m-%d") if fa.created_at else ""
             })
 
-        fleet_stats["total_sales_value"] = round(fleet_stats["total_sales_value"], 2)
+        fleet_stats["total_sales_value"] = 0.0
         fleet_stats["total_transport_charges"] = round(fleet_stats["total_transport_charges"], 2)
         fleet_stats["total_charged_customer"] = round(fleet_stats["total_charged_customer"], 2)
         fleet_stats["total_pending_recorded"] = round(fleet_stats["total_pending_recorded"], 2)
@@ -1843,7 +2102,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "trip_id": tr.trip_id,
                 "company_name": tr.company_name,
                 "company": tr.company_name,
-                "trip_sales_value": round(tr.trip_sales_value or 0.0, 2),
+                "trip_sales_value": 0.0,
                 "salesperson_name": tr.salesperson_name or "Sales Rep",
                 "salesperson_phone": tr.salesperson_phone,
                 "destination_city": tr.destination_city,
@@ -2144,7 +2403,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                         "badge_class": "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30"
                     })
             for fa in approval_records[:4]:
-                sales_desc = f" (${fa['trip_sales_value']:,.2f})" if can_view_balances else ""
+                sales_desc = ""
                 recent_activity_list.append({
                     "id": f"app-{fa['id']}",
                     "timestamp": fa["created_at"],
@@ -2312,7 +2571,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         }
 
         operations_analytics = {
-            "total_sales": round(tot_sales, 2),
+            "total_sales": 0.0,
             "total_transport_charges": round(tot_trans, 2),
             "total_allowances": round(tot_allow, 2),
             "total_meals": round(tot_meals, 2),
@@ -2326,7 +2585,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "trips_completed": trips_completed,
             "trips_pending": trips_pending,
             "trips_cancelled": trips_cancelled,
-            "avg_revenue_per_trip": avg_rev,
+            "avg_revenue_per_trip": 0.0,
             "avg_opex_per_trip": avg_exp,
             "avg_allowance_per_trip": avg_alw,
             "fleet_utilization_pct": fleet_util,
@@ -2336,9 +2595,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "recovery_rate_pct": rec_rate,
             "cleared_payments_total": round(cleared_tot, 2),
             "outstanding_debt_total": round(debt_tot, 2),
-            "cities": top_cities,
-            "routes": top_routes,
-            "sales_trends": sales_trends
+            "cities": [{"city": c["city"], "trips": c["trips"], "opex": c["opex"], "transport": c["transport"], "sales": 0.0} for c in top_cities],
+            "routes": [{"route": r["route"], "city": r["city"], "trips": r["trips"], "opex": r["opex"], "transport": r["transport"], "sales": 0.0} for r in top_routes],
+            "sales_trends": {}
         }
 
         # Role-filtered analytics and payloads
@@ -2351,13 +2610,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
             "recovery_total": 0.0,
             "cleared_payments_total": 0.0,
             "outstanding_debt_total": 0.0,
-            "cities": [{"city": c["city"], "trips": c["trips"], "opex": c["opex"], "transport": c["transport"], "sales": 0.0} for c in top_cities],
-            "routes": [{"route": r["route"], "city": r["city"], "trips": r["trips"], "opex": r["opex"], "transport": r["transport"], "sales": 0.0} for r in top_routes],
-            "sales_trends": {
-                "day_wise": {**sales_trends["day_wise"], "total": [0.0]*len(days_list), "lg_plast": [0.0]*len(days_list), "tagoneswa": [0.0]*len(days_list), "kreckle": [0.0]*len(days_list)},
-                "month_wise": {**sales_trends["month_wise"], "total": [0.0]*len(months_list), "lg_plast": [0.0]*len(months_list), "tagoneswa": [0.0]*len(months_list), "kreckle": [0.0]*len(months_list)},
-                "company_wise": {**sales_trends["company_wise"], "totals": [0.0, 0.0, 0.0], "day_lg": [0.0]*len(days_list), "day_tg": [0.0]*len(days_list), "day_kr": [0.0]*len(days_list), "month_lg": [0.0]*len(months_list), "month_tg": [0.0]*len(months_list), "month_kr": [0.0]*len(months_list)}
-            }
+            "cities": operations_analytics["cities"],
+            "routes": operations_analytics["routes"],
+            "sales_trends": {}
         }
 
         fleet_payload = {
@@ -3364,9 +3619,9 @@ async def dashboard_view(request: Request):
                     </div>
                     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
-                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Total Sales Value</div>
-                            <div class="text-lg sm:text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-1 truncate" id="ov-fin-total-sales">$0.00</div>
-                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Across all trips</div>
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Route Compliance</div>
+                            <div class="text-lg sm:text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-1 truncate" id="ov-fin-criteria-status">100% Verified</div>
+                            <div class="text-[10px] text-slate-500 dark:text-zinc-400 mt-0.5 truncate">Minimum threshold check</div>
                         </div>
                         <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 shadow-xs">
                             <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Transport Charges</div>
@@ -3483,7 +3738,7 @@ async def dashboard_view(request: Request):
                                         <tr>
                                             <th class="px-4 py-2.5">Destination City</th>
                                             <th class="px-4 py-2.5 text-center">Trips</th>
-                                            <th class="px-4 py-2.5 text-right">Sales Value</th>
+                                            <th class="px-4 py-2.5 text-right">Route Criteria</th>
                                             <th class="px-4 py-2.5 text-right">Allowances</th>
                                         </tr>
                                     </thead>
@@ -3991,8 +4246,8 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-1" id="an-stat-trips-completed">0 completed</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
-                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Avg Revenue / Trip</div>
-                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-avg-revenue">$0.00</div>
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Route Compliance</div>
+                        <div class="text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono" id="an-stat-compliance">100%</div>
                         <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-avg-opex">Avg Opex: $0.00</div>
                     </div>
                     <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-xs">
@@ -4004,62 +4259,6 @@ async def dashboard_view(request: Request):
                         <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-zinc-500">Shortfall Recovery Rate</div>
                         <div class="text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono" id="an-stat-recovery-rate">0%</div>
                         <div class="text-[11px] text-slate-500 dark:text-zinc-400 font-medium mt-1" id="an-stat-recovery-sub">$0 recovered of $0</div>
-                    </div>
-                </div>
-
-                <!-- Dedicated Line Chart: Total Sales Revenue Trends (Day-Wise, Month-Wise, Company-Wise) -->
-                <div class="bg-white dark:bg-[#0a0a0d] border border-slate-200/80 dark:border-zinc-800/80 rounded-2xl p-5 sm:p-6 shadow-xs">
-                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <span class="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/30">Commercial Trajectory</span>
-                                <span class="text-xs font-bold text-slate-400 dark:text-zinc-500 font-mono">Live ERP Sales</span>
-                            </div>
-                            <h3 class="text-sm sm:text-base font-extrabold uppercase tracking-tight text-slate-900 dark:text-zinc-100 mt-1">
-                                Total Sales Revenue Trends
-                            </h3>
-                            <p class="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                                Real-time sales trajectory tracked day-wise, month-wise, and company-wise across divisions.
-                            </p>
-                        </div>
-                        
-                        <!-- Line Chart View Selector: Day-Wise, Month-Wise, Company-Wise -->
-                        <div class="flex flex-wrap items-center gap-1.5 bg-slate-100 dark:bg-[#121216] p-1 rounded-xl border border-slate-200 dark:border-zinc-800 self-start md:self-auto">
-                            <button onclick="switchSalesChartMode('DAY')" id="btn-sales-chart-DAY" class="sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 text-white shadow-xs transition cursor-pointer">
-                                📅 Day-Wise
-                            </button>
-                            <button onclick="switchSalesChartMode('MONTH')" id="btn-sales-chart-MONTH" class="sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">
-                                📆 Month-Wise
-                            </button>
-                            <button onclick="switchSalesChartMode('COMPANY')" id="btn-sales-chart-COMPANY" class="sales-chart-mode-btn px-3 py-1.5 rounded-lg text-xs font-bold text-slate-600 dark:text-zinc-300 hover:text-slate-900 dark:hover:text-white transition cursor-pointer">
-                                🏢 Company-Wise (3 Lines)
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Revenue KPI Mini-Bar for Chart -->
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 pt-3 border-t border-slate-100 dark:border-zinc-850">
-                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
-                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">Selected Total</div>
-                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5" id="sales-chart-total-val">$0.00</div>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
-                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">LG Plast Sales</div>
-                            <div class="text-base sm:text-lg font-extrabold text-blue-600 dark:text-blue-400 font-mono mt-0.5" id="sales-chart-lg-val">$0.00</div>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
-                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">Tagoneswa Sales</div>
-                            <div class="text-base sm:text-lg font-extrabold text-amber-600 dark:text-amber-400 font-mono mt-0.5" id="sales-chart-tg-val">$0.00</div>
-                        </div>
-                        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800">
-                            <div class="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase">Kreckle Foods Sales</div>
-                            <div class="text-base sm:text-lg font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5" id="sales-chart-kreckle-val">$0.00</div>
-                        </div>
-                    </div>
-
-                    <!-- Line Chart Canvas Container -->
-                    <div class="h-72 sm:h-80 relative w-full">
-                        <canvas id="an-sales-trend-line-chart"></canvas>
                     </div>
                 </div>
 
@@ -4630,6 +4829,9 @@ async def dashboard_view(request: Request):
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
+                    <button onclick="openCreateUserModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer shadow-xs">
+                        <span>➕</span> Add Account
+                    </button>
                     <button onclick="loadUsersList()" class="p-2 rounded-xl text-slate-600 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-800 text-xs font-bold transition flex items-center gap-1 cursor-pointer">
                         <span>🔄</span> Refresh
                     </button>
@@ -4644,22 +4846,23 @@ async def dashboard_view(request: Request):
                 <!-- User Accounts Overview Table -->
                 <div class="border border-slate-200 dark:border-zinc-800 rounded-2xl overflow-hidden">
                     <div class="p-3.5 bg-slate-50/75 dark:bg-[#121216] border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between">
-                        <span class="text-xs font-bold text-slate-800 dark:text-zinc-200">Registered Accounts & Roles</span>
+                        <span class="text-xs font-bold text-slate-800 dark:text-zinc-200">Registered Accounts & Security Governance</span>
                         <span id="user-mgmt-count" class="text-[11px] text-slate-500 font-medium">Loading...</span>
                     </div>
-                    <div class="max-h-[30vh] overflow-y-auto">
+                    <div class="max-h-[32vh] overflow-y-auto">
                         <table class="w-full text-left text-xs">
                             <thead class="bg-slate-100 dark:bg-[#14141a] text-slate-500 dark:text-zinc-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-zinc-800 sticky top-0 z-10">
                                 <tr>
                                     <th class="px-4 py-2.5">User</th>
                                     <th class="px-4 py-2.5">Role</th>
-                                    <th class="px-4 py-2.5">Status</th>
-                                    <th class="px-4 py-2.5">Custom Overrides</th>
+                                    <th class="px-4 py-2.5">Account Status</th>
+                                    <th class="px-4 py-2.5">Active Device</th>
+                                    <th class="px-4 py-2.5">Overrides</th>
                                     <th class="px-4 py-2.5 text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="user-mgmt-tbody" class="divide-y divide-slate-200 dark:divide-zinc-800 text-slate-700 dark:text-zinc-200">
-                                <tr><td colspan="5" class="p-4 text-center text-slate-400">Loading accounts...</td></tr>
+                                <tr><td colspan="6" class="p-4 text-center text-slate-400">Loading accounts...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -4670,7 +4873,7 @@ async def dashboard_view(request: Request):
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-zinc-800 pb-3">
                         <div>
                             <span class="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2.5 py-0.5 rounded-full border border-indigo-200 dark:border-indigo-500/30">
-                                Account Configuration
+                                Account Configuration & Device Security
                             </span>
                             <h4 class="text-base font-extrabold text-slate-900 dark:text-zinc-100 mt-1" id="selected-user-header">--</h4>
                         </div>
@@ -4697,6 +4900,24 @@ async def dashboard_view(request: Request):
                         </div>
                     </div>
 
+                    <!-- Security & Session Controls Bar -->
+                    <div class="bg-slate-100 dark:bg-[#14141a] rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 border border-slate-200 dark:border-zinc-800">
+                        <div class="text-[11px] text-slate-600 dark:text-zinc-400 font-medium flex items-center gap-2" id="selected-user-session-info">
+                            <span>🛡️ <strong>Single Active Session Enforced</strong>: Logins on secondary devices automatically disconnect earlier sessions.</span>
+                        </div>
+                        <div class="flex items-center flex-wrap gap-2">
+                            <button id="btn-force-logout-panel" onclick="revokeUserSessions(selectedMgmtUsername)" class="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1">
+                                <span>🔒</span> Force Disconnect Devices
+                            </button>
+                            <button id="btn-toggle-status-panel" onclick="toggleSelectedUserStatus()" class="bg-slate-700 hover:bg-slate-800 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1">
+                                <span>🚫</span> Suspend Account
+                            </button>
+                            <button id="btn-delete-user-panel" onclick="deleteUserAccount(selectedMgmtUsername)" class="bg-rose-600 hover:bg-rose-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1">
+                                <span>🗑️</span> Delete Account
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Granular Permission Overrides Matrix -->
                     <div>
                         <div class="flex items-center justify-between mb-2">
@@ -4716,9 +4937,72 @@ async def dashboard_view(request: Request):
 
             <!-- Modal Footer -->
             <div class="p-3.5 sm:p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-between shrink-0">
-                <span class="text-[11px] text-slate-500 dark:text-zinc-400">All permission changes are recorded in System Audit Logs</span>
+                <span class="text-[11px] text-slate-500 dark:text-zinc-400">All permission changes and session revocations are recorded in System Audit Logs</span>
                 <button onclick="closeUserManagementModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
                     Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 8: Add New User Account (MASTER_ADMIN only) -->
+    <div id="createUserModal" class="modal-overlay fixed inset-0 z-55 hidden flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-[#0c0c10] border border-slate-200 dark:border-zinc-800 rounded-3xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-4 sm:p-5 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between bg-slate-50 dark:bg-[#121216] shrink-0">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-sm font-bold">
+                        👤
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-extrabold text-slate-900 dark:text-zinc-100">Create New User Account</h3>
+                        <p class="text-[11px] text-slate-500 dark:text-zinc-400">Add an authorized portal login</p>
+                    </div>
+                </div>
+                <button onclick="closeCreateUserModal()" class="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 transition cursor-pointer">✕</button>
+            </div>
+            <div class="p-4 sm:p-5 space-y-3.5">
+                <div>
+                    <label class="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">Username (Login ID) *</label>
+                    <input type="text" id="create-user-username" placeholder="e.g. jsmith" class="w-full bg-slate-50 dark:bg-[#14141a] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">Temporary Password *</label>
+                    <input type="password" id="create-user-password" placeholder="Min. 6 characters" class="w-full bg-slate-50 dark:bg-[#14141a] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">Full Name</label>
+                    <input type="text" id="create-user-fullname" placeholder="e.g. John Smith" class="w-full bg-slate-50 dark:bg-[#14141a] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 dark:text-zinc-100">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">System Role *</label>
+                    <select id="create-user-role" class="w-full bg-slate-50 dark:bg-[#14141a] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-zinc-100">
+                        <option value="SALES_ADMIN">SALES_ADMIN (Sales Orders & Fleet Approvals)</option>
+                        <option value="ACCOUNTS_USER">ACCOUNTS_USER (Finance & Cash Ledgers)</option>
+                        <option value="FLEET_ADMIN">FLEET_ADMIN (Fleet & Dispatch Operations)</option>
+                        <option value="LOGISTICS_MANAGER">LOGISTICS_MANAGER (Trips & Logistics Lead)</option>
+                        <option value="LOGISTICS_ADMIN">LOGISTICS_ADMIN (Workshop & Maintenance)</option>
+                        <option value="IT_ADMIN">IT_ADMIN (IT Support Tickets)</option>
+                        <option value="PROJECTS_ADMIN">PROJECTS_ADMIN (Building Projects)</option>
+                        <option value="EXECUTIVE_OBSERVER">EXECUTIVE_OBSERVER (Read-Only Observer)</option>
+                    </select>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">Company</label>
+                        <input type="text" id="create-user-company" placeholder="e.g. LG Plast" class="w-full bg-slate-50 dark:bg-[#14141a] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 dark:text-zinc-100">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">Phone</label>
+                        <input type="text" id="create-user-phone" placeholder="e.g. 26378..." class="w-full bg-slate-50 dark:bg-[#14141a] border border-slate-300 dark:border-zinc-700 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 dark:text-zinc-100">
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-[#121216] flex items-center justify-end gap-2.5 shrink-0">
+                <button type="button" onclick="closeCreateUserModal()" class="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-300 dark:hover:bg-zinc-700 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitCreateUser()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-5 py-2 rounded-xl text-xs transition shadow-md cursor-pointer flex items-center gap-1.5">
+                    <span>💾</span> Create User
                 </button>
             </div>
         </div>

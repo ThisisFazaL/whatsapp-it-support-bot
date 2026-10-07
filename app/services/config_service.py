@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from app.database import (
-    SystemSetting, SystemSettingHistory, FleetRouteRule, WebUser, AuditLog, UserCustomPermission
+    SystemSetting, SystemSettingHistory, FleetRouteRule, WebUser, AuditLog, UserCustomPermission, RevokedUser
 )
 
 logger = logging.getLogger("config_service")
@@ -171,19 +171,52 @@ async def load_settings_into_cache(session: AsyncSession):
         sync_legacy_services()
         logger.info(f"Loaded {len(settings)} system settings and {len(rules)} route rules into memory cache.")
 
-        # Synchronize roles and user custom permissions from database into auth memory cache
+        # Synchronize roles, active sessions, and revocation blacklists from database into auth memory cache
         try:
-            from app.auth import load_all_user_custom_permissions, sync_db_roles_to_users_db
+            from app.auth import (
+                load_all_user_custom_permissions, sync_db_roles_to_users_db,
+                load_revocation_and_sessions, register_user_in_memory, USERS_DB
+            )
 
-            # 1. Sync roles from active WebUser records into runtime USERS_DB
-            stmt_roles = select(WebUser.username, WebUser.role).where(WebUser.is_active == True)
-            res_roles = await session.execute(stmt_roles)
-            roles_map = {uname.strip().lower(): role for uname, role in res_roles.all()}
+            # 1. Fetch all revoked/blacklisted usernames
+            res_rev = await session.execute(select(RevokedUser.username))
+            revoked_list = [r[0].strip().lower() for r in res_rev.all() if r[0]]
+
+            # 2. Fetch all WebUser records
+            res_users = await session.execute(select(WebUser))
+            all_web_users = res_users.scalars().all()
+
+            roles_map = {}
+            sessions_map = {}
+            status_map = {}
+
+            for wu in all_web_users:
+                uname = wu.username.strip().lower()
+                status_map[uname] = bool(wu.is_active)
+                if wu.is_active:
+                    roles_map[uname] = wu.role
+                if wu.current_session_token:
+                    sessions_map[uname] = wu.current_session_token
+
+                # Register any database-persisted user into runtime USERS_DB
+                if uname not in USERS_DB:
+                    register_user_in_memory(uname, {
+                        "password_hash": wu.password_hash,
+                        "role": wu.role,
+                        "name": wu.full_name,
+                        "company": wu.company,
+                        "phone": wu.phone,
+                        "is_active": wu.is_active
+                    })
+
+            # Load into auth security engine
+            load_revocation_and_sessions(revoked_list, sessions_map, status_map)
             if roles_map:
                 sync_db_roles_to_users_db(roles_map)
-                logger.info(f"Synchronized database roles for {len(roles_map)} active user(s) into runtime auth.")
 
-            # 2. Sync user custom permissions from database into auth memory cache
+            logger.info(f"Loaded {len(all_web_users)} web user(s), {len(sessions_map)} active session(s), and {len(revoked_list)} revoked account(s).")
+
+            # 3. Sync user custom permissions from database into auth memory cache
             stmt_perms = select(WebUser.username, UserCustomPermission.permission_key, UserCustomPermission.is_granted).join(
                 UserCustomPermission, WebUser.id == UserCustomPermission.user_id
             )

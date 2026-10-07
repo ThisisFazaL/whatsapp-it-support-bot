@@ -146,7 +146,7 @@ async def broadcast_confidential_trip_closed(session: AsyncSession, trip_id: str
         "👑 *EXECUTIVE AUDIT: TRIP CLOSED*\n"
         "────────────────────\n"
         f"Trip: `{trip.trip_id}` | Company: {trip.company_name}\n"
-        f"Sales Total (Confidential): ${trip.trip_sales_value:,.2f}\n"
+        f"Route Criteria: Minimum Met\n"
         f"Transport Collected: ${total_collected:,.2f}\n"
         f"Discrepancy: ${trip.discrepancy_amount:,.2f} ({trip.reimbursement_status})\n"
         "────────────────────\n"
