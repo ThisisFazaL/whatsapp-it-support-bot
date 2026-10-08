@@ -296,6 +296,7 @@ class FleetEmergencyExpense(Base):
     amount = Column(Float, nullable=False, default=0.0)
     description = Column(Text, nullable=True)
     has_video_evidence = Column(Boolean, default=False)
+    receipt_image_id = Column(String(255), nullable=True)
     status = Column(String(50), default="PENDING")  # PENDING, APPROVED, REJECTED
     approved_by = Column(String(100), nullable=True)
     verified_in_balancing = Column(Boolean, default=False)
@@ -703,6 +704,7 @@ async def init_db_models():
                 """))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fee_trip_id ON fleet_emergency_expenses(trip_id)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fee_driver_phone ON fleet_emergency_expenses(driver_phone)"))
+                await conn.execute(text("ALTER TABLE fleet_emergency_expenses ADD COLUMN IF NOT EXISTS receipt_image_id VARCHAR(255)"))
 
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS driver_pending_ledger (
@@ -1449,6 +1451,7 @@ async def record_emergency_expense(
     amount: float,
     description: Optional[str] = None,
     has_video: bool = False,
+    receipt_image_id: Optional[str] = None,
     status: str = "PENDING",
     approved_by: Optional[str] = None
 ) -> FleetEmergencyExpense:
@@ -1461,6 +1464,7 @@ async def record_emergency_expense(
         amount=round(float(amount), 2),
         description=description,
         has_video_evidence=has_video,
+        receipt_image_id=receipt_image_id,
         status=status,
         approved_by=approved_by,
         verified_in_balancing=False,
