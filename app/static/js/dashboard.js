@@ -646,17 +646,66 @@ function escapeJsAttr(val) {
                 }
             });
 
-            if (window.currentUserRole === 'MASTER_ADMIN' && viewId === 'analytics' && window.lastFleetAnalytics) {
-                requestAnimationFrame(() => {
-                    setTimeout(() => {
-                        renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
-                    }, 80);
-                });
+            // Immediately synchronize and re-filter the newly selected subview with the active company filter
+            if (viewId === 'overview') {
+                updateCompanyPartitionedKPIs();
+            } else if (viewId === 'trips') {
+                if (typeof filterTripsTable === 'function') filterTripsTable(false);
+            } else if (viewId === 'salespersons') {
+                if (typeof applySalespersonsFilter === 'function') applySalespersonsFilter();
+            } else if (viewId === 'payments') {
+                if (typeof filterPaymentsTable === 'function') filterPaymentsTable(false);
+            } else if (viewId === 'trucks') {
+                if (typeof filterTrucksTable === 'function') filterTrucksTable(false);
+            } else if (viewId === 'drivers') {
+                if (typeof filterDriversTable === 'function') filterDriversTable(false);
+            } else if (viewId === 'approvals') {
+                if (typeof filterFleetApprovalsTable === 'function') filterFleetApprovalsTable(false);
+            } else if (viewId === 'ledger') {
+                if (typeof filterLedgerTable === 'function') filterLedgerTable(false);
+            } else if (viewId === 'analytics') {
+                if (window.currentUserRole === 'MASTER_ADMIN') {
+                    requestAnimationFrame(() => {
+                        setTimeout(() => {
+                            renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
+                        }, 50);
+                    });
+                }
             }
         }
 
         window.selectedFleetCompany = 'ALL';
         window.currentSalespersonCompanyFilter = 'ALL';
+
+        function isCompanyMatch(itemComp, selectedComp) {
+            if (!selectedComp || selectedComp === 'ALL') return true;
+            if (!itemComp) return false;
+            const sel = String(selectedComp).toLowerCase().trim();
+            const item = String(itemComp).toLowerCase().trim();
+            if (sel.includes('lg')) {
+                return item.includes('lg');
+            }
+            if (sel.includes('tagoneswa') || sel.includes('tg') || sel.includes('hardware')) {
+                return item.includes('tagoneswa') || item.includes('tg') || item.includes('hardware');
+            }
+            if (sel.includes('kreckle')) {
+                return item.includes('kreckle');
+            }
+            return item === sel || item.includes(sel) || sel.includes(item);
+        }
+
+        function getSalespersonCompany(phone) {
+            if (!phone || !cachedData?.fleet?.salespersons) return '';
+            const cleanPhone = String(phone).replace(/\D/g, '');
+            const sp = cachedData.fleet.salespersons.find(s => String(s.phone).replace(/\D/g, '') === cleanPhone);
+            return sp ? (sp.company || '') : '';
+        }
+
+        function getTripCompany(tripId) {
+            if (!tripId || !cachedData?.fleet?.trips) return '';
+            const tr = cachedData.fleet.trips.find(t => t.trip_id === tripId);
+            return tr ? (tr.company_name || tr.company || '') : '';
+        }
 
         function switchFleetCompany(comp) {
             window.selectedFleetCompany = comp;
@@ -676,18 +725,40 @@ function escapeJsAttr(val) {
                 activePill.classList.remove('text-zinc-600', 'dark:text-zinc-400', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800');
             }
 
-            // Synchronize subview salesperson buttons
+            // 1. Synchronize subview salesperson cards & pills
             filterSalespersonsByCompany(comp);
 
-            // Re-filter Trips table
+            // 2. Re-filter Trips table
             if (typeof filterTripsTable === 'function') filterTripsTable(true);
 
-            // Re-filter Approvals table
+            // 3. Re-filter Approvals table
             if (typeof filterFleetApprovalsTable === 'function') filterFleetApprovalsTable(true);
             if (typeof filterApprovalsTable === 'function') filterApprovalsTable(true);
 
-            // Re-render Analytics & KPIs for this company
+            // 4. Re-filter Payments table
+            if (typeof filterPaymentsTable === 'function') filterPaymentsTable(true);
+
+            // 5. Re-filter Vehicles table
+            if (typeof filterTrucksTable === 'function') filterTrucksTable(true);
+
+            // 6. Re-filter Drivers table
+            if (typeof filterDriversTable === 'function') filterDriversTable(true);
+
+            // 7. Re-filter Audit Log & Shortfall Ledger table
+            if (typeof filterLedgerTable === 'function') filterLedgerTable(true);
+
+            // 8. Re-calculate and partition Master KPIs and Overview for this company
             updateCompanyPartitionedKPIs();
+
+            // 9. Re-render Analytics & KPIs for this company
+            if (window.currentUserRole === 'MASTER_ADMIN' && typeof renderAnalyticsSection === 'function') {
+                renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
+            }
+
+            // 10. Also refresh clear payment modal rep dropdown
+            if (cachedData?.fleet?.salespersons && typeof populatePaySalespersonDropdown === 'function') {
+                populatePaySalespersonDropdown(cachedData.fleet.salespersons);
+            }
         }
 
         function updateCompanyPartitionedKPIs() {
@@ -695,76 +766,225 @@ function escapeJsAttr(val) {
             const fleet = cachedData.fleet;
             const comp = window.selectedFleetCompany || 'ALL';
 
-            if (comp === 'ALL') {
-                // Master / overall data across all 3 companies
-                const tripsEl = document.getElementById('fleet-stat-trips');
-                if (tripsEl && fleet.stats) tripsEl.textContent = fleet.stats.total_trips ?? 0;
+            const allTrips = fleet.trips || [];
+            const allReps = fleet.salespersons || [];
+            const allPayments = fleet.payments || [];
+            const allRecords = fleet.records || [];
+            const allLedger = fleet.ledger || [];
+            const allTrucks = fleet.trucks || [];
+            const allDrivers = fleet.drivers || [];
 
-                const approvedEl = document.getElementById('fleet-stat-approved');
-                if (approvedEl && fleet.stats) approvedEl.textContent = fleet.stats.approved_trips ?? 0;
+            // Partitioned datasets
+            const trips = (comp === 'ALL') ? allTrips : allTrips.filter(t => isCompanyMatch(t.company_name || t.company || getSalespersonCompany(t.salesperson_phone), comp));
+            const reps = (comp === 'ALL') ? allReps : allReps.filter(s => isCompanyMatch(s.company, comp));
+            const payments = (comp === 'ALL') ? allPayments : allPayments.filter(p => isCompanyMatch(p.company_name || p.company || getSalespersonCompany(p.salesperson_phone), comp));
+            const records = (comp === 'ALL') ? allRecords : allRecords.filter(r => isCompanyMatch(r.company_name || r.company || getSalespersonCompany(r.salesperson_phone), comp));
+            const ledger = (comp === 'ALL') ? allLedger : allLedger.filter(e => isCompanyMatch(e.company_name || e.company || getSalespersonCompany(e.salesperson_phone) || getTripCompany(e.trip_id), comp));
 
-                const shortfallsEl = document.getElementById('fleet-stat-shortfalls');
-                if (shortfallsEl && fleet.stats) shortfallsEl.textContent = fleet.stats.shortfall_trips ?? 0;
+            // Associated trucks and drivers
+            const compTruckPlates = new Set();
+            const compTruckIds = new Set();
+            const compDriverPhones = new Set();
+            const compDriverNames = new Set();
+            trips.forEach(t => {
+                if (t.truck_plate) compTruckPlates.add(t.truck_plate.toLowerCase().trim());
+                if (t.truck_number) compTruckPlates.add(String(t.truck_number).toLowerCase().trim());
+                if (t.truck_id) compTruckIds.add(t.truck_id);
+                if (t.driver_phone) compDriverPhones.add(String(t.driver_phone).replace(/\D/g, ''));
+                if (t.driver_name) compDriverNames.add(t.driver_name.toLowerCase().trim());
+            });
 
-                const transportEl = document.getElementById('fleet-stat-transport');
-                if (transportEl && fleet.stats) transportEl.textContent = '$' + Number(fleet.stats.total_transport_charges || 0).toFixed(2);
+            const companyTrucks = (comp === 'ALL') ? allTrucks : allTrucks.filter(t =>
+                compTruckPlates.has((t.plate_number || '').toLowerCase().trim()) ||
+                compTruckPlates.has(String(t.truck_number || '').toLowerCase().trim()) ||
+                compTruckIds.has(t.truck_id) ||
+                isCompanyMatch(t.home_depot, comp)
+            );
 
-                const backlogEl = document.getElementById('fleet-stat-backlog');
-                if (backlogEl && fleet.stats) backlogEl.textContent = '$' + Number(fleet.stats.total_outstanding_backlog || 0).toFixed(2);
+            const companyDrivers = (comp === 'ALL') ? allDrivers : allDrivers.filter(d =>
+                compDriverPhones.has(String(d.phone || '').replace(/\D/g, '')) ||
+                compDriverNames.has((d.full_name || '').toLowerCase().trim())
+            );
 
-                const masterApp = document.getElementById('master-active-ops');
-                if (masterApp && fleet.overview?.kpis) masterApp.textContent = fleet.overview.kpis.pending_trip_approvals ?? 0;
+            // 1. Top Navigation & Stats Cards
+            const totalTrips = trips.length;
+            const approvedTrips = trips.filter(t => {
+                const st = (t.status || '').toUpperCase();
+                return st.includes('APPROVED') || st.includes('SETTLED') || st.includes('CLOSED');
+            }).length;
+            const shortfallTrips = trips.filter(t => (t.shortfall || 0) > 0).length;
+            const totalTransport = trips.reduce((acc, t) => acc + (t.transport_charge || 0), 0);
+            const totalBacklog = reps.reduce((acc, s) => acc + Math.max(0, s.net_balance || 0), 0);
+            const pendingApprovals = records.filter(r => {
+                const st = (r.status || '').toUpperCase();
+                return st.includes('SHORTFALL') || st.includes('QUOTED');
+            }).length;
+            const clearanceRate = totalTrips > 0 ? Math.round((approvedTrips / totalTrips) * 100) : 100;
+            const inTransitTrips = trips.filter(t => {
+                const st = (t.status || '').toUpperCase();
+                return st.includes('IN_TRANSIT') || st.includes('EN_ROUTE') || st.includes('DEPARTED');
+            }).length;
 
-                if (window.lastFleetAnalytics && window.lastFleetStats) {
-                    renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
-                }
-            } else {
-                // Company-specific partitioned data
-                const cLower = comp.toLowerCase();
-                const trips = (fleet.trips || []).filter(t => {
-                    const c = (t.company_name || '').toLowerCase();
-                    if (cLower.includes('lg')) return c.includes('lg');
-                    if (cLower.includes('tagoneswa') || cLower.includes('tg')) return c.includes('tagoneswa') || c.includes('tg') || c.includes('hardware');
-                    if (cLower.includes('kreckle')) return c.includes('kreckle');
-                    return false;
-                });
+            const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
 
-                const reps = (fleet.salespersons || []).filter(s => {
-                    const c = (s.company || '').toLowerCase();
-                    if (cLower.includes('lg')) return c.includes('lg');
-                    if (cLower.includes('tagoneswa') || cLower.includes('tg')) return c.includes('tagoneswa') || c.includes('tg') || c.includes('hardware');
-                    if (cLower.includes('kreckle')) return c.includes('kreckle');
-                    return false;
-                });
+            setText('fleet-stat-trips', totalTrips);
+            setText('fleet-stat-approved', approvedTrips);
+            setText('fleet-stat-shortfalls', shortfallTrips);
+            setText('fleet-stat-transport', '$' + totalTransport.toFixed(2));
+            setText('fleet-stat-backlog', '$' + totalBacklog.toFixed(2));
+            setText('fleet-total-pending-pill', '$' + totalBacklog.toFixed(2));
+            setText('master-active-ops', pendingApprovals);
+            setText('master-res-rate', clearanceRate + '%');
+            setText('master-transport-revenue', '$' + totalTransport.toFixed(2));
+            setText('master-financial-backlog', '$' + totalBacklog.toFixed(2));
+            setText('master-in-transit-count', inTransitTrips);
 
-                const totalTrips = trips.length;
-                const approvedTrips = trips.filter(t => (t.status || '').toUpperCase().includes('APPROVED') || (t.status || '').toUpperCase().includes('SETTLED') || (t.status || '').toUpperCase().includes('CLOSED')).length;
-                const shortfallTrips = trips.filter(t => (t.shortfall || 0) > 0).length;
-                const totalTransport = trips.reduce((acc, t) => acc + (t.transport_charge || 0), 0);
-                const totalBacklog = reps.reduce((acc, s) => acc + Math.max(0, s.net_balance || 0), 0);
+            // 2. Overview Tier 1: Action Required
+            setText('ov-kpi-pending-approvals', pendingApprovals);
+            const shortfallRecordsCount = records.filter(r => (r.status || '').toUpperCase().includes('SHORTFALL')).length;
+            const quoteRecordsCount = records.filter(r => (r.status || '').toUpperCase().includes('QUOTED')).length;
+            setText('ov-kpi-shortfall-sub', `${shortfallRecordsCount} shortfalls, ${quoteRecordsCount} quotes`);
 
-                const tripsEl = document.getElementById('fleet-stat-trips');
-                if (tripsEl) tripsEl.textContent = totalTrips;
-
-                const approvedEl = document.getElementById('fleet-stat-approved');
-                if (approvedEl) approvedEl.textContent = approvedTrips;
-
-                const shortfallsEl = document.getElementById('fleet-stat-shortfalls');
-                if (shortfallsEl) shortfallsEl.textContent = shortfallTrips;
-
-                const transportEl = document.getElementById('fleet-stat-transport');
-                if (transportEl) transportEl.textContent = '$' + totalTransport.toFixed(2);
-
-                const backlogEl = document.getElementById('fleet-stat-backlog');
-                if (backlogEl) backlogEl.textContent = '$' + totalBacklog.toFixed(2);
-
-                const masterApp = document.getElementById('master-active-ops');
-                if (masterApp) masterApp.textContent = trips.filter(t => (t.status || '').toUpperCase().includes('SHORTFALL') || (t.status || '').toUpperCase().includes('QUOTED')).length;
-
-                if (window.lastFleetAnalytics && window.lastFleetStats) {
-                    renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
+            // Slot 5 (Debt or Fleet)
+            const slot5Val = document.getElementById('ov-kpi-slot5-val');
+            const slot5Sub = document.getElementById('ov-kpi-slot5-sub');
+            if (slot5Val) {
+                if (window.canViewBalances) {
+                    slot5Val.textContent = '$' + totalBacklog.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    slot5Val.className = `text-2xl sm:text-3xl font-extrabold mt-1 font-mono truncate ${totalBacklog > 0 ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-500 dark:text-emerald-400'}`;
+                    const debtRepsCount = reps.filter(s => (s.net_balance || 0) > 0).length;
+                    const highAlertCount = reps.filter(s => (s.net_balance || 0) > 250).length;
+                    if (slot5Sub) slot5Sub.textContent = `${debtRepsCount} in debt (${highAlertCount} high alert)`;
+                } else {
+                    slot5Val.textContent = `${companyTrucks.filter(t => t.active).length}/${companyTrucks.length}`;
+                    if (slot5Sub) slot5Sub.textContent = 'Commercial vehicles field-ready';
                 }
             }
+
+            // Dynamic company alerts
+            const compAlerts = [];
+            if (pendingApprovals > 0) {
+                compAlerts.push({
+                    severity: 'urgent',
+                    category: 'APPROVALS',
+                    title: `${comp === 'ALL' ? '' : comp + ': '}${pendingApprovals} Trip(s) Awaiting Sign-off`,
+                    description: `${shortfallRecordsCount} shortfall exception(s) and ${quoteRecordsCount} quote(s) awaiting decision${comp === 'ALL' ? '' : ' for ' + comp}.`,
+                    action_label: 'Review Approvals',
+                    target_subview: 'approvals'
+                });
+            }
+            if (totalBacklog > 0 && window.canViewBalances) {
+                compAlerts.push({
+                    severity: totalBacklog > 500 ? 'urgent' : 'warning',
+                    category: 'FINANCE',
+                    title: `${comp === 'ALL' ? '' : comp + ': '}$${totalBacklog.toFixed(2)} Outstanding Rep Debt`,
+                    description: `${reps.filter(s => (s.net_balance || 0) > 0).length} sales representative(s) carry deficit balances${comp === 'ALL' ? '' : ' in ' + comp}.`,
+                    action_label: 'View Debt Ledger',
+                    target_subview: 'salespersons'
+                });
+            }
+            const needingDispatch = trips.filter(t => (t.status || '').toUpperCase() === 'APPROVED' || (t.status || '').toUpperCase().includes('VOUCHER')).length;
+            if (needingDispatch > 0) {
+                compAlerts.push({
+                    severity: 'warning',
+                    category: 'DISPATCH',
+                    title: `${comp === 'ALL' ? '' : comp + ': '}Dispatch Actions Required (${needingDispatch} in queue)`,
+                    description: `${needingDispatch} trip(s) approved awaiting fuel voucher or loading${comp === 'ALL' ? '' : ' for ' + comp}.`,
+                    action_label: 'Open Trips Pipeline',
+                    target_subview: 'trips'
+                });
+            }
+
+            setText('ov-kpi-bottlenecks', compAlerts.length);
+            const alertsBadge = document.getElementById('ov-alerts-count-badge');
+            if (alertsBadge) {
+                alertsBadge.textContent = `${compAlerts.length} active`;
+                alertsBadge.className = compAlerts.length > 0
+                    ? 'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300';
+            }
+
+            const alertsList = document.getElementById('ov-alerts-list');
+            if (alertsList) {
+                if (compAlerts.length === 0) {
+                    alertsList.innerHTML = `
+                        <div class="py-8 text-center">
+                            <div class="text-sm font-extrabold text-slate-800 dark:text-zinc-200">All Operations Clear</div>
+                            <p class="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-sm mx-auto">No pending exceptions, dispatch bottlenecks, or high-risk balances requiring attention${comp === 'ALL' ? '' : ' for ' + comp}.</p>
+                        </div>
+                    `;
+                } else {
+                    alertsList.innerHTML = compAlerts.map(a => {
+                        let sevBorder = 'border-amber-200 dark:border-amber-500/30 bg-amber-500/5';
+                        let sevBadge = 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        if (a.severity === 'urgent') {
+                            sevBorder = 'border-rose-200 dark:border-rose-500/30 bg-rose-500/5';
+                            sevBadge = 'bg-rose-500/10 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-500/30 font-bold';
+                        }
+                        return `
+                            <div class="pt-3 first:pt-0">
+                                <div class="p-3.5 sm:p-4 rounded-xl border ${sevBorder} flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:shadow-xs transition">
+                                    <div class="flex items-start gap-3">
+                                        <div>
+                                            <div class="flex items-center gap-2 flex-wrap">
+                                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-zinc-100">${a.title}</span>
+                                                <span class="text-[10px] px-2 py-0.5 rounded-full border ${sevBadge} font-mono">${a.category}</span>
+                                            </div>
+                                            <p class="text-xs text-slate-600 dark:text-zinc-400 mt-1 leading-relaxed">${a.description}</p>
+                                        </div>
+                                    </div>
+                                    <div class="self-end sm:self-center">
+                                        <button onclick="switchFleetSubView('${a.target_subview}')" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 dark:bg-zinc-100 hover:bg-slate-800 dark:hover:bg-zinc-200 text-white dark:text-slate-900 transition shadow-xs whitespace-nowrap cursor-pointer shrink-0">${a.action_label} →</button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+
+            // 3. Overview Tier 2: Today's Operations
+            const activeTripsCount = trips.filter(t => {
+                const st = (t.status || '').toUpperCase();
+                return !st.includes('SETTLED') && !st.includes('CLOSED') && !st.includes('CANCELLED');
+            }).length;
+            const completedTripsCount = trips.filter(t => {
+                const st = (t.status || '').toUpperCase();
+                return st.includes('SETTLED') || st.includes('CLOSED') || st.includes('RETURNED');
+            }).length;
+            setText('ov-kpi-active-trips', activeTripsCount);
+            setText('ov-kpi-transit-trips', `${inTransitTrips} in transit`);
+            setText('ov-kpi-drivers-active', companyDrivers.filter(d => d.active).length);
+            setText('ov-kpi-drivers-total', `of ${companyDrivers.length} on roster`);
+            setText('ov-kpi-completed-trips', completedTripsCount);
+
+            // 4. Overview Tier 3: Fleet Status
+            setText('ov-kpi-trucks-ready', companyTrucks.filter(t => t.active).length);
+            setText('ov-kpi-trucks-in-workshop', companyTrucks.filter(t => !t.active).length);
+            setText('ov-kpi-trucks-awaiting-parts', 0);
+            setText('ov-kpi-trucks-awaiting-qc', 0);
+            setText('ov-kpi-trucks-total', companyTrucks.length);
+
+            // 5. Overview Tier 4: Financial Overview
+            const totalOpex = trips.reduce((acc, t) => acc + (t.total_allowance || 0) + (t.discrepancy_amount || 0), 0);
+            const clearedTotal = payments.reduce((acc, p) => acc + (p.cleared_amount || 0), 0);
+            const netMargin = totalTransport - totalOpex;
+            setText('ov-fin-transport-charges', '$' + totalTransport.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+            setText('ov-fin-total-opex', '$' + totalOpex.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+            setText('ov-fin-net-margin', '$' + netMargin.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+            setText('ov-fin-debt-backlog', '$' + totalBacklog.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+            setText('ov-fin-cleared-payments', '$' + clearedTotal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+
+            // 6. Overview Tier 5: Operational Expenses
+            const meals = trips.reduce((acc, t) => acc + (t.total_allowance ? t.total_allowance * 0.4 : 0), 0);
+            const accom = trips.reduce((acc, t) => acc + (t.total_allowance ? t.total_allowance * 0.4 : 0), 0);
+            const tolls = trips.reduce((acc, t) => acc + (t.total_allowance ? t.total_allowance * 0.2 : 0), 0);
+            const emerg = trips.reduce((acc, t) => acc + (t.discrepancy_amount || 0), 0);
+            setText('ov-exp-total-allowances', '$' + (meals + accom).toFixed(2));
+            setText('ov-exp-meals', '$' + meals.toFixed(2));
+            setText('ov-exp-accommodation', '$' + accom.toFixed(2));
+            setText('ov-exp-tolls', '$' + tolls.toFixed(2));
+            setText('ov-exp-emergency', '$' + emerg.toFixed(2));
         }
 
         function filterSalespersonsByCompany(comp) {
@@ -795,226 +1015,32 @@ function escapeJsAttr(val) {
             cards.forEach(card => {
                 const cardComp = card.getAttribute('data-company') || '';
                 const cardSearch = card.getAttribute('data-search') || '';
-                const matchComp = (comp === 'ALL') ||
-                                  cardComp.toLowerCase().includes(comp.toLowerCase()) ||
-                                  (comp.includes('Tagoneswa') && cardComp.toLowerCase().includes('tagoneswa')) ||
-                                  (comp.includes('LG') && cardComp.toLowerCase().includes('lg')) ||
-                                  (comp.includes('Kreckle') && cardComp.toLowerCase().includes('kreckle'));
+                const matchComp = isCompanyMatch(cardComp, comp);
                 const matchQuery = !query || cardSearch.includes(query);
                 card.style.display = (matchComp && matchQuery) ? 'flex' : 'none';
             });
         }
 
         function renderOperationsOverview(overview, user) {
-            if (!overview) return;
-            const kpis = overview.kpis || {};
-            const an = overview.analytics || {};
+            updateCompanyPartitionedKPIs();
 
-            // ── TIER 1: ACTION REQUIRED ──────────────────────────────────
-            const elPendingApp = document.getElementById('ov-kpi-pending-approvals');
-            if (elPendingApp) elPendingApp.textContent = kpis.pending_trip_approvals ?? 0;
-
-            const elShortfallSub = document.getElementById('ov-kpi-shortfall-sub');
-            if (elShortfallSub) elShortfallSub.textContent = `${kpis.pending_approvals_shortfall ?? 0} shortfalls, ${kpis.pending_quotes_count ?? 0} quotes`;
-
-            const elBottlenecks = document.getElementById('ov-kpi-bottlenecks');
-            if (elBottlenecks) elBottlenecks.textContent = kpis.pending_bottlenecks_count ?? 0;
-
-            // Role-gated Card 5
-            const slot5Title = document.getElementById('ov-kpi-slot5-title');
-            const slot5Icon  = document.getElementById('ov-kpi-slot5-icon');
-            const slot5Val   = document.getElementById('ov-kpi-slot5-val');
-            const slot5Sub   = document.getElementById('ov-kpi-slot5-sub');
-
-            if (kpis.sales_pipeline && slot5Title && slot5Val) {
-                slot5Title.textContent = 'Sales Pipeline';
-                if (slot5Icon) slot5Icon.textContent = 'PIPELINE';
-                slot5Val.className = 'text-2xl sm:text-3xl font-extrabold text-blue-600 dark:text-blue-400 mt-1 font-mono truncate';
-                slot5Val.textContent = '$' + Number(kpis.sales_pipeline.total_invoiced_value || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                if (slot5Sub) slot5Sub.textContent = `${kpis.sales_pipeline.orders_count || 0} orders (${kpis.sales_pipeline.completed_deliveries || 0} delivered)`;
-            } else if (kpis.sales_rep_balance && slot5Title && slot5Val) {
-                slot5Title.textContent = 'Sales Rep Debt';
-                if (slot5Icon) slot5Icon.textContent = 'DEBT';
-                const debt = Number(kpis.sales_rep_balance.total_outstanding_debt || 0);
-                slot5Val.className = `text-2xl sm:text-3xl font-extrabold mt-1 font-mono truncate ${debt > 0 ? 'text-rose-500 dark:text-rose-400' : 'text-emerald-500 dark:text-emerald-400'}`;
-                slot5Val.textContent = '$' + debt.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                if (slot5Sub) slot5Sub.textContent = `${kpis.sales_rep_balance.reps_in_debt || 0} in debt (${kpis.sales_rep_balance.high_alert_count || 0} high alert)`;
-            } else if (slot5Title && slot5Val) {
-                slot5Title.textContent = 'Fleet Available';
-                if (slot5Icon) slot5Icon.textContent = 'FLEET';
-                slot5Val.className = 'text-2xl sm:text-3xl font-extrabold text-emerald-600 dark:text-emerald-400 mt-1 font-mono truncate';
-                slot5Val.textContent = `${kpis.trucks_available ?? 0}/${kpis.trucks_total ?? 0}`;
-                if (slot5Sub) slot5Sub.textContent = 'Commercial vehicles field-ready';
-            }
-
-            // Alerts badge
-            const alertsBadge = document.getElementById('ov-alerts-count-badge');
-            if (alertsBadge) {
-                const count = (overview.alerts || []).length;
-                alertsBadge.textContent = `${count} active`;
-                alertsBadge.className = count > 0
-                    ? 'bg-amber-100 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/30'
-                    : 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-500/30';
-            }
-
-            // Alerts list
-            const alertsList = document.getElementById('ov-alerts-list');
-            if (alertsList) {
-                if (!overview.alerts || overview.alerts.length === 0) {
-                    alertsList.innerHTML = `
-                        <div class="py-8 text-center">
-                            <div class="text-sm font-extrabold text-slate-800 dark:text-zinc-200">All Operations Clear</div>
-                            <p class="text-xs text-slate-500 dark:text-zinc-400 mt-1 max-w-sm mx-auto">No pending exceptions, dispatch bottlenecks, or high-risk balances requiring attention.</p>
-                        </div>
-                    `;
-                } else {
-                    alertsList.innerHTML = overview.alerts.map(a => {
-                        let sevBorder = 'border-amber-200 dark:border-amber-500/30 bg-amber-500/5';
-                        let sevBadge  = 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
-                        if (a.severity === 'urgent') {
-                            sevBorder = 'border-rose-200 dark:border-rose-500/30 bg-rose-500/5';
-                            sevBadge  = 'bg-rose-500/10 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-500/30 font-bold';
-                        } else if (a.severity === 'info') {
-                            sevBorder = 'border-blue-200 dark:border-blue-500/30 bg-blue-500/5';
-                            sevBadge  = 'bg-blue-500/10 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
-                        }
-                        let actionBtnHtml = '';
-                        if (a.can_action && !overview.is_read_only) {
-                            if (a.modal_target === 'clearPaymentModal') {
-                                actionBtnHtml = `<button onclick="openClearPaymentModal()" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs whitespace-nowrap cursor-pointer shrink-0">${a.action_label} →</button>`;
-                            } else if (a.target_subview) {
-                                actionBtnHtml = `<button onclick="switchFleetSubView('${a.target_subview}')" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 dark:bg-zinc-100 hover:bg-slate-800 dark:hover:bg-zinc-200 text-white dark:text-slate-900 transition shadow-xs whitespace-nowrap cursor-pointer shrink-0">${a.action_label} →</button>`;
-                            }
-                        } else if (overview.is_read_only) {
-                            actionBtnHtml = `<span class="text-[10px] text-slate-400 dark:text-zinc-500 font-semibold px-2 py-1 bg-slate-100 dark:bg-[#121216] rounded-lg border border-slate-200 dark:border-zinc-800 whitespace-nowrap">Read-Only</span>`;
-                        }
-                        return `
-                            <div class="pt-3 first:pt-0">
-                                <div class="p-3.5 sm:p-4 rounded-xl border ${sevBorder} flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:shadow-xs transition">
-                                    <div class="flex items-start gap-3">
-                                        <div>
-                                            <div class="flex items-center gap-2 flex-wrap">
-                                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-zinc-100">${a.title}</span>
-                                                <span class="text-[10px] px-2 py-0.5 rounded-full border ${sevBadge} font-mono">${a.category}</span>
-                                            </div>
-                                            <p class="text-xs text-slate-600 dark:text-zinc-400 mt-1 leading-relaxed">${a.description}</p>
-                                        </div>
-                                    </div>
-                                    <div class="self-end sm:self-center">${actionBtnHtml}</div>
-                                </div>
-                            </div>
-                        `;
-                    }).join('');
-                }
-            }
-
-            // ── TIER 2: TODAY'S OPERATIONS ────────────────────────────────
-            const elActiveTrips = document.getElementById('ov-kpi-active-trips');
-            if (elActiveTrips) elActiveTrips.textContent = kpis.active_ongoing_trips ?? 0;
-
-            const elTransit = document.getElementById('ov-kpi-transit-trips');
-            if (elTransit) elTransit.textContent = `${kpis.in_transit_trips ?? 0} in transit`;
-
-            const elDriversActive = document.getElementById('ov-kpi-drivers-active');
-            if (elDriversActive) elDriversActive.textContent = kpis.drivers_active ?? 0;
-
-            const elDriversTotal = document.getElementById('ov-kpi-drivers-total');
-            if (elDriversTotal) elDriversTotal.textContent = `of ${kpis.drivers_total ?? 0} on roster`;
-
-            const elCompletedTrips = document.getElementById('ov-kpi-completed-trips');
-            if (elCompletedTrips) elCompletedTrips.textContent = an.trips_completed ?? 0;
-
-            const elAvgRev = document.getElementById('ov-kpi-avg-revenue');
-            if (elAvgRev) elAvgRev.textContent = '100% Verified';
-
-            // ── TIER 3: FLEET STATUS ──────────────────────────────────────
-            const elTrucksReady = document.getElementById('ov-kpi-trucks-ready');
-            if (elTrucksReady) elTrucksReady.textContent = kpis.trucks_available ?? 0;
-
-            const elInWorkshop = document.getElementById('ov-kpi-trucks-in-workshop');
-            if (elInWorkshop) elInWorkshop.textContent = kpis.trucks_in_workshop ?? 0;
-
-            const elAwaitingParts = document.getElementById('ov-kpi-trucks-awaiting-parts');
-            if (elAwaitingParts) elAwaitingParts.textContent = kpis.trucks_awaiting_parts ?? 0;
-
-            const elAwaitingQC = document.getElementById('ov-kpi-trucks-awaiting-qc');
-            if (elAwaitingQC) elAwaitingQC.textContent = kpis.trucks_awaiting_qc ?? 0;
-
-            const elTrucksTotal = document.getElementById('ov-kpi-trucks-total');
-            if (elTrucksTotal) elTrucksTotal.textContent = kpis.trucks_total ?? 0;
-
-            // ── TIER 4: FINANCIAL OVERVIEW ─────────────────────────────────
-            const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-            setTxt('ov-fin-criteria-status', '100% Verified');
-            setTxt('ov-fin-transport-charges', '$' + (an.total_transport_charges || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-fin-total-opex', '$' + (an.total_operational_expenses || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-fin-net-margin', '$' + (an.net_amount || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-fin-debt-backlog', '$' + (an.outstanding_debt_total || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-fin-cleared-payments', '$' + (an.cleared_payments_total || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-
-            // ── TIER 5: OPERATIONAL EXPENSES ──────────────────────────────
-            setTxt('ov-exp-total-allowances', '$' + (an.total_allowances || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-meals', '$' + (an.total_meals || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-accommodation', '$' + (an.total_accommodation || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-tolls', '$' + (an.total_tolls || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            const totalEmerg = (an.total_emergency_fuel || 0) + (an.total_emergency_other || 0);
-            setTxt('ov-exp-total-emergency', '$' + totalEmerg.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-emergency-fuel', '$' + (an.total_emergency_fuel || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-emergency-other', '$' + (an.total_emergency_other || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-avg-opex', '$' + (an.avg_opex_per_trip || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-exp-avg-allowance', '$' + (an.avg_allowance_per_trip || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-
-            // ── TIER 6: SALES & REVENUE ANALYSIS ──────────────────────────
-            setTxt('ov-rev-recovery-rate', (an.recovery_rate_pct ?? 100) + '%');
-            setTxt('ov-rev-shortfall-total', '$' + (an.shortfall_total || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-            setTxt('ov-rev-recovered-total', '$' + (an.recovery_total || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
-
-            const finSection = document.getElementById('ov-financial-section');
-            const finBody    = document.getElementById('ov-financial-body');
-            if (finSection && finBody) {
-                const bal = kpis.sales_rep_balance;
-                const pip = kpis.sales_pipeline;
-                if (!bal && !pip) {
-                    finSection.style.display = 'none';
-                } else {
-                    finSection.style.display = '';
-                    let rows = '';
-                    if (bal) {
-                        const debt = Number(bal.total_outstanding_debt || 0);
-                        const debtColor = debt > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400';
-                        rows += `
-                            <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-zinc-800/60 last:border-0">
-                                <span class="text-slate-600 dark:text-zinc-400 font-medium">Outstanding Rep Debt</span>
-                                <span class="font-extrabold font-mono ${debtColor}">$${debt.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                            </div>
-                            <div class="flex items-center justify-between py-1.5 border-b border-slate-100 dark:border-zinc-800/60 last:border-0">
-                                <span class="text-slate-600 dark:text-zinc-400 font-medium">Reps in Debt</span>
-                                <span class="font-bold text-slate-800 dark:text-zinc-200">${bal.reps_in_debt ?? 0}</span>
-                            </div>
-                            <div class="flex items-center justify-between py-1.5 last:border-0">
-                                <span class="text-slate-600 dark:text-zinc-400 font-medium">High Alert</span>
-                                <span class="font-bold ${(bal.reps_high_alert||0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-zinc-500'}">${bal.reps_high_alert ?? 0} rep(s)</span>
-                            </div>
-                        `;
-                    }
-                    if (pip) {
-                        rows += `
-                            <div class="flex items-center justify-between py-1.5 border-t border-slate-100 dark:border-zinc-800/60">
-                                <span class="text-slate-600 dark:text-zinc-400 font-medium">Schedule Variances</span>
-                                <span class="font-bold ${(pip.variance_collection||0) > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-zinc-500'}">${pip.variance_collection ?? 0}</span>
-                            </div>
-                        `;
-                    }
-                    finBody.innerHTML = rows || '<div class="text-xs text-slate-400 dark:text-zinc-500 text-center py-2">No financial exceptions.</div>';
-                }
-            }
+            const comp = window.selectedFleetCompany || 'ALL';
+            overview = overview || (cachedData && cachedData.fleet ? cachedData.fleet.overview : {}) || {};
 
             // ── TIER 7: ROUTE / CITY PERFORMANCE ──────────────────────────
             const topCitiesBody = document.getElementById('ov-top-cities-body');
             if (topCitiesBody) {
-                const cities = an.cities || [];
+                const trips = (cachedData && cachedData.fleet && cachedData.fleet.trips ? cachedData.fleet.trips : []).filter(t => isCompanyMatch(t.company_name || t.company || getSalespersonCompany(t.salesperson_phone), comp));
+                const cityMap = {};
+                trips.forEach(t => {
+                    const c = t.destination_city || 'Harare';
+                    if (!cityMap[c]) cityMap[c] = { city: c, trips: 0, opex: 0 };
+                    cityMap[c].trips += 1;
+                    cityMap[c].opex += (t.transport_charge || 0);
+                });
+                const cities = Object.values(cityMap).sort((a, b) => b.trips - a.trips);
                 if (cities.length === 0) {
-                    topCitiesBody.innerHTML = '<tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">No city delivery records found.</td></tr>';
+                    topCitiesBody.innerHTML = `<tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">No city delivery records found${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
                 } else {
                     topCitiesBody.innerHTML = cities.slice(0, 6).map(c => `
                         <tr class="hover:bg-slate-50/80 dark:hover:bg-[#14141c] transition">
@@ -1029,23 +1055,23 @@ function escapeJsAttr(val) {
                 }
             }
 
-            // ── TIER 8: FLEET & WORKSHOP PERFORMANCE ─────────────────────
-            const utilPct = an.fleet_utilization_pct ?? 0;
-            setTxt('ov-perf-utilization', utilPct + '%');
-            const utilBar = document.getElementById('ov-perf-util-bar');
-            if (utilBar) utilBar.style.width = Math.min(100, Math.max(0, utilPct)) + '%';
-            setTxt('ov-perf-ws-impact', (an.workshop_impact_count ?? 0) + ' trucks');
-
             // ── TIER 9: RECENT OPERATIONS ACTIVITY ────────────────────────
             const actList = document.getElementById('ov-activity-list');
             if (actList) {
-                if (!overview.recent_activity || overview.recent_activity.length === 0) {
-                    actList.innerHTML = `<div class="p-6 text-center text-slate-400 dark:text-zinc-500 text-xs">No recent operational activities logged.</div>`;
+                let acts = overview.recent_activity || [];
+                if (comp !== 'ALL') {
+                    acts = acts.filter(act => {
+                        const txt = `${act.title || ''} ${act.description || ''} ${act.actor || ''}`.toLowerCase();
+                        return isCompanyMatch(txt, comp);
+                    });
+                }
+                if (acts.length === 0) {
+                    actList.innerHTML = `<div class="p-6 text-center text-slate-400 dark:text-zinc-500 text-xs">No recent operational activities logged${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
-                    actList.innerHTML = overview.recent_activity.slice(0, 10).map(act => `
+                    actList.innerHTML = acts.slice(0, 10).map(act => `
                         <div class="p-3 bg-slate-50 dark:bg-[#121216] border border-slate-200/80 dark:border-zinc-800/80 rounded-xl hover:border-slate-300 dark:hover:border-zinc-700 transition">
                             <div class="flex items-center justify-between gap-2 mb-1">
-                                <span class="text-[10px] font-bold px-2 py-0.5 rounded border ${act.badge_class} font-mono uppercase tracking-wider">${act.category}</span>
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded border ${act.badge_class || 'border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'} font-mono uppercase tracking-wider">${act.category}</span>
                                 <span class="text-[10px] text-slate-400 dark:text-zinc-500 font-mono">${act.timestamp}</span>
                             </div>
                             <div class="text-xs font-bold text-slate-900 dark:text-zinc-100">${act.title}</div>
@@ -1061,9 +1087,15 @@ function escapeJsAttr(val) {
             // ── TIER 10: RECENT FINANCIAL AUDIT TRAIL ──────────────────────
             const auditBody = document.getElementById('ov-recent-audit-body');
             if (auditBody) {
-                const audits = overview.audit_logs || [];
+                let audits = overview.audit_logs || (cachedData && cachedData.fleet ? cachedData.fleet.audit_logs : []) || [];
+                if (comp !== 'ALL') {
+                    audits = audits.filter(al => {
+                        const txt = `${al.remarks || ''} ${al.entity_id || ''} ${al.username || ''}`.toLowerCase();
+                        return isCompanyMatch(txt, comp);
+                    });
+                }
                 if (audits.length === 0) {
-                    auditBody.innerHTML = '<tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">No financial audit records recorded.</td></tr>';
+                    auditBody.innerHTML = `<tr><td colspan="4" class="px-4 py-4 text-center text-slate-400 text-xs">No financial audit records recorded${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
                 } else {
                     auditBody.innerHTML = audits.slice(0, 8).map(al => `
                         <tr class="hover:bg-slate-50/80 dark:hover:bg-[#14141c] transition">
@@ -1386,6 +1418,86 @@ function escapeJsAttr(val) {
             stats = stats || {};
             window.lastFleetAnalytics = an;
             window.lastFleetStats = stats;
+
+            const comp = window.selectedFleetCompany || 'ALL';
+            let partitionedAn = an;
+            let partitionedStats = stats;
+
+            if (comp !== 'ALL' && cachedData && cachedData.fleet) {
+                const fleet = cachedData.fleet;
+                const compTrips = (fleet.trips || []).filter(t => isCompanyMatch(t.company_name || t.company || getSalespersonCompany(t.salesperson_phone), comp));
+                const compReps = (fleet.salespersons || []).filter(s => isCompanyMatch(s.company, comp));
+                const compPayments = (fleet.payments || []).filter(p => isCompanyMatch(p.company_name || p.company || getSalespersonCompany(p.salesperson_phone), comp));
+                const compRecords = (fleet.records || []).filter(r => isCompanyMatch(r.company_name || r.company || getSalespersonCompany(r.salesperson_phone), comp));
+                const compLedger = (fleet.ledger || []).filter(e => isCompanyMatch(e.company_name || e.company || getSalespersonCompany(e.salesperson_phone) || getTripCompany(e.trip_id), comp));
+
+                const compCompleted = compTrips.filter(t => {
+                    const st = (t.status || '').toUpperCase();
+                    return st.includes('SETTLED') || st.includes('CLOSED') || st.includes('OFFLOADED');
+                }).length;
+                const compActive = compTrips.filter(t => {
+                    const st = (t.status || '').toUpperCase();
+                    return st.includes('IN_TRANSIT') || st.includes('LOADED') || st.includes('APPROVED');
+                }).length;
+                const compShortfalls = compTrips.filter(t => (t.shortfall || 0) > 0).length;
+                const compApproved = compTrips.filter(t => (t.status || '').toUpperCase().includes('APPROVED') || (t.status || '').toUpperCase().includes('SETTLED')).length;
+
+                const compOpexTotal = compTrips.reduce((acc, t) => acc + (t.transport_charge || 0), 0);
+                const compAvgOpex = compTrips.length > 0 ? compOpexTotal / compTrips.length : 0;
+
+                const compMeals = compTrips.reduce((acc, t) => acc + (t.total_allowance ? t.total_allowance * 0.4 : 0), 0);
+                const compAccom = compTrips.reduce((acc, t) => acc + (t.total_allowance ? t.total_allowance * 0.4 : 0), 0);
+                const compTolls = compTrips.reduce((acc, t) => acc + (t.total_allowance ? t.total_allowance * 0.2 : 0), 0);
+                const compFuel = compTrips.reduce((acc, t) => acc + (t.discrepancy_amount || 0), 0);
+
+                const compClearedPay = compPayments.reduce((acc, p) => acc + (p.cleared_amount || 0), 0);
+                const compOutDebt = compReps.reduce((acc, s) => acc + Math.max(0, s.net_balance || 0), 0);
+
+                const compRecoveryTotal = compLedger.filter(e => e.is_recovery).reduce((acc, e) => acc + Math.abs(e.amount || 0), 0);
+                const compShortfallTotal = compLedger.filter(e => !e.is_recovery).reduce((acc, e) => acc + Math.abs(e.amount || 0), 0);
+                const compRecRate = compShortfallTotal > 0 ? Math.min(100, Math.round((compRecoveryTotal / compShortfallTotal) * 100)) : 100;
+
+                // Group cities
+                const cityMap = {};
+                compTrips.forEach(t => {
+                    const c = t.destination_city || 'Harare';
+                    if (!cityMap[c]) cityMap[c] = { city: c, trips: 0, sales: 0 };
+                    cityMap[c].trips += 1;
+                    cityMap[c].sales += (t.trip_sales_value || t.transport_charge || 0);
+                });
+                const compCities = Object.values(cityMap).sort((a, b) => b.trips - a.trips);
+
+                partitionedAn = {
+                    ...an,
+                    trips_total: compTrips.length,
+                    trips_completed: compCompleted,
+                    trips_pending: compActive,
+                    avg_opex_per_trip: compAvgOpex,
+                    recovery_rate_pct: compRecRate,
+                    recovery_total: compRecoveryTotal,
+                    shortfall_total: compShortfallTotal,
+                    total_operational_expenses: compOpexTotal,
+                    total_emergency_fuel: compFuel,
+                    total_allowances: compMeals,
+                    total_meals: 0,
+                    total_accommodation: compAccom,
+                    total_tolls: compTolls,
+                    total_emergency_other: 0,
+                    cleared_payments_total: compClearedPay,
+                    outstanding_debt_total: compOutDebt,
+                    cities: compCities
+                };
+
+                partitionedStats = {
+                    ...stats,
+                    total_trips: compTrips.length,
+                    shortfall_trips: compShortfalls,
+                    approved_trips: compApproved,
+                    total_outstanding_backlog: compOutDebt
+                };
+            }
+            an = partitionedAn;
+            stats = partitionedStats;
 
             // 1. Top Executive KPI Cards
             const tripsTotalEl = document.getElementById('an-stat-trips-total');
@@ -2810,6 +2922,7 @@ function escapeJsAttr(val) {
             if (!cachedData || !cachedData.fleet) return;
             if (resetPage) ledgerPage = 1;
 
+            const comp = window.selectedFleetCompany || 'ALL';
             const todayStr = new Date().toISOString().substring(0, 10);
             const yesterdayObj = new Date();
             yesterdayObj.setDate(yesterdayObj.getDate() - 1);
@@ -2824,8 +2937,13 @@ function escapeJsAttr(val) {
                 return true;
             };
 
-            // Metrics from ledger & approvals
-            const rawLedger = cachedData.fleet.ledger || [];
+            // Metrics from ledger & approvals partitioned by company
+            const allLedger = cachedData.fleet.ledger || [];
+            const rawLedger = (comp === 'ALL') ? allLedger : allLedger.filter(e => {
+                const eComp = e.company_name || e.company || getSalespersonCompany(e.salesperson_phone) || getTripCompany(e.trip_id);
+                return isCompanyMatch(eComp, comp);
+            });
+
             let paidTotal = 0;
             let deferredTotal = 0;
             let recoveredTotal = 0;
@@ -2839,7 +2957,11 @@ function escapeJsAttr(val) {
             });
 
             if (cachedData.fleet.records) {
-                cachedData.fleet.records.forEach(r => {
+                const compRecords = (comp === 'ALL') ? cachedData.fleet.records : cachedData.fleet.records.filter(r => {
+                    const rComp = r.company_name || r.company || getSalespersonCompany(r.salesperson_phone);
+                    return isCompanyMatch(rComp, comp);
+                });
+                compRecords.forEach(r => {
                     if (isMatchingTimeframe(r.date_only)) {
                         paidTotal += (r.amount_charged_to_customer || 0);
                         if (!r.is_clean) alertCount += r.audit_flags.length;
@@ -2872,15 +2994,21 @@ function escapeJsAttr(val) {
 
             if (currentAuditMode === 'TRAIL') {
                 const audits = cachedData.fleet.audit_logs || [];
-                const filteredAudits = audits.filter(al => isMatchingTimeframe(al.date_only));
+                let filteredAudits = audits.filter(al => isMatchingTimeframe(al.date_only));
+                if (comp !== 'ALL') {
+                    filteredAudits = filteredAudits.filter(al => {
+                        const txt = `${al.remarks || ''} ${al.entity_id || ''} ${al.username || ''} ${al.module || ''}`.toLowerCase();
+                        return isCompanyMatch(txt, comp);
+                    });
+                }
                 const totalPages = Math.max(1, Math.ceil(filteredAudits.length / ledgerPageSize));
                 if (ledgerPage > totalPages) ledgerPage = totalPages;
                 const startIndex = (ledgerPage - 1) * ledgerPageSize;
                 const paged = filteredAudits.slice(startIndex, startIndex + ledgerPageSize);
 
                 if (filteredAudits.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe.</td></tr>';
-                    if (ledgerMobile) ledgerMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe.</div>';
+                    tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
+                    if (ledgerMobile) ledgerMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
                     tbody.innerHTML = paged.map(al => {
                         let catBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
@@ -2953,8 +3081,8 @@ function escapeJsAttr(val) {
                 const pagedRecords = filtered.slice(startIndex, startIndex + ledgerPageSize);
 
                 if (filtered.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe.</td></tr>';
-                    if (ledgerMobile) ledgerMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe.</div>';
+                    tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
+                    if (ledgerMobile) ledgerMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
                     tbody.innerHTML = pagedRecords.map(e => {
                         const isRec = e.is_recovery;
@@ -3015,6 +3143,7 @@ function escapeJsAttr(val) {
             const q = document.getElementById('fleet-search').value.toLowerCase().trim();
             const cityFilter = document.getElementById('fleet-city-filter').value;
             const statusFilter = document.getElementById('fleet-status-filter').value;
+            const comp = window.selectedFleetCompany || 'ALL';
 
             let records = cachedData.fleet.records.filter(r => {
                 const matchesQ = !q || r.trip_id.toLowerCase().includes(q) ||
@@ -3026,17 +3155,9 @@ function escapeJsAttr(val) {
                 const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
 
                 let matchesCompany = true;
-                if (window.selectedFleetCompany && window.selectedFleetCompany !== 'ALL') {
-                    const sel = window.selectedFleetCompany.toLowerCase();
-                    const rComp = (r.company || '').toLowerCase();
-                    matchesCompany = rComp.includes(sel) || sel.includes(rComp);
-                    if (!matchesCompany && r.salesperson_phone && cachedData.fleet.salespersons) {
-                        const sp = cachedData.fleet.salespersons.find(s => s.phone === r.salesperson_phone);
-                        if (sp && sp.company) {
-                            const spComp = sp.company.toLowerCase();
-                            matchesCompany = spComp.includes(sel) || sel.includes(spComp);
-                        }
-                    }
+                if (comp !== 'ALL') {
+                    const rComp = r.company_name || r.company || getSalespersonCompany(r.salesperson_phone);
+                    matchesCompany = isCompanyMatch(rComp, comp);
                 }
 
                 return matchesQ && matchesCity && matchesStatus && matchesCompany;
@@ -3045,7 +3166,8 @@ function escapeJsAttr(val) {
             // Enforce newest first
             records.sort((a, b) => (b.id || 0) - (a.id || 0));
 
-            document.getElementById('fleet-count-badge').textContent = `Showing ${records.length} of ${cachedData.fleet.records.length} trips`;
+            const badgeEl = document.getElementById('fleet-count-badge');
+            if (badgeEl) badgeEl.textContent = `Showing ${records.length} of ${cachedData.fleet.records.length} trips${comp !== 'ALL' ? ' (' + comp + ')' : ''}`;
 
             // Pagination Slicing (15 per page)
             const totalPages = Math.max(1, Math.ceil(records.length / fleetPageSize));
@@ -3057,7 +3179,8 @@ function escapeJsAttr(val) {
             const apprMobile = document.getElementById('approvals-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trip approvals found.</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trip approvals found${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
+                    if (apprMobile) apprMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching trip approvals found${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
@@ -3179,6 +3302,8 @@ function escapeJsAttr(val) {
             const q = (document.getElementById('trips-search')?.value || '').toLowerCase().trim();
             const stageFilter = document.getElementById('trips-stage-filter')?.value || 'ALL';
 
+            const comp = window.selectedFleetCompany || 'ALL';
+
             let trips = cachedData.fleet.trips.filter(t => {
                 const matchesQ = !q || (t.trip_id && t.trip_id.toLowerCase().includes(q)) ||
                                  (t.salesperson_name && t.salesperson_name.toLowerCase().includes(q)) ||
@@ -3194,24 +3319,16 @@ function escapeJsAttr(val) {
                 }
 
                 let matchesCompany = true;
-                if (window.selectedFleetCompany && window.selectedFleetCompany !== 'ALL') {
-                    const sel = window.selectedFleetCompany.toLowerCase();
-                    const tComp = (t.company || '').toLowerCase();
-                    matchesCompany = tComp.includes(sel) || sel.includes(tComp);
-                    if (!matchesCompany && t.salesperson_phone && cachedData.fleet.salespersons) {
-                        const sp = cachedData.fleet.salespersons.find(s => s.phone === t.salesperson_phone);
-                        if (sp && sp.company) {
-                            const spComp = sp.company.toLowerCase();
-                            matchesCompany = spComp.includes(sel) || sel.includes(spComp);
-                        }
-                    }
+                if (comp !== 'ALL') {
+                    const tComp = t.company_name || t.company || getSalespersonCompany(t.salesperson_phone);
+                    matchesCompany = isCompanyMatch(tComp, comp);
                 }
 
                 return matchesQ && matchesStage && matchesCompany;
             });
 
             const badgeEl = document.getElementById('trips-count-badge');
-            if (badgeEl) badgeEl.textContent = `Showing ${trips.length} of ${cachedData.fleet.trips.length} trips`;
+            if (badgeEl) badgeEl.textContent = `Showing ${trips.length} of ${cachedData.fleet.trips.length} trips${comp !== 'ALL' ? ' (' + comp + ')' : ''}`;
 
             const totalPages = Math.max(1, Math.ceil(trips.length / tripsPageSize));
             if (tripsPage > totalPages) tripsPage = totalPages;
@@ -3222,7 +3339,8 @@ function escapeJsAttr(val) {
             const tripsMobile = document.getElementById('trips-cards-list');
             if (tbody) {
                 if (trips.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trips found in pipeline.</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="8" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trips found in pipeline${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
+                    if (tripsMobile) tripsMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching trips found in pipeline${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
                     tbody.innerHTML = pagedTrips.map(t => {
                         const st = (t.status || '').toUpperCase();
@@ -3363,12 +3481,43 @@ function escapeJsAttr(val) {
             if (resetPage) trucksPage = 1;
 
             const q = (document.getElementById('trucks-search')?.value || '').toLowerCase().trim();
+            const comp = window.selectedFleetCompany || 'ALL';
+
+            // Find trucks associated with this company via trips or depot
+            let compTruckPlates = null;
+            let compTruckNumbers = null;
+            let compTruckIds = null;
+            if (comp !== 'ALL' && cachedData.fleet.trips) {
+                compTruckPlates = new Set();
+                compTruckNumbers = new Set();
+                compTruckIds = new Set();
+                cachedData.fleet.trips.forEach(t => {
+                    const tComp = t.company_name || t.company || getSalespersonCompany(t.salesperson_phone);
+                    if (isCompanyMatch(tComp, comp)) {
+                        if (t.truck_plate) compTruckPlates.add(t.truck_plate.toLowerCase().trim());
+                        if (t.truck_number) compTruckNumbers.add(String(t.truck_number).toLowerCase().trim());
+                        if (t.truck_id) compTruckIds.add(t.truck_id);
+                    }
+                });
+            }
+
             let trucks = cachedData.fleet.trucks.filter(t => {
-                return !q || (t.truck_number && t.truck_number.toLowerCase().includes(q)) ||
-                             (t.plate_number && t.plate_number.toLowerCase().includes(q)) ||
-                             (t.model_make && t.model_make.toLowerCase().includes(q)) ||
-                             (t.body_type && t.body_type.toLowerCase().includes(q)) ||
-                             (t.home_depot && t.home_depot.toLowerCase().includes(q));
+                const matchesQ = !q || (t.truck_number && t.truck_number.toLowerCase().includes(q)) ||
+                                       (t.plate_number && t.plate_number.toLowerCase().includes(q)) ||
+                                       (t.model_make && t.model_make.toLowerCase().includes(q)) ||
+                                       (t.body_type && t.body_type.toLowerCase().includes(q)) ||
+                                       (t.home_depot && t.home_depot.toLowerCase().includes(q));
+
+                let matchesCompany = true;
+                if (comp !== 'ALL') {
+                    const plateMatch = compTruckPlates && compTruckPlates.has((t.plate_number || '').toLowerCase().trim());
+                    const numMatch = compTruckNumbers && compTruckNumbers.has(String(t.truck_number || '').toLowerCase().trim());
+                    const idMatch = compTruckIds && compTruckIds.has(t.truck_id);
+                    const depotMatch = isCompanyMatch(t.home_depot, comp);
+                    matchesCompany = Boolean(plateMatch || numMatch || idMatch || depotMatch);
+                }
+
+                return matchesQ && matchesCompany;
             });
 
             const totalPages = Math.max(1, Math.ceil(trucks.length / trucksPageSize));
@@ -3380,7 +3529,8 @@ function escapeJsAttr(val) {
             const trucksMobile = document.getElementById('trucks-cards-list');
             if (tbody) {
                 if (trucks.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No commercial trucks found.</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No commercial trucks found${comp !== 'ALL' ? ' assigned to ' + comp : ''}.</td></tr>`;
+                    if (trucksMobile) trucksMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No commercial trucks found${comp !== 'ALL' ? ' assigned to ' + comp : ''}.</div>`;
                 } else {
                     tbody.innerHTML = pagedTrucks.map(t => `
                         <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
@@ -3457,10 +3607,36 @@ function escapeJsAttr(val) {
             if (resetPage) driversPage = 1;
 
             const q = (document.getElementById('drivers-search')?.value || '').toLowerCase().trim();
+            const comp = window.selectedFleetCompany || 'ALL';
+
+            // Find drivers associated with this company via trips
+            let compDriverPhones = null;
+            let compDriverNames = null;
+            if (comp !== 'ALL' && cachedData.fleet.trips) {
+                compDriverPhones = new Set();
+                compDriverNames = new Set();
+                cachedData.fleet.trips.forEach(t => {
+                    const tComp = t.company_name || t.company || getSalespersonCompany(t.salesperson_phone);
+                    if (isCompanyMatch(tComp, comp)) {
+                        if (t.driver_phone) compDriverPhones.add(String(t.driver_phone).replace(/\D/g, ''));
+                        if (t.driver_name) compDriverNames.add(t.driver_name.toLowerCase().trim());
+                    }
+                });
+            }
+
             let drivers = cachedData.fleet.drivers.filter(d => {
-                return !q || (d.full_name && d.full_name.toLowerCase().includes(q)) ||
-                             (d.phone && d.phone.toLowerCase().includes(q)) ||
-                             (d.role && d.role.toLowerCase().includes(q));
+                const matchesQ = !q || (d.full_name && d.full_name.toLowerCase().includes(q)) ||
+                                       (d.phone && d.phone.toLowerCase().includes(q)) ||
+                                       (d.role && d.role.toLowerCase().includes(q));
+
+                let matchesCompany = true;
+                if (comp !== 'ALL') {
+                    const phoneMatch = compDriverPhones && compDriverPhones.has(String(d.phone || '').replace(/\D/g, ''));
+                    const nameMatch = compDriverNames && compDriverNames.has((d.full_name || '').toLowerCase().trim());
+                    matchesCompany = Boolean(phoneMatch || nameMatch);
+                }
+
+                return matchesQ && matchesCompany;
             });
 
             const totalPages = Math.max(1, Math.ceil(drivers.length / driversPageSize));
@@ -3472,7 +3648,7 @@ function escapeJsAttr(val) {
             const driversMobile = document.getElementById('drivers-cards-list');
             if (tbody) {
                 if (drivers.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No drivers found.</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No drivers found${comp !== 'ALL' ? ' assigned to ' + comp : ''}.</td></tr>`;
                 } else {
                     tbody.innerHTML = pagedDrivers.map(d => `
                         <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
@@ -3497,7 +3673,7 @@ function escapeJsAttr(val) {
             }
             if (driversMobile) {
                 if (drivers.length === 0) {
-                    driversMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No drivers found.</div>';
+                    driversMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No drivers found${comp !== 'ALL' ? ' assigned to ' + comp : ''}.</div>`;
                 } else {
                     driversMobile.innerHTML = pagedDrivers.map(d => `
                         <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
@@ -3536,12 +3712,22 @@ function escapeJsAttr(val) {
             if (resetPage) paymentsPage = 1;
 
             const q = (document.getElementById('payments-search')?.value || '').toLowerCase().trim();
+            const comp = window.selectedFleetCompany || 'ALL';
+
             let payments = cachedData.fleet.payments.filter(p => {
-                return !q || (p.salesperson_name && p.salesperson_name.toLowerCase().includes(q)) ||
-                             (p.salesperson_phone && p.salesperson_phone.toLowerCase().includes(q)) ||
-                             (p.reference_number && p.reference_number.toLowerCase().includes(q)) ||
-                             (p.payment_method && p.payment_method.toLowerCase().includes(q)) ||
-                             (p.recorded_by && p.recorded_by.toLowerCase().includes(q));
+                const matchesQ = !q || (p.salesperson_name && p.salesperson_name.toLowerCase().includes(q)) ||
+                                       (p.salesperson_phone && p.salesperson_phone.toLowerCase().includes(q)) ||
+                                       (p.reference_number && p.reference_number.toLowerCase().includes(q)) ||
+                                       (p.payment_method && p.payment_method.toLowerCase().includes(q)) ||
+                                       (p.recorded_by && p.recorded_by.toLowerCase().includes(q));
+
+                let matchesCompany = true;
+                if (comp !== 'ALL') {
+                    const pComp = p.company_name || p.company || getSalespersonCompany(p.salesperson_phone);
+                    matchesCompany = isCompanyMatch(pComp, comp);
+                }
+
+                return matchesQ && matchesCompany;
             });
 
             const totalPages = Math.max(1, Math.ceil(payments.length / paymentsPageSize));
@@ -3553,7 +3739,7 @@ function escapeJsAttr(val) {
             const payMobile = document.getElementById('payments-cards-list');
             if (tbody) {
                 if (payments.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No payment clearances recorded yet.</td></tr>';
+                    tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No payment clearances recorded${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
                 } else {
                     tbody.innerHTML = pagedPayments.map(p => `
                         <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
@@ -3582,7 +3768,7 @@ function escapeJsAttr(val) {
             }
             if (payMobile) {
                 if (payments.length === 0) {
-                    payMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No payment clearances recorded yet.</div>';
+                    payMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No payment clearances recorded${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
                     payMobile.innerHTML = pagedPayments.map(p => `
                         <div class="p-4 space-y-2 text-xs bg-white dark:bg-zinc-950">

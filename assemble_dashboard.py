@@ -1986,7 +1986,7 @@ new_dashboard_view = '''async def dashboard_view(request: Request):
         window.currentUserCompany = '{user.get("company", "")}';
         window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.5.0"></script>
+    <script src="/static/js/dashboard.js?v=2.6.0"></script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)

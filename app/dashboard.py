@@ -2057,9 +2057,13 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 audit_flags.append("ERP Data Missing: Trip not validated in live Favlogix ERP")
                 fleet_stats["audit_flags_count"] += 1
 
+            rep_info = OFFICIAL_SALES_REPS_DIRECTORY.get(fa.salesperson_phone or "")
+            co_name = getattr(fa, "company_name", None) or (rep_info.get("company") if rep_info else "Tagoneswa Hardware")
             approval_records.append({
                 "id": fa.id,
                 "trip_id": fa.trip_id,
+                "company_name": co_name,
+                "company": co_name,
                 "salesperson_name": fa.salesperson_name or "Sales Rep",
                 "salesperson_phone": fa.salesperson_phone,
                 "destination_city": fa.destination_city,
@@ -2087,10 +2091,14 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         # C. Detailed Ledger Entries Audit
         ledger_records = []
         for le in ledger_entries:
+            rep_info = OFFICIAL_SALES_REPS_DIRECTORY.get(le.salesperson_phone or "")
+            co_name = getattr(le, "company_name", None) or (rep_info.get("company") if rep_info else "Tagoneswa Hardware")
             ledger_records.append({
                 "id": le.id,
                 "salesperson_name": le.salesperson_name or "Sales Rep",
                 "salesperson_phone": le.salesperson_phone,
+                "company_name": co_name,
+                "company": co_name,
                 "trip_id": le.trip_id or "--",
                 "entry_type": le.entry_type,
                 "amount": round(le.amount, 2),
@@ -2105,11 +2113,13 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         raw_trips = (await db.execute(trips_stmt)).scalars().all()
         trips_list = []
         for tr in raw_trips:
+            rep_info = OFFICIAL_SALES_REPS_DIRECTORY.get(tr.salesperson_phone or "")
+            co_name = tr.company_name or (rep_info.get("company") if rep_info else "Tagoneswa Hardware")
             trips_list.append({
                 "id": tr.id,
                 "trip_id": tr.trip_id,
-                "company_name": tr.company_name,
-                "company": tr.company_name,
+                "company_name": co_name,
+                "company": co_name,
                 "trip_sales_value": 0.0,
                 "salesperson_name": tr.salesperson_name or "Sales Rep",
                 "salesperson_phone": tr.salesperson_phone,
@@ -2137,10 +2147,14 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         raw_payments = (await db.execute(payments_stmt)).scalars().all()
         payments_list = []
         for pm in raw_payments:
+            rep_info = OFFICIAL_SALES_REPS_DIRECTORY.get(pm.salesperson_phone or "")
+            co_name = getattr(pm, "company_name", None) or (rep_info.get("company") if rep_info else "Tagoneswa Hardware")
             payments_list.append({
                 "id": pm.id,
                 "salesperson_name": pm.salesperson_name or "Sales Rep",
                 "salesperson_phone": pm.salesperson_phone,
+                "company_name": co_name,
+                "company": co_name,
                 "cleared_amount": round(pm.cleared_amount, 2),
                 "payment_method": pm.payment_method,
                 "reference_number": pm.reference_number or "--",
@@ -4732,7 +4746,7 @@ async def dashboard_view(request: Request):
         window.currentUserCompany = '{user.get("company", "")}';
         window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.5.0"></script>
+    <script src="/static/js/dashboard.js?v=2.6.0"></script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
