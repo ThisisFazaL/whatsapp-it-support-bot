@@ -19,13 +19,14 @@ function escapeJsAttr(val) {
         // MODAL SCROLL CONTROLLER & INTERACTION HANDLERS
         // =============================================================
         const ALL_MODAL_IDS = [
+            'createUserModal',
+            'userManagementModal',
             'cityMinimumsModal',
             'clearPaymentModal',
             'auditLogsModal',
             'addTruckModal',
             'addDriverModal',
-            'addSalesRepModal',
-            'userManagementModal'
+            'addSalesRepModal'
         ];
 
         function syncBodyScrollLock() {
@@ -42,6 +43,7 @@ function escapeJsAttr(val) {
 
         function closeModalById(id) {
             switch (id) {
+                case 'createUserModal': closeCreateUserModal(); break;
                 case 'cityMinimumsModal': closeCityConfigModal(); break;
                 case 'clearPaymentModal': closeClearPaymentModal(); break;
                 case 'auditLogsModal': closeAuditLogsModal(); break;
@@ -159,17 +161,17 @@ function escapeJsAttr(val) {
                             <td class="px-4 py-2.5">${sessionBadge}</td>
                             <td class="px-4 py-2.5">${overridesBadge}</td>
                             <td class="px-4 py-2.5 text-right whitespace-nowrap">
-                                <button onclick="selectUserForEdit('${u.username}')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-2.5 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
+                                <button onclick="selectUserForEdit('${u.username}')" class="px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-zinc-50 dark:text-zinc-900 transition shadow-xs cursor-pointer">
                                     Manage
                                 </button>
-                                <button onclick="revokeUserSessions('${u.username}')" class="bg-amber-50 hover:bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 font-bold px-2 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="Force Logout All Devices">
-                                    🔒 Disconnect
+                                <button onclick="revokeUserSessions('${u.username}')" class="px-2.5 py-1 rounded-md text-xs font-medium border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 dark:text-amber-300 transition shadow-xs cursor-pointer ml-1 inline-flex items-center gap-1" title="Force Logout All Devices">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>Disconnect
                                 </button>
                                 ${u.username !== 'admin' ? `
-                                <button onclick="toggleUserActiveStatus('${u.username}', ${!u.is_active})" class="${u.is_active ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 dark:text-zinc-300' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300'} font-bold px-2 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="${u.is_active ? 'Suspend Account' : 'Reactivate Account'}">
+                                <button onclick="toggleUserActiveStatus('${u.username}', ${!u.is_active})" class="${u.is_active ? 'border border-zinc-200 hover:bg-zinc-100 text-zinc-700 dark:border-zinc-800 dark:hover:bg-zinc-800 dark:text-zinc-300' : 'border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/60 dark:text-emerald-300'} px-2.5 py-1 rounded-md text-xs font-medium transition shadow-xs cursor-pointer ml-1" title="${u.is_active ? 'Suspend Account' : 'Reactivate Account'}">
                                     ${u.is_active ? 'Suspend' : 'Activate'}
                                 </button>
-                                <button onclick="deleteUserAccount('${u.username}')" class="bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-400 font-bold px-2 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer ml-1" title="Delete Account Permanently">
+                                <button onclick="deleteUserAccount('${u.username}')" class="border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 dark:text-rose-400 px-2.5 py-1 rounded-md text-xs font-medium transition shadow-xs cursor-pointer ml-1" title="Delete Account Permanently">
                                     Remove
                                 </button>` : ''}
                             </td>
@@ -205,7 +207,7 @@ function escapeJsAttr(val) {
 
             const sessInfo = document.getElementById('selected-user-session-info');
             if (sessInfo) {
-                sessInfo.innerHTML = `<span>🛡️ <strong>Single Active Session Enforced</strong> | Status: <strong>${u.is_active ? 'Active' : 'Suspended'}</strong> | Device: <strong>${u.has_active_session ? '🟢 Connected' : '⚪ Disconnected'}</strong> (Last: ${escapeJsAttr(u.last_login_at)} IP: ${escapeJsAttr(u.last_login_ip)})</span>`;
+                sessInfo.innerHTML = `<span class="inline-flex items-center gap-1.5"><svg class="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg><strong>Single Active Session Enforced</strong> | Status: <strong>${u.is_active ? 'Active' : 'Suspended'}</strong> | Device: <strong class="inline-flex items-center gap-1">${u.has_active_session ? '<span class="w-2 h-2 rounded-full bg-emerald-500"></span>Connected' : '<span class="w-2 h-2 rounded-full bg-zinc-400"></span>Disconnected'}</strong> (Last: ${escapeJsAttr(u.last_login_at)} IP: ${escapeJsAttr(u.last_login_ip)})</span>`;
             }
 
             const toggleStatusBtn = document.getElementById('btn-toggle-status-panel');
@@ -214,10 +216,12 @@ function escapeJsAttr(val) {
                     toggleStatusBtn.classList.add('hidden');
                 } else {
                     toggleStatusBtn.classList.remove('hidden');
-                    toggleStatusBtn.innerHTML = u.is_active ? '<span>🚫</span> Suspend Account' : '<span>✅</span> Reactivate Account';
+                    toggleStatusBtn.innerHTML = u.is_active
+                        ? '<svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>Suspend Account'
+                        : '<svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Reactivate Account';
                     toggleStatusBtn.className = u.is_active
-                        ? 'bg-slate-700 hover:bg-slate-800 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1'
-                        : 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl text-xs transition cursor-pointer shadow-xs flex items-center gap-1';
+                        ? 'border border-zinc-200 dark:border-zinc-800 bg-white hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium px-3 py-1.5 rounded-md text-xs transition cursor-pointer shadow-xs inline-flex items-center'
+                        : 'border border-emerald-300 dark:border-emerald-800 bg-emerald-500 text-white hover:bg-emerald-600 font-medium px-3 py-1.5 rounded-md text-xs transition cursor-pointer shadow-xs inline-flex items-center';
                 }
             }
 
@@ -400,10 +404,11 @@ function escapeJsAttr(val) {
             const m = document.getElementById('createUserModal');
             if (m) {
                 m.classList.remove('hidden');
+                syncBodyScrollLock();
                 const uInput = document.getElementById('create-user-username');
                 if (uInput) {
                     uInput.value = '';
-                    uInput.focus();
+                    setTimeout(() => uInput.focus(), 50);
                 }
                 const pInput = document.getElementById('create-user-password');
                 if (pInput) pInput.value = '';
@@ -420,6 +425,7 @@ function escapeJsAttr(val) {
         function closeCreateUserModal() {
             const m = document.getElementById('createUserModal');
             if (m) m.classList.add('hidden');
+            syncBodyScrollLock();
         }
         window.closeCreateUserModal = closeCreateUserModal;
 
@@ -438,6 +444,12 @@ function escapeJsAttr(val) {
             if (!pass || pass.length < 6) {
                 alert('Password must be at least 6 characters.');
                 return;
+            }
+
+            const submitBtn = document.getElementById('modal-submit-create-user-btn');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = 'Creating User...';
             }
 
             try {
@@ -463,6 +475,11 @@ function escapeJsAttr(val) {
                 }
             } catch (err) {
                 alert(`Error: ${err.message}`);
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = 'Create User';
+                }
             }
         }
         window.submitCreateUser = submitCreateUser;
@@ -595,28 +612,24 @@ function escapeJsAttr(val) {
             if (window.currentUserRole !== 'MASTER_ADMIN' && viewId === 'analytics') {
                 viewId = 'overview';
             }
+            if (viewId === 'all') {
+                viewId = 'overview';
+            }
             currentFleetSubView = viewId;
             const sel = document.getElementById('fleet-view-selector');
             if (sel && sel.value !== viewId) sel.value = viewId;
 
+            // Reset all fast-nav pills to neutral glass style
             document.querySelectorAll('.fleet-quick-pill').forEach(btn => {
-                if (btn.getAttribute('data-view') === viewId) {
-                    btn.classList.add('bg-blue-600', 'text-white', 'shadow-xs');
-                    btn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
-                } else {
-                    btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs');
-                    btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
-                }
+                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs', 'font-semibold', 'border-transparent', 'bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-50', 'dark:text-zinc-900');
+                btn.classList.add('bg-white/60', 'dark:bg-zinc-900/60', 'backdrop-blur-sm', 'border', 'border-zinc-200/80', 'dark:border-zinc-800/80', 'text-zinc-700', 'dark:text-zinc-300', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800', 'hover:text-zinc-950', 'dark:hover:text-zinc-50', 'font-medium');
             });
 
-            document.querySelectorAll('.fleet-subview-btn').forEach(btn => {
-                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-md');
-                btn.classList.add('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
-            });
+            // Set ONLY the active subview quick-pill to strong blue style
             const activeBtn = document.getElementById('fleet-btn-' + viewId);
             if (activeBtn) {
-                activeBtn.classList.add('bg-blue-600', 'text-white', 'shadow-md');
-                activeBtn.classList.remove('bg-white', 'dark:bg-[#121216]', 'text-slate-700', 'dark:text-zinc-300');
+                activeBtn.classList.remove('bg-white/60', 'dark:bg-zinc-900/60', 'border-zinc-200/80', 'dark:border-zinc-800/80', 'text-zinc-700', 'dark:text-zinc-300', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800', 'hover:text-zinc-950', 'dark:hover:text-zinc-50', 'font-medium');
+                activeBtn.classList.add('bg-blue-600', 'text-white', 'shadow-xs', 'font-semibold', 'border-transparent');
             }
 
             const subviews = ['overview', 'trips', 'salespersons', 'payments', 'trucks', 'drivers', 'approvals', 'ledger', 'analytics'];
@@ -625,7 +638,7 @@ function escapeJsAttr(val) {
                 if (el) {
                     if (sv === 'analytics' && window.currentUserRole !== 'MASTER_ADMIN') {
                         el.style.display = 'none';
-                    } else if (viewId === 'all' || viewId === sv) {
+                    } else if (viewId === sv) {
                         el.style.display = 'block';
                     } else {
                         el.style.display = 'none';
@@ -633,7 +646,7 @@ function escapeJsAttr(val) {
                 }
             });
 
-            if (window.currentUserRole === 'MASTER_ADMIN' && (viewId === 'analytics' || viewId === 'all') && window.lastFleetAnalytics) {
+            if (window.currentUserRole === 'MASTER_ADMIN' && viewId === 'analytics' && window.lastFleetAnalytics) {
                 requestAnimationFrame(() => {
                     setTimeout(() => {
                         renderAnalyticsSection(window.lastFleetAnalytics, window.lastFleetStats);
@@ -651,16 +664,16 @@ function escapeJsAttr(val) {
 
             // Update company division pills UI
             document.querySelectorAll('.fleet-company-pill').forEach(btn => {
-                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs');
-                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+                btn.classList.remove('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-50', 'dark:text-zinc-900', 'shadow-xs');
+                btn.classList.add('text-zinc-600', 'dark:text-zinc-400', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800');
             });
             const pillId = comp === 'ALL' ? 'fleet-comp-ALL' :
                            comp.includes('LG') ? 'fleet-comp-LG' :
                            comp.includes('Tagoneswa') ? 'fleet-comp-TG' : 'fleet-comp-Kreckle';
             const activePill = document.getElementById(pillId);
             if (activePill) {
-                activePill.classList.add('bg-blue-600', 'text-white', 'shadow-xs');
-                activePill.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+                activePill.classList.add('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-50', 'dark:text-zinc-900', 'shadow-xs');
+                activePill.classList.remove('text-zinc-600', 'dark:text-zinc-400', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800');
             }
 
             // Synchronize subview salesperson buttons
@@ -757,16 +770,16 @@ function escapeJsAttr(val) {
         function filterSalespersonsByCompany(comp) {
             window.currentSalespersonCompanyFilter = comp;
             document.querySelectorAll('.sp-filter-btn').forEach(btn => {
-                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-xs');
-                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+                btn.classList.remove('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-50', 'dark:text-zinc-900', 'shadow-xs');
+                btn.classList.add('text-zinc-600', 'dark:text-zinc-400', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800');
             });
             const btnId = comp === 'ALL' ? 'sp-filter-ALL' :
                           comp.includes('LG') ? 'sp-filter-LG' :
                           comp.includes('Tagoneswa') ? 'sp-filter-TG' : 'sp-filter-Kreckle';
             const activeBtn = document.getElementById(btnId);
             if (activeBtn) {
-                activeBtn.classList.add('bg-blue-600', 'text-white', 'shadow-xs');
-                activeBtn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:bg-slate-100', 'dark:hover:bg-zinc-800');
+                activeBtn.classList.add('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-50', 'dark:text-zinc-900', 'shadow-xs');
+                activeBtn.classList.remove('text-zinc-600', 'dark:text-zinc-400', 'hover:bg-zinc-100', 'dark:hover:bg-zinc-800');
             }
             applySalespersonsFilter();
         }
@@ -1007,7 +1020,9 @@ function escapeJsAttr(val) {
                         <tr class="hover:bg-slate-50/80 dark:hover:bg-[#14141c] transition">
                             <td class="px-4 py-2 font-bold text-slate-900 dark:text-zinc-100 capitalize">${c.city}</td>
                             <td class="px-4 py-2 text-center font-mono text-slate-700 dark:text-zinc-300">${c.trips}</td>
-                            <td class="px-4 py-2 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">✅ Qualified</td>
+                            <td class="px-4 py-2 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                <span class="inline-flex items-center gap-1"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Qualified</span>
+                            </td>
                             <td class="px-4 py-2 text-right font-mono text-slate-600 dark:text-zinc-300">$${(c.opex || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                         </tr>
                     `).join('');
@@ -1741,123 +1756,83 @@ function escapeJsAttr(val) {
             const nav = document.getElementById('sidebar-nav-container');
             if (!nav) return;
 
+            const allowed = (cachedData && cachedData.user && cachedData.user.allowed_domains) || (window.initialAllowedDomains || ['fleet', 'it', 'projects', 'logistics']);
             let html = '';
+
+            // Common Domain Navigation block for quick drawer access
+            let domainNavHtml = `
+                <div>
+                    <div class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                        Domain Navigation
+                    </div>
+                    <div class="space-y-0.5">
+                        ${allowed.includes('fleet') ? `
+                        <button onclick="switchDomain('fleet'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left ${domain === 'fleet' ? 'bg-zinc-100/70 dark:bg-zinc-800/70 text-zinc-950 dark:text-zinc-50 font-semibold' : ''}">
+                            <span class="flex items-center gap-2">Sales to Fleet</span>
+                        </button>` : ''}
+                        ${allowed.includes('it') ? `
+                        <button onclick="switchDomain('it'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left ${domain === 'it' ? 'bg-zinc-100/70 dark:bg-zinc-800/70 text-zinc-950 dark:text-zinc-50 font-semibold' : ''}">
+                            <span class="flex items-center gap-2">IT Support</span>
+                        </button>` : ''}
+                        ${allowed.includes('projects') ? `
+                        <button onclick="switchDomain('projects'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left ${domain === 'projects' ? 'bg-zinc-100/70 dark:bg-zinc-800/70 text-zinc-950 dark:text-zinc-50 font-semibold' : ''}">
+                            <span class="flex items-center gap-2">Building Projects</span>
+                        </button>` : ''}
+                        ${allowed.includes('logistics') ? `
+                        <button onclick="switchDomain('logistics'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left ${domain === 'logistics' ? 'bg-zinc-100/70 dark:bg-zinc-800/70 text-zinc-950 dark:text-zinc-50 font-semibold' : ''}">
+                            <span class="flex items-center gap-2">Workshop Fleet</span>
+                        </button>` : ''}
+                    </div>
+                </div>
+            `;
 
             if (domain === 'fleet') {
                 const canFuel = hasPermission('manage_fuel_price') || hasPermission('manage_city_minimums');
                 const canTrucks = hasPermission('manage_trucks');
                 const canDrivers = hasPermission('manage_drivers');
                 const canSales = hasPermission('manage_sales_pipeline') || hasPermission('manage_sales_reps');
+                const canClearDebt = hasPermission('clear_sales_rep_debt');
                 const canAudit = hasPermission('view_audit_logs');
                 const canUsers = currentUser && currentUser.role === 'MASTER_ADMIN';
 
                 html = `
                     <div class="space-y-4">
-                        <!-- Group 1: Commercial Operations -->
-                        <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-                                Commercial Operations
-                            </div>
-                            <div class="space-y-0.5">
-                                <button onclick="switchFleetSubView('overview'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Operations Overview</span>
-                                    <span class="text-[10px] font-mono text-slate-400">Live</span>
-                                </button>
-                                <button onclick="switchFleetSubView('trips'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Trip Pipeline</span>
-                                    <span class="text-[10px] font-mono text-slate-400">7 Stages</span>
-                                </button>
-                                <button onclick="switchFleetSubView('trucks'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Fleet Vehicles</span>
-                                    <span class="text-[10px] font-mono text-slate-400">Registry</span>
-                                </button>
-                                <button onclick="switchFleetSubView('drivers'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Commercial Drivers</span>
-                                    <span class="text-[10px] font-mono text-slate-400">Roster</span>
-                                </button>
-                                <button onclick="switchFleetSubView('approvals'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Shortfall Approvals</span>
-                                    <span class="text-[10px] font-mono text-amber-500 font-bold">Queue</span>
-                                </button>
-                                ${!canViewBalances && canSales ? `
-                                <button onclick="switchFleetSubView('salespersons'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Sales Reps Directory</span>
-                                    <span class="text-[10px] font-mono text-indigo-500 font-bold">Roster</span>
-                                </button>` : ''}
-                            </div>
-                        </div>
+                        ${domainNavHtml}
 
-                        <!-- Group 2: Finance & Ledgers (Restricted) -->
-                        ${canViewBalances ? `
+                        <!-- Group: Unique Operational Actions (no duplicates of horizontal fast-nav row) -->
+                        ${(canFuel || canTrucks || canDrivers || canSales || canClearDebt || canAudit || canUsers) ? `
                         <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-                                Finance & Ledgers
-                            </div>
-                            <div class="space-y-0.5">
-                                <button onclick="switchFleetSubView('salespersons'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Sales Representative Balances</span>
-                                    <span class="text-[10px] font-mono text-rose-500 font-bold">Balances</span>
-                                </button>
-                                <button onclick="switchFleetSubView('payments'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Payment History</span>
-                                    <span class="text-[10px] font-mono text-emerald-500 font-bold">History</span>
-                                </button>
-                                <button onclick="switchFleetSubView('ledger'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Financial Audit Log</span>
-                                    <span class="text-[10px] font-mono text-slate-400">Ledger</span>
-                                </button>
-                            </div>
-                        </div>` : ''}
-
-                        <!-- Group 3: Analytics & Insights -->
-                        <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-                                ${window.currentUserRole === 'MASTER_ADMIN' ? 'Analytics & Insights' : 'View Mode'}
-                            </div>
-                            <div class="space-y-0.5">
-                                ${window.currentUserRole === 'MASTER_ADMIN' ? `
-                                <button onclick="switchFleetSubView('analytics'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Data Analytics</span>
-                                    <span class="text-[10px] font-bold text-blue-600 dark:text-blue-400">KPIs</span>
-                                </button>` : ''}
-                                <button onclick="switchFleetSubView('all'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Consolidated View (All)</span>
-                                    <span class="text-[10px] font-mono text-slate-400">Full</span>
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Group 4: Operational Actions & Config -->
-                        ${(canFuel || canTrucks || canDrivers || canSales || canAudit || canUsers) ? `
-                        <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                            <div class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                                 Operational Actions
                             </div>
                             <div class="space-y-0.5">
                                 ${canFuel ? `
-                                <button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer text-left">
+                                <button onclick="openCityConfigModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
                                     <span class="flex items-center gap-2">Fuel & City Rates</span>
-                                    <span class="text-[10px] font-mono text-slate-400">Config</span>
                                 </button>` : ''}
                                 ${canTrucks ? `
-                                <button onclick="openAddTruckModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Register Truck</span>
+                                <button onclick="openAddTruckModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">Register Fleet Vehicle</span>
                                 </button>` : ''}
                                 ${canDrivers ? `
-                                <button onclick="openAddDriverModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">Register Driver</span>
+                                <button onclick="openAddDriverModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">Register Commercial Driver</span>
                                 </button>` : ''}
                                 ${canSales ? `
-                                <button onclick="openAddSalesRepModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
+                                <button onclick="openAddSalesRepModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
                                     <span class="flex items-center gap-2">Register Sales Rep</span>
                                 </button>` : ''}
-                                ${canAudit ? `
-                                <button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">System Audit Logs</span>
+                                ${canClearDebt ? `
+                                <button onclick="openClearPaymentModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">Clear Rep Balance</span>
                                 </button>` : ''}
                                 ${canUsers ? `
-                                <button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition cursor-pointer text-left">
-                                    <span class="flex items-center gap-2">User Management & Permissions</span>
+                                <button onclick="openUserManagementModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">User Permissions</span>
+                                </button>` : ''}
+                                ${canAudit ? `
+                                <button onclick="openAuditLogsModal(); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">System Audit Logs</span>
                                 </button>` : ''}
                             </div>
                         </div>` : ''}
@@ -1866,20 +1841,18 @@ function escapeJsAttr(val) {
             } else if (domain === 'it') {
                 html = `
                     <div class="space-y-4">
+                        ${domainNavHtml}
                         <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                            <div class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                                 IT Helpdesk & Support
                             </div>
                             <div class="space-y-0.5">
-                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition text-left">
                                     <span class="flex items-center gap-2">Active Tickets Queue</span>
                                 </a>
-                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2">Critical & SLA Breaches</span>
-                                </a>
-                                <a href="#view-it" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2">WhatsApp Bot Diagnostics</span>
-                                </a>
+                                <button onclick="filterByITAdmin('ALL'); toggleSidebar(false);" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition cursor-pointer text-left">
+                                    <span class="flex items-center gap-2">All Technicians</span>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -1887,19 +1860,14 @@ function escapeJsAttr(val) {
             } else if (domain === 'projects') {
                 html = `
                     <div class="space-y-4">
+                        ${domainNavHtml}
                         <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                            <div class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                                 Construction & Projects
                             </div>
                             <div class="space-y-0.5">
-                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
+                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition text-left">
                                     <span class="flex items-center gap-2">Active Site Projects</span>
-                                </a>
-                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2">Materials & Cement Logistics</span>
-                                </a>
-                                <a href="#view-projects" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2">Site Budgets & Approvals</span>
                                 </a>
                             </div>
                         </div>
@@ -1908,19 +1876,14 @@ function escapeJsAttr(val) {
             } else if (domain === 'logistics') {
                 html = `
                     <div class="space-y-4">
+                        ${domainNavHtml}
                         <div>
-                            <div class="px-2.5 mb-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
+                            <div class="px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                                 Workshop Fleet Maintenance
                             </div>
                             <div class="space-y-0.5">
-                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>🔧</span> Active Service Jobs</span>
-                                </a>
-                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>⚙️</span> Awaiting Spares & Parts</span>
-                                </a>
-                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-xl text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition text-left">
-                                    <span class="flex items-center gap-2"><span>🚦</span> Fleet Readiness Matrix</span>
+                                <a href="#view-logistics" onclick="toggleSidebar(false)" class="w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-zinc-50 transition text-left">
+                                    <span class="flex items-center gap-2">Active Service Jobs</span>
                                 </a>
                             </div>
                         </div>
@@ -1953,8 +1916,10 @@ function escapeJsAttr(val) {
         }
 
         function updateThemeUI(isDark) {
+            const sunSvg = `<svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>`;
+            const moonSvg = `<svg class="w-4 h-4 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>`;
             document.querySelectorAll('.theme-toggle-icon').forEach(el => {
-                el.textContent = isDark ? '☀️' : '🌙';
+                el.innerHTML = isDark ? sunSvg : moonSvg;
             });
             document.querySelectorAll('.theme-toggle-label').forEach(el => {
                 el.textContent = isDark ? 'Light' : 'Dark';
@@ -1964,10 +1929,21 @@ function escapeJsAttr(val) {
         // Sync initial theme UI state
         updateThemeUI(document.documentElement.classList.contains('dark'));
 
-        function showToast(msg, icon = '✅') {
+        function showToast(msg, type = 'success') {
             const toast = document.getElementById('toast');
-            document.getElementById('toastMsg').textContent = msg;
-            document.getElementById('toastIcon').textContent = icon;
+            if (!toast) return;
+            const toastMsg = document.getElementById('toastMsg');
+            const toastIcon = document.getElementById('toastIcon');
+            if (toastMsg) toastMsg.textContent = msg;
+            if (toastIcon) {
+                if (type === 'error' || type === 'warning' || (typeof type === 'string' && (type.includes('fail') || type.includes('warn') || type.includes('err')))) {
+                    toastIcon.innerHTML = `<svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`;
+                } else if (type === 'info') {
+                    toastIcon.innerHTML = `<svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`;
+                } else {
+                    toastIcon.innerHTML = `<svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 12 2 2 4-4"/></svg>`;
+                }
+            }
             toast.classList.remove('translate-y-20', 'opacity-0');
             toast.classList.add('translate-y-0', 'opacity-100');
             setTimeout(() => {
@@ -2006,18 +1982,30 @@ function escapeJsAttr(val) {
 
             const mIcon = document.getElementById('mobileRefreshIcon');
             const dIcon = document.getElementById('desktopRefreshIcon');
+            const dText = document.getElementById('desktopRefreshText');
+            const dBtn = document.getElementById('desktopRefreshBtn');
+            const mBtn = document.getElementById('mobileRefreshBtn');
+            const anIcon = document.getElementById('analyticsRefreshIcon');
             if (mIcon) mIcon.classList.add('spinning');
             if (dIcon) dIcon.classList.add('spinning');
+            if (anIcon) anIcon.classList.add('spinning');
+            if (dText) dText.textContent = 'Refreshing...';
+            if (dBtn) dBtn.disabled = true;
+            if (mBtn) mBtn.disabled = true;
 
             try {
                 await fetchDashboard();
                 showToast('Live dashboard refreshed!');
             } catch (err) {
-                showToast('Failed to refresh data', '⚠️');
+                showToast('Failed to refresh data', 'error');
             } finally {
                 setTimeout(() => {
                     if (mIcon) mIcon.classList.remove('spinning');
                     if (dIcon) dIcon.classList.remove('spinning');
+                    if (anIcon) anIcon.classList.remove('spinning');
+                    if (dText) dText.textContent = 'Refresh';
+                    if (dBtn) dBtn.disabled = false;
+                    if (mBtn) mBtn.disabled = false;
                     isRefreshing = false;
                 }, 600);
             }
@@ -2115,8 +2103,11 @@ function escapeJsAttr(val) {
                 if (it.category_tree && it.category_tree.length > 0) {
                     treeContainer.innerHTML = it.category_tree.map(cat => `
                         <div class="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-[#11192e]/40">
-                            <div class="p-3 sm:p-3.5 bg-slate-100/80 dark:bg-[#15203b] font-extrabold text-xs text-slate-900 dark:text-white flex items-center justify-between">
-                                <span>📁 ${cat.category_name}</span>
+                            <div class="p-3 sm:p-3.5 bg-zinc-100/80 dark:bg-zinc-900/80 font-semibold text-xs text-zinc-900 dark:text-zinc-100 flex items-center justify-between">
+                                <span class="inline-flex items-center gap-1.5">
+                                    <svg class="w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                                    ${cat.category_name}
+                                </span>
                                 <span class="bg-blue-100 dark:bg-blue-950/80 text-blue-800 dark:text-blue-300 px-2 py-0.5 rounded-full text-[10px] font-bold">${cat.count} tickets</span>
                             </div>
                             <div class="p-3 space-y-2 text-xs">
@@ -2179,9 +2170,10 @@ function escapeJsAttr(val) {
             const pagedRecords = records.slice(startIndex, startIndex + itPageSize);
 
             const tbody = document.getElementById('it-table-body');
+            const itMobile = document.getElementById('it-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No matching IT support tickets found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching IT support tickets found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
@@ -2194,16 +2186,16 @@ function escapeJsAttr(val) {
                             statusDot = 'bg-blue-500 animate-pulse';
                         }
 
-                        let pBadge = 'bg-slate-100 dark:bg-[#121216] text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800';
+                        let pBadge = 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700';
                         if (r.priority === 'Urgent') pBadge = 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 font-bold';
                         else if (r.priority === 'High') pBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 font-bold';
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${r.ticket_number}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${r.employee_name}</strong><br><small class="text-slate-400 dark:text-zinc-500 font-mono">+${r.employee_phone}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-700 dark:text-zinc-300 whitespace-nowrap">${r.department}<br><small class="text-slate-500 dark:text-zinc-400 font-medium">📍 ${r.location}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-zinc-100">${r.category}</strong> <span class="text-slate-400">➔</span> ${r.subcategory}<br><small class="text-slate-500 dark:text-zinc-400">${r.issue}</small></td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.ticket_number}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-zinc-900 dark:text-zinc-100">${r.employee_name}</strong><br><small class="text-zinc-400 dark:text-zinc-500 font-mono">+${r.employee_phone}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-700 dark:text-zinc-300 whitespace-nowrap">${r.department}<br><small class="text-zinc-500 dark:text-zinc-400 font-medium inline-flex items-center gap-1"><svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>${r.location}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-zinc-900 dark:text-zinc-100">${r.category}</strong> <svg class="w-3 h-3 text-zinc-400 inline mx-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg> ${r.subcategory}<br><small class="text-zinc-500 dark:text-zinc-400">${r.issue}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><span class="px-2 py-0.5 rounded text-[10px] ${pBadge}">${r.priority}</span></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
                                     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${statusBadge} whitespace-nowrap">
@@ -2211,9 +2203,57 @@ function escapeJsAttr(val) {
                                         ${r.status}
                                     </span>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-slate-900 dark:text-zinc-100 whitespace-nowrap">${r.resolution_time}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.resolution_time}</td>
                             </tr>
+                        `;
+                    }).join('');
+                }
+            }
+            if (itMobile) {
+                if (records.length === 0) {
+                    itMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching IT support tickets found.</div>';
+                } else {
+                    itMobile.innerHTML = pagedRecords.map(r => {
+                        let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        let statusDot = 'bg-amber-500';
+                        if (r.status === 'Resolved' || r.status === 'Closed') {
+                            statusBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            statusDot = 'bg-emerald-500';
+                        } else if (r.status === 'In Progress') {
+                            statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                            statusDot = 'bg-blue-500 animate-pulse';
+                        }
+
+                        let pBadge = 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700';
+                        if (r.priority === 'Urgent') pBadge = 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 font-bold';
+                        else if (r.priority === 'High') pBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 font-bold';
+
+                        return `
+                            <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.ticket_number}</span>
+                                    <div class="flex items-center gap-1.5">
+                                        <span class="px-2 py-0.5 rounded text-[10px] ${pBadge}">${r.priority}</span>
+                                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                            <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
+                                            ${r.status}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="font-semibold text-zinc-900 dark:text-zinc-100">${r.employee_name} <span class="font-normal text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">+${r.employee_phone}</span></div>
+                                    <div class="text-zinc-500 dark:text-zinc-400 text-[11px] inline-flex items-center gap-1">${r.department} • <svg class="w-3 h-3 text-zinc-400 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>${r.location}</div>
+                                </div>
+                                <div class="bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800/80">
+                                    <div class="font-medium text-zinc-900 dark:text-zinc-100 flex items-center gap-1">${r.category} <svg class="w-3 h-3 text-zinc-400 inline mx-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg> ${r.subcategory}</div>
+                                    <div class="text-zinc-500 dark:text-zinc-400 text-[11px] mt-0.5">${r.issue}</div>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1 border-t border-zinc-100 dark:border-zinc-900">
+                                    <span>Tech: <strong class="text-zinc-800 dark:text-zinc-200">${r.assigned_admin}</strong></span>
+                                    <span class="font-mono">${r.resolution_time}</span>
+                                </div>
+                            </div>
                         `;
                     }).join('');
                 }
@@ -2283,9 +2323,10 @@ function escapeJsAttr(val) {
             const pagedRecords = records.slice(startIndex, startIndex + projPageSize);
 
             const tbody = document.getElementById('proj-table-body');
+            const projMobile = document.getElementById('proj-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No matching project tickets found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching project tickets found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
@@ -2299,20 +2340,61 @@ function escapeJsAttr(val) {
                         }
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${r.ticket_number}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${r.employee_name}</strong><br><small class="text-slate-400 dark:text-zinc-500 font-mono">+${r.employee_phone}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold text-slate-800 dark:text-zinc-200 whitespace-nowrap">📍 ${r.location}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-zinc-100">${r.category}</strong><br><small class="text-slate-500 dark:text-zinc-400">${r.description}</small></td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.ticket_number}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-zinc-900 dark:text-zinc-100">${r.employee_name}</strong><br><small class="text-zinc-400 dark:text-zinc-500 font-mono">+${r.employee_phone}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap"><span class="inline-flex items-center gap-1"><svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>${r.location}</span></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-zinc-900 dark:text-zinc-100">${r.category}</strong><br><small class="text-zinc-500 dark:text-zinc-400">${r.description}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
                                     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${statusBadge} whitespace-nowrap">
                                         <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
                                         ${r.status}
                                     </span>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${r.created_at}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${r.created_at}</td>
                             </tr>
+                        `;
+                    }).join('');
+                }
+            }
+            if (projMobile) {
+                if (records.length === 0) {
+                    projMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching project tickets found.</div>';
+                } else {
+                    projMobile.innerHTML = pagedRecords.map(r => {
+                        let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        let statusDot = 'bg-amber-500';
+                        if (r.status === 'Resolved' || r.status === 'Closed') {
+                            statusBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            statusDot = 'bg-emerald-500';
+                        } else if (r.status === 'In Progress') {
+                            statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                            statusDot = 'bg-blue-500 animate-pulse';
+                        }
+
+                        return `
+                            <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.ticket_number}</span>
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                        <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
+                                        ${r.status}
+                                    </span>
+                                </div>
+                                <div>
+                                    <div class="font-semibold text-zinc-900 dark:text-zinc-100">${r.employee_name} <span class="font-normal text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">+${r.employee_phone}</span></div>
+                                    <div class="text-zinc-500 dark:text-zinc-400 text-[11px] inline-flex items-center gap-1"><svg class="w-3 h-3 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>${r.location}</div>
+                                </div>
+                                <div class="bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800/80">
+                                    <div class="font-medium text-zinc-900 dark:text-zinc-100">${r.category}</div>
+                                    <div class="text-zinc-500 dark:text-zinc-400 text-[11px] mt-0.5">${r.description}</div>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1 border-t border-zinc-100 dark:border-zinc-900">
+                                    <span>Lead: <strong class="text-zinc-800 dark:text-zinc-200">${r.assigned_admin}</strong></span>
+                                    <span class="font-mono">${r.created_at}</span>
+                                </div>
+                            </div>
                         `;
                     }).join('');
                 }
@@ -2373,9 +2455,10 @@ function escapeJsAttr(val) {
             const pagedRecords = records.slice(startIndex, startIndex + wsPageSize);
 
             const tbody = document.getElementById('ws-table-body');
+            const wsMobile = document.getElementById('ws-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No matching workshop records found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching workshop records found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
@@ -2408,27 +2491,92 @@ function escapeJsAttr(val) {
                         }
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${r.ticket_number}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">Truck #${r.truck_number}</strong><br><small class="text-slate-400 dark:text-zinc-500 font-mono">${r.plate_number}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-slate-800 dark:text-zinc-200 whitespace-nowrap">${r.truck_model}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-slate-900 dark:text-zinc-100">${r.category}</strong><br><small class="text-slate-500 dark:text-zinc-400">${r.description.substring(0, 45)}...</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-700 dark:text-zinc-300 whitespace-nowrap">${r.logged_by}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${r.assigned_mechanic}</strong><br><small class="text-blue-600 dark:text-blue-400 font-semibold">ETA: ${r.eta}</small></td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.ticket_number}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-zinc-900 dark:text-zinc-100">Truck #${r.truck_number}</strong><br><small class="text-zinc-400 dark:text-zinc-500 font-mono">${r.plate_number}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${r.truck_model}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-zinc-900 dark:text-zinc-100">${r.category}</strong><br><small class="text-zinc-500 dark:text-zinc-400">${r.description.substring(0, 45)}...</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-700 dark:text-zinc-300 whitespace-nowrap">${r.logged_by}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-zinc-900 dark:text-zinc-100">${r.assigned_mechanic}</strong><br><small class="text-zinc-500 dark:text-zinc-400 font-semibold">ETA: ${r.eta}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><small class="bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 px-2 py-0.5 rounded font-medium">${r.parts_status}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold font-mono text-slate-900 dark:text-zinc-100 whitespace-nowrap">${r.costing}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-bold font-mono text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.costing}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
                                     <div class="flex flex-col items-start gap-1">
                                         <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${statusBadge} whitespace-nowrap">
                                             <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
                                             ${statusLabel}
                                         </span>
-                                        <span class="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-500 dark:text-zinc-400 bg-slate-100 dark:bg-[#121216] px-2 py-0.5 rounded border border-slate-200 dark:border-zinc-800 whitespace-nowrap">
+                                        <span class="inline-flex items-center gap-1 text-[10px] font-mono text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded border border-zinc-200 dark:border-zinc-700 whitespace-nowrap">
                                             QC: <strong class="${qcClass}">${qcResult}</strong>
                                         </span>
                                     </div>
                                 </td>
                             </tr>
+                        `;
+                    }).join('');
+                }
+            }
+            if (wsMobile) {
+                if (records.length === 0) {
+                    wsMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching workshop records found.</div>';
+                } else {
+                    wsMobile.innerHTML = pagedRecords.map(r => {
+                        let statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                        let statusDot = 'bg-blue-500';
+                        const statusRaw = r.status || '';
+                        const statusLabel = statusRaw.replace(/_/g, ' ');
+
+                        if (statusRaw === 'UNDER_REVIEW') {
+                            statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                            statusDot = 'bg-amber-500';
+                        } else if (statusRaw === 'CLOSED') {
+                            statusBadge = 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700';
+                            statusDot = 'bg-zinc-400';
+                        } else if (statusRaw === 'REWORK_REQUIRED') {
+                            statusBadge = 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30';
+                            statusDot = 'bg-rose-500 animate-pulse';
+                        } else if (statusRaw === 'AWAITING_TEST') {
+                            statusBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            statusDot = 'bg-emerald-500';
+                        }
+
+                        let qcResult = r.qc_result || 'Pending QC';
+                        let qcClass = 'text-zinc-500 dark:text-zinc-400';
+                        if (qcResult.toUpperCase().includes('PASS')) {
+                            qcClass = 'text-emerald-600 dark:text-emerald-400 font-bold';
+                        } else if (qcResult.toUpperCase().includes('FAIL') || qcResult.toUpperCase().includes('REWORK')) {
+                            qcClass = 'text-rose-600 dark:text-rose-400 font-bold';
+                        } else if (qcResult.toUpperCase().includes('PEND')) {
+                            qcClass = 'text-amber-600 dark:text-amber-400 font-medium';
+                        }
+
+                        return `
+                            <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.ticket_number}</span>
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                        <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
+                                        ${statusLabel}
+                                    </span>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <span class="font-semibold text-zinc-900 dark:text-zinc-100">Truck #${r.truck_number}</span>
+                                        <span class="font-mono text-zinc-500 dark:text-zinc-400 text-[11px] ml-1.5">${r.plate_number}</span>
+                                    </div>
+                                    <span class="text-zinc-500 dark:text-zinc-400">${r.truck_model}</span>
+                                </div>
+                                <div class="bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800/80">
+                                    <div class="font-medium text-zinc-900 dark:text-zinc-100">${r.category}</div>
+                                    <div class="text-zinc-500 dark:text-zinc-400 text-[11px] mt-0.5">${r.description}</div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-zinc-100 dark:border-zinc-900">
+                                    <div>Mechanic: <strong class="text-zinc-800 dark:text-zinc-200">${r.assigned_mechanic}</strong> <span class="text-zinc-500">(${r.eta})</span></div>
+                                    <div class="text-right">Cost: <strong class="font-mono text-zinc-900 dark:text-zinc-100">${r.costing}</strong></div>
+                                    <div>Parts: <span class="text-amber-700 dark:text-amber-400 font-medium">${r.parts_status}</span></div>
+                                    <div class="text-right">QC: <strong class="${qcClass}">${qcResult}</strong></div>
+                                </div>
+                            </div>
                         `;
                     }).join('');
                 }
@@ -2454,14 +2602,16 @@ function escapeJsAttr(val) {
         function setAuditTimeframe(tf) {
             currentAuditTimeframe = tf;
             ledgerPage = 1;
+            const sel = document.getElementById('ledger-timeframe-selector');
+            if (sel && sel.value !== tf) sel.value = tf;
             document.querySelectorAll('.audit-tf-btn').forEach(btn => {
-                btn.classList.remove('bg-blue-600', 'text-white');
-                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:text-slate-900', 'dark:hover:text-white');
+                btn.classList.remove('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-100', 'dark:text-zinc-900', 'bg-blue-600', 'text-white', 'shadow-xs');
+                btn.classList.add('text-zinc-600', 'dark:text-zinc-400', 'hover:text-zinc-900', 'dark:hover:text-zinc-100');
             });
             const activeBtn = document.getElementById('timeframe-btn-' + tf);
             if (activeBtn) {
-                activeBtn.classList.add('bg-blue-600', 'text-white');
-                activeBtn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:text-slate-900', 'dark:hover:text-white');
+                activeBtn.classList.add('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-100', 'dark:text-zinc-900', 'shadow-xs');
+                activeBtn.classList.remove('text-zinc-600', 'dark:text-zinc-400', 'hover:text-zinc-900', 'dark:hover:text-zinc-100');
             }
             if (cachedData && cachedData.fleet) {
                 filterLedgerTable(true);
@@ -2539,11 +2689,11 @@ function escapeJsAttr(val) {
                                             </div>
                                         </div>
                                         <div class="flex items-center gap-1.5 shrink-0">
-                                            <button onclick="openAddSalesRepModal('${sp.employee_id || ''}', '${escapeJsAttr(sp.name)}', '${sp.phone}', '${escapeJsAttr(sp.email)}', true, '${escapeJsAttr(comp)}', '${escapeJsAttr(sp.role || 'SALES_REP')}')" title="Edit Sales Rep" class="text-indigo-600 hover:text-indigo-800 dark:hover:text-indigo-400 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-900/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition text-xs font-bold cursor-pointer">
+                                            <button onclick="openAddSalesRepModal('${sp.employee_id || ''}', '${escapeJsAttr(sp.name)}', '${sp.phone}', '${escapeJsAttr(sp.email)}', true, '${escapeJsAttr(comp)}', '${escapeJsAttr(sp.role || 'SALES_REP')}')" title="Edit Sales Rep" class="px-2 py-0.5 rounded-md border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition text-xs font-medium cursor-pointer">
                                                 Edit
                                             </button>
-                                            <button onclick="deleteSalesRep('${sp.phone}', '${escapeJsAttr(sp.name)}')" title="Remove Sales Rep" class="text-rose-600 hover:text-rose-800 dark:hover:text-rose-400 px-2 py-0.5 rounded-md border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition text-xs font-bold cursor-pointer">
-                                                ✕
+                                            <button onclick="deleteSalesRep('${sp.phone}', '${escapeJsAttr(sp.name)}')" title="Remove Sales Rep" class="p-1 rounded-md text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 transition cursor-pointer">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                                             </button>
                                             <span class="text-[10px] px-2 py-0.5 rounded-full border ${badgeClass} whitespace-nowrap">${badgeText}</span>
                                         </div>
@@ -2559,8 +2709,9 @@ function escapeJsAttr(val) {
                                     <div class="mt-3 bg-white dark:bg-[#121216] border border-slate-200 dark:border-zinc-800 rounded-lg p-2.5">
                                         <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-zinc-500">Commercial Contact</div>
                                         <div class="text-xs font-semibold text-slate-700 dark:text-zinc-300 mt-1 flex items-center gap-1.5">
-                                            <a href="https://wa.me/${sp.phone}" target="_blank" class="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1">
-                                                <span>💬 WhatsApp</span>
+                                            <a href="https://wa.me/${sp.phone}" target="_blank" class="text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-1">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                                                <span>WhatsApp</span>
                                             </a>
                                             <span class="text-slate-300 dark:text-zinc-700">•</span>
                                             <span class="text-slate-500 dark:text-zinc-400">${sp.active !== false ? 'Active Roster' : 'Inactive'}</span>
@@ -2617,13 +2768,13 @@ function escapeJsAttr(val) {
             currentAuditMode = mode;
             ledgerPage = 1;
             document.querySelectorAll('.audit-mode-btn').forEach(btn => {
-                btn.classList.remove('bg-blue-600', 'text-white');
-                btn.classList.add('text-slate-600', 'dark:text-zinc-300', 'hover:text-slate-900', 'dark:hover:text-white');
+                btn.classList.remove('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-100', 'dark:text-zinc-900', 'bg-blue-600', 'text-white', 'shadow-xs');
+                btn.classList.add('text-zinc-600', 'dark:text-zinc-400', 'hover:text-zinc-900', 'dark:hover:text-zinc-100');
             });
             const activeBtn = document.getElementById('audit-mode-btn-' + mode);
             if (activeBtn) {
-                activeBtn.classList.add('bg-blue-600', 'text-white');
-                activeBtn.classList.remove('text-slate-600', 'dark:text-zinc-300', 'hover:text-slate-900', 'dark:hover:text-white');
+                activeBtn.classList.add('bg-zinc-900', 'text-zinc-50', 'dark:bg-zinc-100', 'dark:text-zinc-900', 'shadow-xs');
+                activeBtn.classList.remove('text-zinc-600', 'dark:text-zinc-400', 'hover:text-zinc-900', 'dark:hover:text-zinc-100');
             }
             const thead = document.getElementById('fleet-ledger-table-head');
             if (thead) {
@@ -2716,6 +2867,7 @@ function escapeJsAttr(val) {
             }
 
             const tbody = document.getElementById('fleet-ledger-table-body');
+            const ledgerMobile = document.getElementById('ledger-cards-list');
             if (!tbody) return;
 
             if (currentAuditMode === 'TRAIL') {
@@ -2727,7 +2879,8 @@ function escapeJsAttr(val) {
                 const paged = filteredAudits.slice(startIndex, startIndex + ledgerPageSize);
 
                 if (filteredAudits.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-slate-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe.</td></tr>';
+                    if (ledgerMobile) ledgerMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No audit events recorded for this timeframe.</div>';
                 } else {
                     tbody.innerHTML = paged.map(al => {
                         let catBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
@@ -2740,26 +2893,55 @@ function escapeJsAttr(val) {
                         }
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3 text-slate-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${al.timestamp}</td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3 text-zinc-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${al.timestamp}</td>
                                 <td class="px-4 sm:px-5 py-3 whitespace-nowrap">
-                                    <strong class="text-slate-900 dark:text-zinc-100">${al.username}</strong><br>
-                                    <small class="text-slate-400 dark:text-zinc-500 font-mono">${al.user_role}</small>
+                                    <strong class="text-zinc-900 dark:text-zinc-100">${al.username}</strong><br>
+                                    <small class="text-zinc-400 dark:text-zinc-500 font-mono">${al.user_role}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 whitespace-nowrap">
                                     <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${catBadge} font-mono">
                                         ${(al.action || '').replace(/_/g, ' ')}
                                     </span>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 font-mono text-slate-700 dark:text-zinc-300 text-xs whitespace-nowrap">
-                                    ${al.module} <span class="text-slate-400 dark:text-zinc-500">${al.entity_id || ''}</span>
+                                <td class="px-4 sm:px-5 py-3 font-mono text-zinc-700 dark:text-zinc-300 text-xs whitespace-nowrap">
+                                    ${al.module} <span class="text-zinc-400 dark:text-zinc-500">${al.entity_id || ''}</span>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 text-slate-600 dark:text-zinc-300">
+                                <td class="px-4 sm:px-5 py-3 text-zinc-600 dark:text-zinc-300">
                                     ${al.remarks || '--'}
                                 </td>
                             </tr>
                         `;
                     }).join('');
+
+                    if (ledgerMobile) {
+                        ledgerMobile.innerHTML = paged.map(al => {
+                            let catBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                            if ((al.action || '').includes('PAYMENT') || (al.action || '').includes('CLEAR')) {
+                                catBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            } else if ((al.action || '').includes('USER') || (al.action || '').includes('PERMISSION')) {
+                                catBadge = 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30';
+                            } else if ((al.action || '').includes('FUEL') || (al.action || '').includes('RATE')) {
+                                catBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                            }
+
+                            return `
+                                <div class="p-4 space-y-2 text-xs bg-white dark:bg-zinc-950">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${catBadge} font-mono">
+                                            ${(al.action || '').replace(/_/g, ' ')}
+                                        </span>
+                                        <span class="text-zinc-400 font-mono text-[10px]">${al.timestamp}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-[11px]">
+                                        <div><strong class="text-zinc-900 dark:text-zinc-100">${al.username}</strong> <span class="text-zinc-500">(${al.user_role})</span></div>
+                                        <div class="font-mono text-zinc-500">${al.module} ${al.entity_id || ''}</div>
+                                    </div>
+                                    ${al.remarks ? `<div class="text-[11px] text-zinc-600 dark:text-zinc-300">${al.remarks}</div>` : ''}
+                                </div>
+                            `;
+                        }).join('');
+                    }
                 }
                 renderPaginationControls('ledger-pagination-info', 'ledger-pagination-controls', ledgerPage, filteredAudits.length, ledgerPageSize, 'changeLedgerPage');
             } else {
@@ -2771,7 +2953,8 @@ function escapeJsAttr(val) {
                 const pagedRecords = filtered.slice(startIndex, startIndex + ledgerPageSize);
 
                 if (filtered.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-slate-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe.</td></tr>';
+                    if (ledgerMobile) ledgerMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No shortfall deficit or recovery transactions in this timeframe.</div>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(e => {
                         const isRec = e.is_recovery;
@@ -2782,16 +2965,44 @@ function escapeJsAttr(val) {
                             : '<span class="inline-flex items-center gap-1.5 bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 text-[10px] font-bold px-2 py-0.5 rounded whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>SHORTFALL DEFICIT</span>';
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3 text-slate-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${e.created_at}</td>
-                                <td class="px-4 sm:px-5 py-3 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${e.salesperson_name}</strong><br><small class="text-slate-400 dark:text-zinc-500 font-mono">+${e.salesperson_phone}</small></td>
-                                <td class="px-4 sm:px-5 py-3 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${e.trip_id}</td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3 text-zinc-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${e.created_at}</td>
+                                <td class="px-4 sm:px-5 py-3 whitespace-nowrap"><strong class="text-zinc-900 dark:text-zinc-100">${e.salesperson_name}</strong><br><small class="text-zinc-400 dark:text-zinc-500 font-mono">+${e.salesperson_phone}</small></td>
+                                <td class="px-4 sm:px-5 py-3 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${e.trip_id}</td>
                                 <td class="px-4 sm:px-5 py-3 whitespace-nowrap">${typeBadge}</td>
                                 <td class="px-4 sm:px-5 py-3 font-mono ${amtClass} whitespace-nowrap">${sign}$${Math.abs(e.amount).toFixed(2)}</td>
-                                <td class="px-4 sm:px-5 py-3 text-slate-600 dark:text-zinc-300">${e.notes || '--'}</td>
+                                <td class="px-4 sm:px-5 py-3 text-zinc-600 dark:text-zinc-300">${e.notes || '--'}</td>
                             </tr>
                         `;
                     }).join('');
+
+                    if (ledgerMobile) {
+                        ledgerMobile.innerHTML = pagedRecords.map(e => {
+                            const isRec = e.is_recovery;
+                            const amtClass = isRec ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-rose-600 dark:text-rose-400 font-bold';
+                            const sign = isRec ? '-' : '+';
+                            const typeBadge = isRec
+                                ? '<span class="inline-flex items-center gap-1 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>SURPLUS RECOVERY</span>'
+                                : '<span class="inline-flex items-center gap-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 text-[10px] font-bold px-2 py-0.5 rounded"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>SHORTFALL DEFICIT</span>';
+
+                            return `
+                                <div class="p-4 space-y-2 text-xs bg-white dark:bg-zinc-950">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${e.trip_id}</span>
+                                        <span class="font-mono ${amtClass}">${sign}$${Math.abs(e.amount).toFixed(2)}</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-[11px]">
+                                        <div><strong class="text-zinc-900 dark:text-zinc-100">${e.salesperson_name}</strong> <span class="font-mono text-zinc-500">+${e.salesperson_phone}</span></div>
+                                        <div>${typeBadge}</div>
+                                    </div>
+                                    <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+                                        <span>${e.notes || '--'}</span>
+                                        <span class="font-mono text-[10px]">${e.created_at}</span>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    }
                 }
                 renderPaginationControls('ledger-pagination-info', 'ledger-pagination-controls', ledgerPage, filtered.length, ledgerPageSize, 'changeLedgerPage');
             }
@@ -2843,9 +3054,10 @@ function escapeJsAttr(val) {
             const pagedRecords = records.slice(startIndex, startIndex + fleetPageSize);
 
             const tbody = document.getElementById('fleet-approvals-table-body');
+            const apprMobile = document.getElementById('approvals-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No matching trip approvals found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trip approvals found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
@@ -2860,30 +3072,30 @@ function escapeJsAttr(val) {
 
                         let auditBadge = '<span class="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Verified Parity</span>';
                         if (!r.is_clean) {
-                            auditBadge = `<span class="inline-flex items-center gap-1.5 bg-red-500/10 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-500/30 text-[10px] font-bold px-2 py-0.5 rounded whitespace-nowrap" title="${r.audit_flags.join('; ')}"><span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>Audit Alert (${r.audit_flags.length})</span>`;
+                            auditBadge = `<span class="inline-flex items-center gap-1.5 bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 text-[10px] font-bold px-2 py-0.5 rounded whitespace-nowrap" title="${r.audit_flags.join('; ')}"><span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>Audit Alert (${r.audit_flags.length})</span>`;
                         }
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${r.trip_id}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-slate-900 dark:text-zinc-100">${r.salesperson_name}</strong><br><small class="text-slate-400 dark:text-zinc-500 font-mono">+${r.salesperson_phone}</small></td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><span class="font-bold text-slate-800 dark:text-zinc-200">${r.destination_city}</span><br><small class="text-slate-500 dark:text-zinc-400">${r.route}</small></td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.trip_id}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><strong class="text-zinc-900 dark:text-zinc-100">${r.salesperson_name}</strong><br><small class="text-zinc-400 dark:text-zinc-500 font-mono">+${r.salesperson_phone}</small></td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap"><span class="font-bold text-zinc-800 dark:text-zinc-200">${r.destination_city}</span><br><small class="text-zinc-500 dark:text-zinc-400">${r.route}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono whitespace-nowrap">
                                     ${canViewBalances ? `
-                                    <span class="font-bold ${r.trip_sales_value >= r.required_minimum ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-900 dark:text-zinc-100'}">$${r.trip_sales_value.toFixed(2)}</span>
-                                    <br><small class="text-slate-400 dark:text-zinc-500">Min: $${r.required_minimum.toFixed(2)}</small>
+                                    <span class="font-bold ${r.trip_sales_value >= r.required_minimum ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-900 dark:text-zinc-100'}">$${r.trip_sales_value.toFixed(2)}</span>
+                                    <br><small class="text-zinc-400 dark:text-zinc-500">Min: $${r.required_minimum.toFixed(2)}</small>
                                     ` : `
-                                    <span class="font-semibold text-slate-600 dark:text-zinc-400">Audited</span>
+                                    <span class="font-semibold text-zinc-600 dark:text-zinc-400">Audited</span>
                                     `}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono whitespace-nowrap">
-                                    ${canViewBalances ? (r.has_shortfall ? `<span class="text-rose-600 dark:text-rose-400 font-bold">-$${r.shortfall.toFixed(2)}</span><br><small class="text-indigo-600 dark:text-indigo-400 font-bold">Fee: $${r.transport_charge.toFixed(2)}</small>` : '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Compliant (No Fee)</span>') : (r.has_shortfall ? '<span class="text-amber-600 dark:text-amber-400 font-semibold">Shortfall Flagged</span>' : '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">Compliant</span>')}
+                                    ${canViewBalances ? (r.has_shortfall ? `<span class="text-rose-600 dark:text-rose-400 font-bold">-$${r.shortfall.toFixed(2)}</span><br><small class="text-zinc-700 dark:text-zinc-300 font-bold">Fee: $${r.transport_charge.toFixed(2)}</small>` : '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Compliant (No Fee)</span>') : (r.has_shortfall ? '<span class="text-amber-600 dark:text-amber-400 font-semibold">Shortfall Flagged</span>' : '<span class="text-emerald-600 dark:text-emerald-400 font-semibold">Compliant</span>')}
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-xs text-slate-700 dark:text-zinc-300 whitespace-nowrap">
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-xs text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
                                     ${canViewBalances ? (r.has_shortfall ? `
                                         <span>Customer Paid: <strong class="text-emerald-700 dark:text-emerald-400 font-mono">$${r.amount_charged_to_customer.toFixed(2)}</strong></span><br>
                                         <span>Debt Added: <strong class="text-amber-700 dark:text-amber-400 font-mono">$${r.pending_balance_recorded.toFixed(2)}</strong></span>
-                                    ` : '<span class="text-slate-400 dark:text-zinc-500">Direct Clearance</span>') : '<span class="text-slate-400 dark:text-zinc-500">Accounts Managed</span>'}
+                                    ` : '<span class="text-zinc-400 dark:text-zinc-500">Direct Clearance</span>') : '<span class="text-zinc-400 dark:text-zinc-500">Accounts Managed</span>'}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">${auditBadge}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
@@ -2892,8 +3104,63 @@ function escapeJsAttr(val) {
                                         ${r.status.replace(/_/g, ' ')}
                                     </span>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-slate-500 dark:text-zinc-400 text-[11px] font-mono whitespace-nowrap">${r.created_at}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-500 dark:text-zinc-400 text-[11px] font-mono whitespace-nowrap">${r.created_at}</td>
                             </tr>
+                        `;
+                    }).join('');
+                }
+            }
+            if (apprMobile) {
+                if (records.length === 0) {
+                    apprMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching trip approvals found.</div>';
+                } else {
+                    apprMobile.innerHTML = pagedRecords.map(r => {
+                        let statusBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                        let statusDot = 'bg-blue-500';
+                        if (r.status === 'APPROVED' || r.status === 'DISPATCHED') {
+                            statusBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            statusDot = 'bg-emerald-500';
+                        } else if (r.status === 'SHORTFALL_RECORDED') {
+                            statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                            statusDot = 'bg-amber-500';
+                        }
+
+                        let auditBadge = '<span class="inline-flex items-center gap-1 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Verified Parity</span>';
+                        if (!r.is_clean) {
+                            auditBadge = `<span class="inline-flex items-center gap-1 bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 text-[10px] font-bold px-2 py-0.5 rounded"><span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>Audit Alert (${r.audit_flags.length})</span>`;
+                        }
+
+                        return `
+                            <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.trip_id}</span>
+                                    <div class="flex items-center gap-1.5">
+                                        ${auditBadge}
+                                        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                            <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
+                                            ${r.status.replace(/_/g, ' ')}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div class="font-semibold text-zinc-900 dark:text-zinc-100">${r.salesperson_name}</div>
+                                        <div class="text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">+${r.salesperson_phone}</div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="font-medium text-zinc-900 dark:text-zinc-100">${r.destination_city}</div>
+                                        <div class="text-zinc-500 dark:text-zinc-400 text-[11px]">${r.route}</div>
+                                    </div>
+                                </div>
+                                ${canViewBalances ? `
+                                <div class="bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800/80 grid grid-cols-2 gap-2 text-[11px]">
+                                    <div>Sales: <strong class="font-mono ${r.trip_sales_value >= r.required_minimum ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-900 dark:text-zinc-100'}">$${r.trip_sales_value.toFixed(2)}</strong> <span class="text-zinc-400">(Min: $${r.required_minimum.toFixed(2)})</span></div>
+                                    <div class="text-right">${r.has_shortfall ? `<span class="text-rose-600 dark:text-rose-400 font-bold">Shortfall: -$${r.shortfall.toFixed(2)}</span>` : '<span class="text-emerald-600 dark:text-emerald-400 font-bold">Compliant</span>'}</div>
+                                    <div>Customer Paid: <strong class="font-mono text-zinc-900 dark:text-zinc-100">$${r.amount_charged_to_customer.toFixed(2)}</strong></div>
+                                    <div class="text-right">Debt Added: <strong class="font-mono text-amber-600 dark:text-amber-400">$${r.pending_balance_recorded.toFixed(2)}</strong></div>
+                                </div>
+                                ` : ''}
+                            </div>
                         `;
                     }).join('');
                 }
@@ -2952,9 +3219,10 @@ function escapeJsAttr(val) {
             const pagedTrips = trips.slice(startIndex, startIndex + tripsPageSize);
 
             const tbody = document.getElementById('fleet-trips-table-body');
+            const tripsMobile = document.getElementById('trips-cards-list');
             if (tbody) {
                 if (trips.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No matching trips found in pipeline.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trips found in pipeline.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedTrips.map(t => {
                         const st = (t.status || '').toUpperCase();
@@ -2982,30 +3250,30 @@ function escapeJsAttr(val) {
                         }
 
                         return `
-                            <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                                <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">${t.trip_id}</td>
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${t.trip_id}</td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
                                     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${stageBadge} whitespace-nowrap">
                                         ${stageLabel}
                                     </span>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                    <strong class="text-slate-900 dark:text-zinc-100">${t.salesperson_name}</strong><br>
-                                    <small class="text-slate-400 dark:text-zinc-500 font-mono">+${t.salesperson_phone}</small>
+                                    <strong class="text-zinc-900 dark:text-zinc-100">${t.salesperson_name}</strong><br>
+                                    <small class="text-zinc-400 dark:text-zinc-500 font-mono">+${t.salesperson_phone}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                    <span class="font-bold text-slate-800 dark:text-zinc-200">${t.destination_city}</span><br>
-                                    <small class="text-slate-500 dark:text-zinc-400">${t.route}</small>
+                                    <span class="font-bold text-zinc-800 dark:text-zinc-200">${t.destination_city}</span><br>
+                                    <small class="text-zinc-500 dark:text-zinc-400">${t.route}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                    <strong class="text-slate-900 dark:text-zinc-100">${t.truck_plate}</strong><br>
-                                    <small class="text-slate-500 dark:text-zinc-400">${t.driver_name}</small>
+                                    <strong class="text-zinc-900 dark:text-zinc-100">${t.truck_plate}</strong><br>
+                                    <small class="text-zinc-500 dark:text-zinc-400">${t.driver_name}</small>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap font-mono text-xs">
-                                    <div>Allow: <strong class="text-slate-900 dark:text-zinc-100">$${t.total_allowance.toFixed(2)}</strong></div>
-                                    <div>Transp: <strong class="text-indigo-600 dark:text-indigo-400">$${t.transport_charge.toFixed(2)}</strong></div>
+                                    <div>Allow: <strong class="text-zinc-900 dark:text-zinc-100">$${t.total_allowance.toFixed(2)}</strong></div>
+                                    <div>Transp: <strong class="text-zinc-700 dark:text-zinc-300">$${t.transport_charge.toFixed(2)}</strong></div>
                                 </td>
-                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap text-[11px] text-slate-500 dark:text-zinc-400 font-mono">
+                                <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap text-[11px] text-zinc-500 dark:text-zinc-400 font-mono">
                                     <div>Dep: ${t.departed_at || '--'}</div>
                                     <div>Ret: ${t.returned_at || '--'}</div>
                                 </td>
@@ -3014,6 +3282,71 @@ function escapeJsAttr(val) {
                                     ${t.discrepancy_amount > 0 ? `<br><small class="text-rose-600 dark:text-rose-400 font-bold">Discrepancy: $${t.discrepancy_amount.toFixed(2)}</small>` : ''}
                                 </td>
                             </tr>
+                        `;
+                    }).join('');
+                }
+            }
+            if (tripsMobile) {
+                if (trips.length === 0) {
+                    tripsMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching trips found in pipeline.</div>';
+                } else {
+                    tripsMobile.innerHTML = pagedTrips.map(t => {
+                        const st = (t.status || '').toUpperCase();
+                        let stageBadge = 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-500/30';
+                        let stageLabel = 'Stage 1: Quoted';
+
+                        if (st.includes('APPROVED')) {
+                            stageBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            stageLabel = 'Stage 2: Approved';
+                        } else if (st.includes('VOUCHER') || st.includes('ALLOWANCE')) {
+                            stageBadge = 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-500/30';
+                            stageLabel = 'Stage 3: Voucher Issued';
+                        } else if (st.includes('LOADED') || st.includes('ODOMETER')) {
+                            stageBadge = 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-500/30';
+                            stageLabel = 'Stage 4: Loaded';
+                        } else if (st.includes('IN_TRANSIT') || st.includes('TRANSIT')) {
+                            stageBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                            stageLabel = 'Stage 5: In Transit';
+                        } else if (st.includes('OFFLOADED') || st.includes('POD')) {
+                            stageBadge = 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-200 dark:border-teal-500/30';
+                            stageLabel = 'Stage 6: Offloaded';
+                        } else if (st.includes('SETTLED') || st.includes('CLOSED')) {
+                            stageBadge = 'bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 border-emerald-300 dark:border-emerald-500/40';
+                            stageLabel = 'Stage 7: Settled';
+                        }
+
+                        return `
+                            <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${t.trip_id}</span>
+                                    <span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold border ${stageBadge}">
+                                        ${stageLabel}
+                                    </span>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div class="font-semibold text-zinc-900 dark:text-zinc-100">${t.salesperson_name}</div>
+                                        <div class="text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">+${t.salesperson_phone}</div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="font-medium text-zinc-900 dark:text-zinc-100">${t.destination_city}</div>
+                                        <div class="text-zinc-500 dark:text-zinc-400 text-[11px]">${t.route}</div>
+                                    </div>
+                                </div>
+                                <div class="bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between text-[11px]">
+                                    <div>
+                                        <span class="font-semibold text-zinc-900 dark:text-zinc-100">${t.truck_plate}</span>
+                                        <span class="text-zinc-500 dark:text-zinc-400 ml-1">(${t.driver_name})</span>
+                                    </div>
+                                    <div class="font-mono">
+                                        Allowance: <strong class="text-zinc-900 dark:text-zinc-100">$${t.total_allowance.toFixed(2)}</strong>
+                                    </div>
+                                </div>
+                                <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 font-mono pt-1 border-t border-zinc-100 dark:border-zinc-900">
+                                    <span>Odo: ${t.start_odometer ? t.start_odometer + ' km' : '--'} → ${t.end_odometer ? t.end_odometer + ' km' : '--'}</span>
+                                    <span>${t.departed_at ? 'Dep: ' + t.departed_at : ''}</span>
+                                </div>
+                            </div>
                         `;
                     }).join('');
                 }
@@ -3044,36 +3377,71 @@ function escapeJsAttr(val) {
             const pagedTrucks = trucks.slice(startIndex, startIndex + trucksPageSize);
 
             const tbody = document.getElementById('fleet-trucks-table-body');
+            const trucksMobile = document.getElementById('trucks-cards-list');
             if (tbody) {
                 if (trucks.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No commercial trucks found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No commercial trucks found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedTrucks.map(t => `
-                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                            <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">#${t.truck_number}</td>
-                            <td class="px-4 sm:px-5 py-3.5 font-extrabold text-slate-900 dark:text-zinc-100 whitespace-nowrap">${t.plate_number}</td>
-                            <td class="px-4 sm:px-5 py-3.5 font-medium text-slate-800 dark:text-zinc-200 whitespace-nowrap">${t.model_make}</td>
-                            <td class="px-4 sm:px-5 py-3.5 text-slate-600 dark:text-zinc-300 whitespace-nowrap">${t.body_type}</td>
-                            <td class="px-4 sm:px-5 py-3.5 text-slate-500 dark:text-zinc-400 whitespace-nowrap">${t.home_depot}</td>
+                        <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                            <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">#${t.truck_number}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${t.plate_number}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${t.model_make}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-zinc-600 dark:text-zinc-300 whitespace-nowrap">${t.body_type}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-zinc-500 dark:text-zinc-400 whitespace-nowrap">${t.home_depot}</td>
                             <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
                                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${t.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30'}">
                                     <span class="w-1.5 h-1.5 rounded-full ${t.active ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
-                                    ${t.active ? 'Commercial Ready' : 'Maintenance'}
+                                    ${t.active ? 'Ready' : 'Maintenance'}
                                 </span>
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">
                                 <div class="inline-flex items-center gap-1.5 justify-end">
-                                    <button onclick="openAddTruckModal('${t.truck_id}', '${t.truck_number}', '${t.plate_number}', '${escapeJsAttr(t.model_make)}', '${t.body_type}', '${escapeJsAttr(t.home_depot)}', ${t.active})" class="text-blue-600 hover:text-blue-800 dark:hover:text-blue-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900/60 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition cursor-pointer">
+                                    <button onclick="openAddTruckModal('${t.truck_id}', '${t.truck_number}', '${t.plate_number}', '${escapeJsAttr(t.model_make)}', '${t.body_type}', '${escapeJsAttr(t.home_depot)}', ${t.active})" class="px-2.5 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">
                                         Edit
                                     </button>
                                     ${hasPermission('manage_trucks') ? `
-                                        <button onclick="deleteTruck('${t.truck_id}', '${t.truck_number}')" class="text-rose-600 hover:text-rose-800 dark:hover:text-rose-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer">
+                                        <button onclick="deleteTruck('${t.truck_id}', '${t.truck_number}')" class="px-2.5 py-1 rounded-md text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer">
                                             Delete
                                         </button>
                                     ` : ''}
                                 </div>
                             </td>
                         </tr>
+                    `).join('');
+                }
+            }
+            if (trucksMobile) {
+                if (trucks.length === 0) {
+                    trucksMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No commercial trucks found.</div>';
+                } else {
+                    trucksMobile.innerHTML = pagedTrucks.map(t => `
+                        <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">#${t.truck_number} • <span class="font-sans font-bold">${t.plate_number}</span></span>
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${t.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30'}">
+                                    <span class="w-1.5 h-1.5 rounded-full ${t.active ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
+                                    ${t.active ? 'Ready' : 'Maintenance'}
+                                </span>
+                            </div>
+                            <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+                                <span>Model: <strong class="text-zinc-800 dark:text-zinc-200">${t.model_make}</strong></span>
+                                <span>Body: <strong class="text-zinc-800 dark:text-zinc-200">${t.body_type}</strong></span>
+                            </div>
+                            <div class="flex items-center justify-between text-[11px] pt-2 border-t border-zinc-100 dark:border-zinc-900">
+                                <span class="text-zinc-500 dark:text-zinc-400">Depot: ${t.home_depot}</span>
+                                <div class="flex items-center gap-1.5">
+                                    <button onclick="openAddTruckModal('${t.truck_id}', '${t.truck_number}', '${t.plate_number}', '${escapeJsAttr(t.model_make)}', '${t.body_type}', '${escapeJsAttr(t.home_depot)}', ${t.active})" class="px-2.5 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+                                        Edit
+                                    </button>
+                                    ${hasPermission('manage_trucks') ? `
+                                    <button onclick="deleteTruck('${t.truck_id}', '${t.truck_number}')" class="px-2.5 py-1 rounded-md text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer">
+                                        Delete
+                                    </button>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        </div>
                     `).join('');
                 }
             }
@@ -3101,16 +3469,17 @@ function escapeJsAttr(val) {
             const pagedDrivers = drivers.slice(startIndex, startIndex + driversPageSize);
 
             const tbody = document.getElementById('fleet-drivers-table-body');
+            const driversMobile = document.getElementById('drivers-cards-list');
             if (tbody) {
                 if (drivers.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No drivers found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No drivers found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedDrivers.map(d => `
-                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                            <td class="px-4 sm:px-5 py-3.5 font-mono text-xs text-slate-500 dark:text-zinc-400 whitespace-nowrap">#WD-${d.staff_id}</td>
-                            <td class="px-4 sm:px-5 py-3.5 font-extrabold text-slate-900 dark:text-zinc-100 whitespace-nowrap">${d.full_name}</td>
-                            <td class="px-4 sm:px-5 py-3.5 font-mono text-blue-600 dark:text-blue-400 whitespace-nowrap">+${d.phone}</td>
-                            <td class="px-4 sm:px-5 py-3.5 text-xs font-semibold text-slate-700 dark:text-zinc-300 whitespace-nowrap">${d.role}</td>
+                        <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">#WD-${d.staff_id}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${d.full_name}</td>
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-zinc-700 dark:text-zinc-300 whitespace-nowrap">+${d.phone}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 whitespace-nowrap">${d.role}</td>
                             <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
                                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${d.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30' : 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-200'}">
                                     <span class="w-1.5 h-1.5 rounded-full ${d.active ? 'bg-emerald-500' : 'bg-zinc-400'}"></span>
@@ -3118,11 +3487,40 @@ function escapeJsAttr(val) {
                                 </span>
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 text-right whitespace-nowrap">
-                                <button onclick="openAddDriverModal('${d.staff_id}', '${escapeJsAttr(d.full_name)}', '${d.phone}', '${d.role}', ${d.active})" class="text-purple-600 hover:text-purple-800 dark:hover:text-purple-400 font-bold text-xs px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-900/60 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition cursor-pointer">
+                                <button onclick="openAddDriverModal('${d.staff_id}', '${escapeJsAttr(d.full_name)}', '${d.phone}', '${d.role}', ${d.active})" class="px-2.5 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">
                                     Edit
                                 </button>
                             </td>
                         </tr>
+                    `).join('');
+                }
+            }
+            if (driversMobile) {
+                if (drivers.length === 0) {
+                    driversMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No drivers found.</div>';
+                } else {
+                    driversMobile.innerHTML = pagedDrivers.map(d => `
+                        <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                            <div class="flex items-center justify-between gap-2">
+                                <div>
+                                    <span class="font-bold text-zinc-900 dark:text-zinc-100">${d.full_name}</span>
+                                    <span class="font-mono text-zinc-400 dark:text-zinc-500 text-[11px] ml-1.5">#WD-${d.staff_id}</span>
+                                </div>
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${d.active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30' : 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-200'}">
+                                    <span class="w-1.5 h-1.5 rounded-full ${d.active ? 'bg-emerald-500' : 'bg-zinc-400'}"></span>
+                                    ${d.active ? 'On Roster' : 'Off Duty'}
+                                </span>
+                            </div>
+                            <div class="flex items-center justify-between text-[11px]">
+                                <span class="font-mono text-zinc-600 dark:text-zinc-300">+${d.phone}</span>
+                                <span class="text-zinc-500 dark:text-zinc-400">${d.role}</span>
+                            </div>
+                            <div class="flex justify-end pt-2 border-t border-zinc-100 dark:border-zinc-900">
+                                <button onclick="openAddDriverModal('${d.staff_id}', '${escapeJsAttr(d.full_name)}', '${d.phone}', '${d.role}', ${d.active})" class="px-2.5 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+                                    Edit
+                                </button>
+                            </div>
+                        </div>
                     `).join('');
                 }
             }
@@ -3152,32 +3550,53 @@ function escapeJsAttr(val) {
             const pagedPayments = payments.slice(startIndex, startIndex + paymentsPageSize);
 
             const tbody = document.getElementById('fleet-payments-table-body');
+            const payMobile = document.getElementById('payments-cards-list');
             if (tbody) {
                 if (payments.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-6 text-center text-slate-400 dark:text-zinc-500 font-medium">No payment clearances recorded yet.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No payment clearances recorded yet.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedPayments.map(p => `
-                        <tr class="hover:bg-slate-50/80 dark:hover:bg-[#121218] transition">
-                            <td class="px-4 sm:px-5 py-3.5 font-mono text-[11px] text-slate-500 dark:text-zinc-400 whitespace-nowrap">${p.payment_date}</td>
+                        <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                            <td class="px-4 sm:px-5 py-3.5 font-mono text-[11px] text-zinc-500 dark:text-zinc-400 whitespace-nowrap">${p.payment_date}</td>
                             <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                <strong class="text-slate-900 dark:text-zinc-100">${p.salesperson_name}</strong><br>
-                                <small class="text-slate-400 dark:text-zinc-500 font-mono">+${p.salesperson_phone}</small>
+                                <strong class="text-zinc-900 dark:text-zinc-100">${p.salesperson_name}</strong><br>
+                                <small class="text-zinc-400 dark:text-zinc-500 font-mono">+${p.salesperson_phone}</small>
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 font-mono font-bold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
                                 +$${p.cleared_amount.toFixed(2)}
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 whitespace-nowrap">
-                                <span class="bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 text-[10px] font-bold px-2 py-0.5 rounded">
+                                <span class="bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 text-[10px] font-bold px-2 py-0.5 rounded">
                                     ${p.payment_method}
                                 </span>
-                                <div class="text-[11px] font-mono text-slate-500 dark:text-zinc-400 mt-0.5">Ref: ${p.reference_number}</div>
+                                <div class="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 mt-0.5">Ref: ${p.reference_number}</div>
                             </td>
                             <td class="px-4 sm:px-5 py-3.5 font-mono text-xs whitespace-nowrap">
-                                <span class="text-slate-400">$${p.previous_balance.toFixed(2)}</span> → <strong class="text-slate-900 dark:text-zinc-100">$${p.remaining_balance.toFixed(2)}</strong>
+                                <span class="text-zinc-400">$${p.previous_balance.toFixed(2)}</span> → <strong class="text-zinc-900 dark:text-zinc-100">$${p.remaining_balance.toFixed(2)}</strong>
                             </td>
-                            <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-700 dark:text-zinc-300 whitespace-nowrap">${p.recorded_by}</td>
-                            <td class="px-4 sm:px-5 py-3.5 text-xs text-slate-600 dark:text-zinc-300">${p.remarks || '--'}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs text-zinc-700 dark:text-zinc-300 whitespace-nowrap">${p.recorded_by}</td>
+                            <td class="px-4 sm:px-5 py-3.5 text-xs text-zinc-600 dark:text-zinc-300">${p.remarks || '--'}</td>
                         </tr>
+                    `).join('');
+                }
+            }
+            if (payMobile) {
+                if (payments.length === 0) {
+                    payMobile.innerHTML = '<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No payment clearances recorded yet.</div>';
+                } else {
+                    payMobile.innerHTML = pagedPayments.map(p => `
+                        <div class="p-4 space-y-2 text-xs bg-white dark:bg-zinc-950">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="font-semibold text-zinc-900 dark:text-zinc-100">${p.salesperson_name}</span>
+                                <span class="font-mono font-bold text-emerald-600 dark:text-emerald-400">+$${Number(p.cleared_amount || 0).toFixed(2)}</span>
+                            </div>
+                            <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+                                <span class="font-mono">${p.payment_date || p.created_at}</span>
+                                <span>${p.payment_method} • Ref: <span class="font-mono">${p.reference_number || '--'}</span></span>
+                            </div>
+                            ${p.remarks ? `<div class="text-[11px] text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-900/50 p-2 rounded">${p.remarks}</div>` : ''}
+                            <div class="text-[10px] text-zinc-400 text-right">Recorded by: ${p.recorded_by}</div>
+                        </div>
                     `).join('');
                 }
             }
@@ -3291,9 +3710,9 @@ function escapeJsAttr(val) {
             tbody.innerHTML = filtered.map(c => {
                 const cityName = c.city_name || c.key || '--';
                 const distVal = Number(c.distance_km);
-                const distDisplay = (distVal && distVal > 0)
-                    ? `${distVal.toFixed(0)} km`
-                    : '<span class="text-slate-400 dark:text-zinc-500 italic text-[11px]">Not configured</span>';
+                const distDisplay = (!isNaN(distVal) && distVal >= 0)
+                    ? (distVal === 0 ? '0 km (Hub Base)' : `${distVal.toFixed(0)} km`)
+                    : '<span class="text-zinc-400 dark:text-zinc-500 italic text-[11px]">Pending</span>';
 
                 return `
                 <tr class="hover:bg-slate-50 dark:hover:bg-[#16161e] transition">
@@ -3314,10 +3733,10 @@ function escapeJsAttr(val) {
                     </td>
                     <td class="px-4 py-2.5 text-right">
                         ${canEditCity ? `
-                        <button onclick="saveCityMin('${c.key}')" id="btn-save-${c.key}" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer">
+                        <button onclick="saveCityMin('${c.key}')" id="btn-save-${c.key}" class="px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-zinc-50 dark:bg-zinc-100 dark:hover:bg-zinc-200 dark:text-zinc-900 transition shadow-xs cursor-pointer">
                             Save
                         </button>
-                        ` : '<span class="text-slate-400 text-[11px] font-medium">Read-Only</span>'}
+                        ` : '<span class="text-zinc-400 text-xs font-medium">Read-Only</span>'}
                     </td>
                 </tr>
                 `;
@@ -3341,7 +3760,7 @@ function escapeJsAttr(val) {
             }
 
             btn.disabled = true;
-            btn.innerHTML = '⏳ Recalculating 45 Cities...';
+            btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Recalculating 45 Cities...';
             if (feedback) feedback.classList.add('hidden');
 
             try {
@@ -3354,7 +3773,7 @@ function escapeJsAttr(val) {
                 if (res.ok) {
                     showToast(`Fuel price updated to $${newPrice.toFixed(2)}/L and 45 cities recalculated!`);
                     if (feedback) {
-                        feedback.textContent = `✅ Successfully recalculated all 45 cities based on $${newPrice.toFixed(2)}/L fuel rate`;
+                        feedback.textContent = `Successfully recalculated all 45 cities based on $${newPrice.toFixed(2)}/L fuel rate`;
                         feedback.className = 'mt-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 block';
                     }
                     await fetchDashboard();
@@ -3365,7 +3784,7 @@ function escapeJsAttr(val) {
                 alert('Network error while updating fuel price: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<span>💾</span> Save & Recalculate 45 Cities';
+                btn.innerHTML = 'Save & Recalculate 45 Cities';
             }
         }
 
@@ -3391,11 +3810,11 @@ function escapeJsAttr(val) {
                     body: JSON.stringify({ city_key: cityKey, min_sales: minSales, van_min: vanMin })
                 });
                 if (res.ok) {
-                    btn.textContent = '✅ Saved';
-                    btn.className = 'bg-emerald-600 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs';
+                    btn.textContent = 'Saved';
+                    btn.className = 'bg-emerald-600 text-white font-medium px-2.5 py-1 rounded-md text-xs transition shadow-xs';
                     setTimeout(() => {
                         btn.textContent = 'Save';
-                        btn.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1 rounded-lg text-[11px] transition shadow-xs cursor-pointer';
+                        btn.className = 'px-2.5 py-1 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 text-zinc-50 dark:bg-zinc-100 dark:hover:bg-zinc-200 dark:text-zinc-900 transition shadow-xs cursor-pointer';
                         btn.disabled = false;
                     }, 2000);
                     showToast(`Updated threshold for ${cityKey.toUpperCase()}!`);
@@ -3505,25 +3924,34 @@ function escapeJsAttr(val) {
             const btn = document.getElementById('modal-submit-pay-btn');
             const feedback = document.getElementById('modal-pay-feedback');
 
-            if (!selectEl.value) {
-                alert('Please select a sales representative.');
+            if (!selectEl || !selectEl.value) {
+                if (feedback) {
+                    feedback.textContent = 'Please select a sales representative.';
+                    feedback.className = 'text-xs font-semibold text-rose-600 dark:text-rose-400 block';
+                }
+                showToast('Please select a sales representative.', 'warning');
                 return;
             }
-            const amt = parseFloat(amountInput.value);
+            const amt = amountInput ? parseFloat(amountInput.value) : 0;
             if (isNaN(amt) || amt <= 0) {
-                alert('Please enter a valid amount greater than $0.00');
+                if (feedback) {
+                    feedback.textContent = 'Please enter a valid clearance amount greater than $0.00.';
+                    feedback.className = 'text-xs font-semibold text-rose-600 dark:text-rose-400 block';
+                }
+                showToast('Please enter a valid clearance amount greater than $0.00.', 'warning');
                 return;
             }
 
             const selectedOption = selectEl.options[selectEl.selectedIndex];
             const repPhone = selectEl.value;
-            const repName = selectedOption.dataset.name || 'Sales Rep';
-            const method = methodSelect.value;
-            const ref = (refInput.value || '').trim();
-            const remarks = (remarksInput.value || '').trim();
+            const repName = selectedOption.dataset.name || (selectedOption.text ? selectedOption.text.split(' ($')[0] : 'Sales Rep');
+            const method = methodSelect ? methodSelect.value : 'CASH';
+            const ref = refInput ? (refInput.value || '').trim() : '';
+            const remarks = remarksInput ? (remarksInput.value || '').trim() : '';
 
             btn.disabled = true;
-            btn.innerHTML = '⏳ Processing Clearance...';
+            btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Processing Clearance...';
+            if (feedback) feedback.classList.add('hidden');
 
             try {
                 const res = await fetch('/api/v2/finance/clear-sales-rep-payment', {
@@ -3540,22 +3968,30 @@ function escapeJsAttr(val) {
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast(`Successfully cleared $${amt.toFixed(2)} for ${repName}!`);
+                    const successMsg = method === 'DEBT_WRITE_OFF'
+                        ? `Approved debt write-off/waiver of $${amt.toFixed(2)} for ${repName}!`
+                        : `Successfully cleared $${amt.toFixed(2)} for ${repName}!`;
+                    showToast(successMsg, 'success');
                     closeClearPaymentModal();
                     await fetchDashboard();
                 } else {
+                    const errMsg = data.detail || 'Error clearing payment';
                     if (feedback) {
-                        feedback.textContent = data.detail || 'Error clearing payment';
-                        feedback.className = 'text-xs font-bold text-rose-600 block';
-                    } else {
-                        alert(data.detail || 'Error clearing payment');
+                        feedback.textContent = errMsg;
+                        feedback.className = 'text-xs font-semibold text-rose-600 dark:text-rose-400 block';
                     }
+                    showToast(errMsg, 'error');
                 }
             } catch (err) {
-                alert('Network error while recording payment: ' + err.message);
+                const netErr = 'Network error while recording clearance: ' + err.message;
+                if (feedback) {
+                    feedback.textContent = netErr;
+                    feedback.className = 'text-xs font-semibold text-rose-600 dark:text-rose-400 block';
+                }
+                showToast(netErr, 'error');
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<span>✅</span> Confirm Debt Clearance';
+                btn.innerHTML = 'Record Payment';
             }
         }
 
@@ -3648,7 +4084,7 @@ function escapeJsAttr(val) {
             }
 
             btn.disabled = true;
-            btn.innerHTML = '⏳ Saving Rates...';
+            btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Saving Rates...';
             if (feedback) feedback.classList.add('hidden');
 
             try {
@@ -3666,7 +4102,7 @@ function escapeJsAttr(val) {
                 if (res.ok) {
                     showToast('Operational rates updated successfully!');
                     if (feedback) {
-                        feedback.textContent = '✅ Operational allowances and parameters updated in system cache';
+                        feedback.textContent = 'Operational allowances and parameters updated in system cache';
                         feedback.className = 'mt-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 block';
                     }
                     await fetchDashboard();
@@ -3677,7 +4113,7 @@ function escapeJsAttr(val) {
                 alert('Network error while updating operational rates: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<span>💾</span> Save Rates & Surcharges';
+                btn.innerHTML = 'Save Rates & Surcharges';
             }
         }
 
@@ -3725,7 +4161,7 @@ function escapeJsAttr(val) {
             }
 
             btn.disabled = true;
-            btn.innerHTML = '⏳ Saving Truck...';
+            btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Saving Truck...';
 
             try {
                 const res = await fetch('/api/v2/fleet/trucks/save', {

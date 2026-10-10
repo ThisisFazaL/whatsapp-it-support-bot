@@ -103,12 +103,29 @@ def get_van_minimum_surcharge() -> float:
 
 def get_cached_city_rule(city_key: str) -> Optional[Dict[str, Any]]:
     """Returns cached route rule for a city key."""
+    if not ROUTE_RULES_CACHE:
+        get_all_cached_city_rules()
     clean = (city_key or "").strip().lower()
     return ROUTE_RULES_CACHE.get(clean)
 
 
 def get_all_cached_city_rules() -> List[Dict[str, Any]]:
     """Returns all cached route rules as a list."""
+    if not ROUTE_RULES_CACHE:
+        from app.services.trip_pricing_service import CITY_MINIMUMS
+        for city_key, data in CITY_MINIMUMS.items():
+            ROUTE_RULES_CACHE[city_key.lower()] = {
+                "id": None,
+                "city_key": city_key.lower(),
+                "city_name": city_key.title(),
+                "corridor": data.get("corridor", "General"),
+                "route": data.get("route", data.get("corridor", "General")),
+                "distance_km": float(data.get("distance_km", 0.0)),
+                "min_sales": float(data.get("min_sales", 0.0)),
+                "van_min": float(data.get("van_min", 0.0)),
+                "is_active": True,
+                "updated_at": ""
+            }
     return list(ROUTE_RULES_CACHE.values())
 
 
@@ -155,13 +172,19 @@ async def load_settings_into_cache(session: AsyncSession):
         res_rules = await session.execute(stmt_rules)
         rules = res_rules.scalars().all()
         for r in rules:
+            dist = r.distance_km
+            if not dist or dist <= 0:
+                from app.services.trip_pricing_service import CITY_MINIMUMS
+                fallback_entry = CITY_MINIMUMS.get(r.city_key.lower(), {})
+                dist = fallback_entry.get("distance_km", 0.0)
+
             ROUTE_RULES_CACHE[r.city_key.lower()] = {
                 "id": r.id,
                 "city_key": r.city_key.lower(),
                 "city_name": r.city_name,
                 "corridor": r.corridor_name,
                 "route": r.route_label or r.corridor_name,
-                "distance_km": r.distance_km,
+                "distance_km": dist,
                 "min_sales": r.min_sales,
                 "van_min": r.van_min,
                 "is_active": r.is_active,
@@ -456,7 +479,7 @@ async def seed_config_and_routes(session: AsyncSession):
                 city_name=city_key.title(),
                 corridor_name=data.get("corridor", "General"),
                 route_label=data.get("route", ""),
-                distance_km=0.0,
+                distance_km=float(data.get("distance_km", 0.0)),
                 min_sales=float(data.get("min_sales", 0.0)),
                 van_min=float(data.get("van_min", 0.0)),
                 is_active=True,
