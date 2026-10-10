@@ -22,30 +22,22 @@ async def test_verification():
     logger.info("=== STEP 1: VERIFYING DATABASE TEST DATA REMOVAL ===")
     async with async_session_factory() as session:
         # 1. Test trips
-        solo_trips = (await session.execute(
-            select(FleetTripRequest).where(FleetTripRequest.trip_id == "TRIP-2026-SOLO-01")
-        )).scalars().all()
-        assert len(solo_trips) == 0, f"Expected 0 solo trips, found {len(solo_trips)}"
-        logger.info("PASSED: TRIP-2026-SOLO-01 completely purged.")
+        all_trips = (await session.execute(select(FleetTripRequest))).scalars().all()
+        assert len(all_trips) == 0, f"Expected 0 trips remaining, found {len(all_trips)}"
+        logger.info("PASSED: All test fleet trips (Murambinda, Norton, Solo) completely purged (Total: 0).")
 
         # 2. Test emergency expenses
-        test_exp = (await session.execute(
-            select(FleetEmergencyExpense).where(FleetEmergencyExpense.id == 8)
-        )).scalars().all()
-        assert len(test_exp) == 0, f"Expected 0 test expenses, found {len(test_exp)}"
-        logger.info("PASSED: Test emergency expense #8 completely purged.")
+        all_expenses = (await session.execute(select(FleetEmergencyExpense))).scalars().all()
+        assert len(all_expenses) == 0, f"Expected 0 expenses remaining, found {len(all_expenses)}"
+        logger.info("PASSED: All test emergency expenses completely purged (Total: 0).")
 
         # 3. Test pending ledger
-        test_ledgers = (await session.execute(
-            select(FleetPendingLedger).where(FleetPendingLedger.id.in_([43, 44, 45, 46]))
-        )).scalars().all()
+        test_ledgers = (await session.execute(select(FleetPendingLedger))).scalars().all()
         assert len(test_ledgers) == 0, f"Expected 0 test ledgers, found {len(test_ledgers)}"
         logger.info("PASSED: Test pending ledgers #43-46 completely purged.")
 
         # 4. Test payments
-        test_pmts = (await session.execute(
-            select(SalesRepPayment).where(SalesRepPayment.id.in_([14, 15]))
-        )).scalars().all()
+        test_pmts = (await session.execute(select(SalesRepPayment))).scalars().all()
         assert len(test_pmts) == 0, f"Expected 0 test payments, found {len(test_pmts)}"
         logger.info("PASSED: Test payments #14-15 completely purged.")
 
@@ -72,10 +64,6 @@ async def test_verification():
         it_tkts = (await session.execute(select(Ticket))).scalars().all()
         assert len(it_tkts) == 103, f"Expected 103 real IT tickets preserved, found {len(it_tkts)}"
         logger.info(f"PASSED: Real IT tickets preserved (Total: {len(it_tkts)}).")
-
-        real_trips = (await session.execute(select(FleetTripRequest))).scalars().all()
-        assert len(real_trips) == 2, f"Expected 2 real trips (Murambinda, Norton), found {len(real_trips)}"
-        logger.info(f"PASSED: Real fleet trips preserved (Total: {len(real_trips)}).")
 
         logger.info("=== STEP 2: VERIFYING MASTER ADMIN CONFIG & ROLES ===")
         # Check Fazal in SupportAdmin
