@@ -39,7 +39,7 @@ def get_solo_test_mode() -> bool:
     global SOLO_TEST_OVERRIDE
     if SOLO_TEST_OVERRIDE is not None:
         return SOLO_TEST_OVERRIDE
-    return getattr(settings, "solo_test_mode", True)
+    return getattr(settings, "solo_test_mode", False)
 
 
 def set_solo_test_mode(enabled: bool):
@@ -84,7 +84,7 @@ def get_effective_tester_role(phone: str) -> str:
     if clean_phone == master_phone:
         if clean_phone in SESSION_ROLE_OVERRIDES:
             return SESSION_ROLE_OVERRIDES[clean_phone].upper()
-        return getattr(settings, "test_user_role", "SALES").upper()
+        return getattr(settings, "test_user_role", "MASTER_ADMIN").upper()
 
     return "STANDARD"
 

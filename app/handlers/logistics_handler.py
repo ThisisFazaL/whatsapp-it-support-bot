@@ -27,9 +27,8 @@ def is_edward(phone: str) -> bool:
         return True
     cp = clean_phone(phone)
     edw = clean_phone(settings.edward_phone)
-    master = clean_phone(settings.master_admin_phone)
     fleet_admin = clean_phone(settings.fleet_admin_phone)
-    return cp in {edw, master, fleet_admin}
+    return cp in {edw, fleet_admin}
 
 
 async def resolve_truck_from_db(session: AsyncSession, query: str):

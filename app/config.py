@@ -14,9 +14,8 @@ class Settings(BaseSettings):
     # Master Admin & Role Override Configuration
     master_admin_phone: str = "919265368695"
     fleet_admin_phone: str = "263718352518"  # Sujit (+263 71 835 2518) receives all sales fleet activity alerts
-    test_user_role: str = "SALES"  # Set to "SALES" to test Fleet Approval in solo mode
-    solo_test_mode: bool = True  # Enabled: 1-person end-to-end sandbox testing routed to master_admin_phone
-
+    test_user_role: str = "MASTER_ADMIN"  # Strictly Master Admin only
+    solo_test_mode: bool = False  # Live production mode
 
     # Fleet Subsystem Roles & Operational Phones
     zayn_phone: str = "263713866223"  # Zayn (+263 71 386 6223) Logistics Manager
@@ -25,7 +24,7 @@ class Settings(BaseSettings):
     sales_admin_lg_phone: str = "263787381215"  # Onelly Madziro (LG Plast Sales Admin)
     sales_admin_lg_backup_phone: str = "263718174894"  # Mazviita Sibongile Ruzvidzo (LG Plast Sales Admin)
     sales_admin_kreckle_phone: str = "263780216289"  # Everjoy Tias (Kreckle Sales Admin)
-    accounts_phones: list = ["263780100288", "263788068567", "919265368695"]  # Vigilance Bangezhano, Munashe Milca & Fazal Saiyed (Solo Mode)
+    accounts_phones: list = ["263780100288", "263788068567"]  # Vigilance Bangezhano & Munashe Milca
     logistics_manager_phone: str = "263713866223"  # Zayn (+263 71 386 6223) Logistics Manager
     panashe_phone: str = "263777261203"  # Panashe Mutamangira (+263 77 726 1203) Logistics Assistant
     panashe_phones: list = ["263777261203", "263785322640"]  # Panashe Mutamangira primary and secondary
