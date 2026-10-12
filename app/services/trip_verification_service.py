@@ -28,11 +28,10 @@ class TripVerificationService:
         self.api_service = favlogix_api_service
         self.browser_service = FavlogixBrowserService()
 
-    async def verify_trip(self, trip_id: str, company_name: Optional[str] = None) -> Dict[str, Any]:
+    async def fetch_raw_trip_data(self, trip_id: str, company_name: Optional[str] = None) -> Dict[str, Any]:
         """
-        Extracts trip valuation and executes pricing verification.
-        Prioritizes direct background HTTP API (Option 1 - Headless).
-        Falls back to local browser automation or remote bridge only if API is disabled or fails.
+        Extracts raw trip valuation and customer orders from Favlogix ERP (API or browser/bridge).
+        Returns {'success': True, 'raw_data': raw_trip_data} or {'success': False, 'error': error_msg}.
         """
         raw_trip_data = None
         error_reason = None
@@ -96,21 +95,40 @@ class TripVerificationService:
                 "error": error_reason or "Failed to retrieve trip data from Favlogix."
             }
 
-        # 3. Calculate minimum sales and 4% transport charge
+        return {
+            "success": True,
+            "trip_id": raw_trip_data.get("trip_id", trip_id),
+            "raw_data": raw_trip_data
+        }
+
+    def calculate_for_raw_trip(
+        self,
+        raw_trip_data: Dict[str, Any],
+        origin_warehouse: str = "Harare",
+        company_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Calculates minimum sales, road distance, and shortfall based on chosen departure warehouse.
+        """
         amount = raw_trip_data.get("total_amount", 0.0)
         destination = raw_trip_data.get("destination_city", "Bulawayo")
         customers = raw_trip_data.get("customers", [])
         order_count = raw_trip_data.get("order_count", len(customers))
+        trip_id = raw_trip_data.get("trip_id", "")
 
         try:
-            pricing = calculate_trip_approval(actual_sales=amount, destination=destination)
+            pricing = calculate_trip_approval(actual_sales=amount, destination=destination, origin_warehouse=origin_warehouse)
             return {
                 "success": True,
-                "trip_id": raw_trip_data.get("trip_id", trip_id),
+                "trip_id": trip_id,
                 "company_name": raw_trip_data.get("company_name", company_name or ""),
+                "origin_warehouse": pricing.get("origin_warehouse", origin_warehouse),
+                "distance_km": pricing.get("distance_km", 0.0),
                 "total_amount": pricing["trip_value"],
                 "destination_city": pricing["city"],
                 "route": pricing["route"],
+                "corridor": pricing.get("corridor"),
+                "corridor_name": pricing.get("corridor_name"),
                 "required_minimum": pricing["required_minimum"],
                 "shortfall": pricing["shortfall"],
                 "transport_charge": pricing["transport_charge"],
@@ -120,14 +138,19 @@ class TripVerificationService:
             }
         except CityNotFoundError:
             # Fallback to general city rule
-            fallback_pricing = calculate_trip_approval(actual_sales=amount, destination="Bulawayo")
+            fallback_dest = "Harare" if origin_warehouse == "Masvingo" else "Bulawayo"
+            fallback_pricing = calculate_trip_approval(actual_sales=amount, destination=fallback_dest, origin_warehouse=origin_warehouse)
             return {
                 "success": True,
-                "trip_id": raw_trip_data.get("trip_id", trip_id),
+                "trip_id": trip_id,
                 "company_name": raw_trip_data.get("company_name", company_name or ""),
+                "origin_warehouse": origin_warehouse,
+                "distance_km": fallback_pricing.get("distance_km", 0.0),
                 "total_amount": amount,
                 "destination_city": destination,
-                "route": "Custom Destination",
+                "route": f"Custom Destination ({destination})",
+                "corridor": fallback_pricing.get("corridor"),
+                "corridor_name": fallback_pricing.get("corridor_name"),
                 "required_minimum": fallback_pricing["required_minimum"],
                 "shortfall": fallback_pricing["shortfall"],
                 "transport_charge": fallback_pricing["transport_charge"],
@@ -135,6 +158,20 @@ class TripVerificationService:
                 "customers": customers,
                 "order_count": order_count
             }
+
+    async def verify_trip(
+        self,
+        trip_id: str,
+        company_name: Optional[str] = None,
+        origin_warehouse: str = "Harare"
+    ) -> Dict[str, Any]:
+        """
+        Coordinates raw Favlogix data extraction and Zimbabwe pricing calculations for specified warehouse.
+        """
+        fetch_res = await self.fetch_raw_trip_data(trip_id, company_name=company_name)
+        if not fetch_res.get("success"):
+            return fetch_res
+        return self.calculate_for_raw_trip(fetch_res["raw_data"], origin_warehouse=origin_warehouse, company_name=company_name)
 
     async def verify_transport_charge_id(self, tc_id: str, required_amount: float = 0.0) -> Dict[str, Any]:
         """

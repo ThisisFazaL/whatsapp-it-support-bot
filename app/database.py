@@ -190,6 +190,7 @@ class FleetTripApproval(Base):
     __tablename__ = "fleet_trip_approvals"
     id = Column(Integer, primary_key=True, autoincrement=True)
     trip_id = Column(String(100), nullable=False, index=True)
+    origin_warehouse = Column(String(50), nullable=True, default="Harare")
     salesperson_phone = Column(String(30), nullable=False, index=True)
     salesperson_name = Column(String(100), nullable=True)
     destination_city = Column(String(100), nullable=False)
@@ -222,6 +223,7 @@ class FleetTripRequest(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     trip_id = Column(String(100), unique=True, nullable=False, index=True)
     company_name = Column(String(100), nullable=False)  # "A. TG Hardware", "B. LG Plast", "C. Kreckle"
+    origin_warehouse = Column(String(50), nullable=True, default="Harare")
     sales_admin_phone = Column(String(30), nullable=True, index=True)
     salesperson_phone = Column(String(30), nullable=False, index=True)
     salesperson_name = Column(String(100), nullable=True)
@@ -519,6 +521,14 @@ async def init_db_models():
                     await conn.execute(text("ALTER TABLE web_users ADD COLUMN company VARCHAR(100)"))
                 except Exception:
                     pass
+                try:
+                    await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE fleet_trip_requests ADD COLUMN origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Schema verification note: {e}")
     else:
@@ -542,6 +552,7 @@ async def init_db_models():
                         dispatch_option VARCHAR(50),
                         has_shortfall BOOLEAN DEFAULT FALSE,
                         status VARCHAR(50) DEFAULT 'SHORTFALL_RECORDED',
+                        origin_warehouse VARCHAR(50) DEFAULT 'Harare',
                         raw_data JSONB,
                         created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
                     )
@@ -551,6 +562,7 @@ async def init_db_models():
                 await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS amount_charged_to_customer DOUBLE PRECISION DEFAULT 0.0"))
                 await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS pending_balance_recorded DOUBLE PRECISION DEFAULT 0.0"))
                 await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS dispatch_option VARCHAR(50)"))
+                await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
 
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS fleet_pending_ledger (
@@ -663,6 +675,7 @@ async def init_db_models():
                         discrepancy_amount DOUBLE PRECISION DEFAULT 0.0,
                         discrepancy_reason TEXT,
                         reimbursement_status VARCHAR(50) DEFAULT 'NONE',
+                        origin_warehouse VARCHAR(50) DEFAULT 'Harare',
                         created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc'),
                         updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
                     )
@@ -670,6 +683,7 @@ async def init_db_models():
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ftr_trip_id ON fleet_trip_requests(trip_id)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ftr_driver_phone ON fleet_trip_requests(driver_phone)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ftr_status ON fleet_trip_requests(status)"))
+                await conn.execute(text("ALTER TABLE fleet_trip_requests ADD COLUMN IF NOT EXISTS origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
 
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS fleet_customer_schedules (
@@ -843,6 +857,14 @@ async def init_db_models():
                 await conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS permission_used VARCHAR(100)"))
                 try:
                     await conn.execute(text("ALTER TABLE web_users ADD COLUMN company VARCHAR(100)"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE fleet_trip_approvals ADD COLUMN IF NOT EXISTS origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE fleet_trip_requests ADD COLUMN IF NOT EXISTS origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
                 except Exception:
                     pass
         except Exception as e:
@@ -1269,7 +1291,8 @@ async def create_or_update_fleet_trip_request(
     sales_admin_phone: Optional[str] = None,
     route: Optional[str] = None,
     trip_sales_value: float = 0.0,
-    transport_charge: float = 0.0
+    transport_charge: float = 0.0,
+    origin_warehouse: str = "Harare"
 ) -> FleetTripRequest:
     """Creates or updates a FleetTripRequest for a sales rep."""
     clean_sales_phone = salesperson_phone.replace("+", "").strip() if salesperson_phone else ""
@@ -1284,6 +1307,7 @@ async def create_or_update_fleet_trip_request(
         req = FleetTripRequest(
             trip_id=trip_id_clean,
             company_name=company_name,
+            origin_warehouse=origin_warehouse or "Harare",
             sales_admin_phone=clean_admin_phone,
             salesperson_phone=clean_sales_phone,
             salesperson_name=salesperson_name,
@@ -1297,6 +1321,7 @@ async def create_or_update_fleet_trip_request(
         session.add(req)
     else:
         req.company_name = company_name
+        req.origin_warehouse = origin_warehouse or req.origin_warehouse or "Harare"
         req.salesperson_phone = clean_sales_phone
         if salesperson_name:
             req.salesperson_name = salesperson_name

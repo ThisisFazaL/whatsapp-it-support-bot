@@ -590,12 +590,15 @@ async def finalize_stage2_dispatch(
                 data["route"] = rec_chk.route or rec_chk.destination_city
             if not data.get("sales_val"):
                 data["sales_val"] = rec_chk.trip_sales_value
+            if not data.get("origin_warehouse") and hasattr(rec_chk, "origin_warehouse"):
+                data["origin_warehouse"] = rec_chk.origin_warehouse
 
     company_name = data.get("company_name", "A. TG Hardware")
     dest = data.get("dest", "")
     route = data.get("route", dest)
     sales_val = float(data.get("sales_val", 0.0))
     transport_charge = float(data.get("transport_charge", 0.0))
+    origin_warehouse = data.get("origin_warehouse") or "Harare"
     tc_id = data.get("tc_id", "")
     total_collected = float(data.get("total_collected", transport_charge))
     customers = data.get("customers", [])
@@ -642,7 +645,8 @@ async def finalize_stage2_dispatch(
         salesperson_name=employee.full_name if employee else "Sales Colleague",
         route=route,
         trip_sales_value=sales_val,
-        transport_charge=transport_charge
+        transport_charge=transport_charge,
+        origin_warehouse=origin_warehouse
     )
 
     await clear_user_state(session, clean_p)
@@ -1410,7 +1414,8 @@ async def handle_fleet_approval_flow(
             salesperson_name=employee.full_name if employee else "Sales Colleague",
             route=data.get("route", dest),
             trip_sales_value=sales_val,
-            transport_charge=trans_amt
+            transport_charge=trans_amt,
+            origin_warehouse=data.get("origin_warehouse", "Harare")
         )
         await notify_edward_new_trip(session, trip_id)
         return True
@@ -1794,7 +1799,7 @@ async def handle_fleet_approval_flow(
         # Send in-progress notification
         await meta_api.send_text_message(
             phone,
-            f"⏳ *Verifying Trip `{trip_query}` with Favlogix ERP...*\n_Please wait while live order values and route thresholds are verified._"
+            f"⏳ *Verifying Trip `{trip_query}` with Favlogix ERP...*\n_Please wait while live order values and details are retrieved._"
         )
 
         # Resolve sales rep company context
@@ -1802,11 +1807,11 @@ async def handle_fleet_approval_flow(
         if not company_name:
             company_name = resolve_sales_rep_company(phone, employee)
 
-        # Call Trip Verification Service with company context
-        result = await trip_verification_service.verify_trip(trip_query, company_name=company_name)
+        # Fetch raw trip valuation from Favlogix
+        raw_res = await trip_verification_service.fetch_raw_trip_data(trip_query, company_name=company_name)
 
-        if not result.get("success"):
-            err_msg = result.get("error", "Could not verify trip.")
+        if not raw_res.get("success"):
+            err_msg = raw_res.get("error", "Could not verify trip.")
             fail_card = (
                 f"❌ *TRIP VERIFICATION ERROR*\n"
                 f"────────────────────\n"
@@ -1816,8 +1821,8 @@ async def handle_fleet_approval_flow(
             await meta_api.send_text_message(phone, fail_card)
             return True
 
-        # Successful verification -> Build Report Card & Persist in Database
-        trip_id = result.get("trip_id", trip_query)
+        raw_data = raw_res.get("raw_data", {})
+        trip_id = raw_data.get("trip_id", trip_query)
 
         # Check 2: Re-check if canonical trip ID resolved by Favlogix was already entered in database
         existing_canonical = await get_existing_trip_approval(session, trip_id)
@@ -1826,10 +1831,99 @@ async def handle_fleet_approval_flow(
             return True
 
         if not company_name:
-            company_name = result.get("company_name", "A. TG Hardware")
+            company_name = raw_data.get("company_name", "A. TG Hardware")
+        dest = raw_data.get("destination_city", "Unknown")
+        sales_val = float(raw_data.get("total_amount", 0.0))
+
+        # Ask Sales Rep: Select Departure Warehouse
+        prompt_wh = (
+            f"📍 *SELECT DEPARTURE WAREHOUSE*\n"
+            f"────────────────────\n"
+            f"🏢 *Company:* {company_name}\n"
+            f"🚛 *Trip:* `{trip_id}`\n"
+            f"📍 *Destination:* {dest}\n"
+            f"💰 *Order Total:* ${sales_val:,.2f}\n"
+            f"────────────────────\n"
+            f"Please select the warehouse from which the stock will be transferred / dispatched:"
+        )
+        buttons_wh = [
+            {"id": "flt_wh_harare", "title": "🏢 Harare Hub"},
+            {"id": "flt_wh_masvingo", "title": "🏢 Masvingo Hub"}
+        ]
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_warehouse_selection",
+            {
+                "trip_id": trip_id,
+                "company_name": company_name,
+                "raw_trip_data": raw_data
+            },
+            flow_name="fleet_approval"
+        )
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=prompt_wh,
+            buttons=buttons_wh,
+            header_text="DEPARTURE WAREHOUSE"
+        )
+        return True
+
+    # 13. Handle Warehouse Selection (Harare Hub vs Masvingo Hub)
+    if text_lower in {"flt_wh_harare", "flt_wh_masvingo"} or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_warehouse_selection"
+    ):
+        if (
+            clean_kw in GLOBAL_RESET_KEYWORDS
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or text_lower in {"cancel", "reset", "menu", "back", "exit"}
+        ):
+            await clear_user_state(session, phone)
+            await send_sales_portal_menu(session, phone, employee)
+            return True
+
+        origin_warehouse = "Masvingo" if (
+            text_lower in {"flt_wh_masvingo", "masvingo", "2", "2️⃣", "mvg", "masv"}
+            or "masvingo" in text_lower
+        ) else "Harare"
+
+        state_data = state.current_data or {} if state else {}
+        trip_id = state_data.get("trip_id", "")
+        company_name = state_data.get("company_name", "")
+        raw_data = state_data.get("raw_trip_data", {})
+
+        if not raw_data:
+            raw_res = await trip_verification_service.fetch_raw_trip_data(trip_id or "UNKNOWN", company_name=company_name)
+            if raw_res.get("success"):
+                raw_data = raw_res.get("raw_data", {})
+                if not trip_id:
+                    trip_id = raw_data.get("trip_id", "")
+            else:
+                await meta_api.send_text_message(phone, "⚠️ Could not retrieve trip data. Please enter the Trip ID again.")
+                await set_user_state(session, phone, "awaiting_trip_id", {"company_name": company_name}, flow_name="fleet_approval")
+                return True
+
+        if not company_name:
+            company_name = raw_data.get("company_name", resolve_sales_rep_company(phone, employee))
+
+        # Check if trip was already entered in database
+        existing_canonical = await get_existing_trip_approval(session, trip_id)
+        if existing_canonical:
+            await handle_existing_trip_response(session, phone, employee, existing_canonical)
+            return True
+
+        # Calculate pricing with the chosen warehouse
+        result = trip_verification_service.calculate_for_raw_trip(
+            raw_trip_data=raw_data,
+            origin_warehouse=origin_warehouse,
+            company_name=company_name
+        )
+
         dest = result.get("destination_city", "Unknown")
         route = result.get("route", "")
-        route_str = f" ({route})" if route else ""
+        dist_km = result.get("distance_km", 0.0)
+        dist_str = f" - {dist_km:.0f} km" if dist_km > 0 else ""
+        route_str = f" ({route}{dist_str})" if route else ""
         sales_val = result.get("total_amount", 0.0)
         req_min = result.get("required_minimum", 0.0)
         shortfall = result.get("shortfall", 0.0)
@@ -1841,6 +1935,7 @@ async def handle_fleet_approval_flow(
         if is_approved:
             approval_record = FleetTripApproval(
                 trip_id=trip_id,
+                origin_warehouse=origin_warehouse,
                 salesperson_phone=phone,
                 salesperson_name=employee.full_name if employee else "Sales Colleague",
                 destination_city=dest,
@@ -1871,6 +1966,7 @@ async def handle_fleet_approval_flow(
                 f"✅ *FLEET TRIP DETAILS*\n"
                 f"────────────────────\n"
                 f"🏢 *Company:* {company_name}\n"
+                f"📦 *Departure Hub:* {origin_warehouse} Warehouse\n"
                 f"🚛 *Trip:* `{trip_id}`\n"
                 f"📍 *Destination:* {dest}{route_str}\n"
                 f"🎯 *Route Criteria:* ✅ Meets Minimum Requirements\n"
@@ -1890,6 +1986,7 @@ async def handle_fleet_approval_flow(
                     "trip_id": trip_id,
                     "clean_btn_id": clean_btn_id,
                     "company_name": company_name,
+                    "origin_warehouse": origin_warehouse,
                     "cur_pending": cur_pending,
                     "dest": dest,
                     "route": route,
@@ -1908,9 +2005,9 @@ async def handle_fleet_approval_flow(
             )
         else:
             # Shortfall detected -> Save record & Send 3 clean options
-            # Hide route minimum, shortfall amount, and 4% formula as requested!
             approval_record = FleetTripApproval(
                 trip_id=trip_id,
+                origin_warehouse=origin_warehouse,
                 salesperson_phone=phone,
                 salesperson_name=employee.full_name if employee else "Sales Colleague",
                 destination_city=dest,
@@ -1932,6 +2029,7 @@ async def handle_fleet_approval_flow(
                 f"📋 *FLEET TRIP DETAILS*\n"
                 f"────────────────────\n"
                 f"🏢 *Company:* {company_name}\n"
+                f"📦 *Departure Hub:* {origin_warehouse} Warehouse\n"
                 f"🚛 *Trip:* `{trip_id}`\n"
                 f"📍 *Destination:* {dest}{route_str}\n"
                 f"🎯 *Route Criteria:* ⚠️ Shortfall Transport Required\n"
@@ -1952,6 +2050,7 @@ async def handle_fleet_approval_flow(
                     "trip_id": trip_id,
                     "clean_btn_id": clean_btn_id,
                     "company_name": company_name,
+                    "origin_warehouse": origin_warehouse,
                     "dest": dest,
                     "route": route,
                     "sales_val": sales_val,

@@ -157,6 +157,7 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
     from app.handlers.fleet_approval_handler import get_solo_test_mode
     is_solo = get_solo_test_mode()
     edw_phone = clean_phone(settings.edward_phone)
+    origin_wh = getattr(trip, 'origin_warehouse', None) or 'Harare'
     header = "NEW TRIP DISPATCH"
     tag = "🎭 *[SOLO TEST: SIMULATING EDWARD]*\n" if is_solo else ""
     body = (
@@ -164,6 +165,7 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
         "────────────────────\n"
         f"Company: {trip.company_name}\n"
         f"Trip: {trip.trip_id}\n"
+        f"Warehouse: 🏢 {origin_wh} Hub\n"
         f"Route: {trip.route or trip.destination_city}\n"
         f"Sales Rep: {trip.salesperson_name or 'Sales'} (+{trip.salesperson_phone})\n"
         "────────────────────\n"
@@ -194,7 +196,7 @@ async def notify_edward_new_trip(session: AsyncSession, trip_id: str):
                 header_text=header,
                 footer_text=footer
             )
-    logger.info(f"Delivered Stage 3 trip notification for {trip_id} to Edward ({edw_phone})")
+    logger.info(f"Delivered Stage 3 trip notification for {trip_id} ({origin_wh} Hub) to Edward ({edw_phone})")
 
 
 async def send_edward_queue(session: AsyncSession, phone: str):
@@ -212,7 +214,8 @@ async def send_edward_queue(session: AsyncSession, phone: str):
     buttons = []
     trip_ids = [t.trip_id for t in pending]
     for idx, t in enumerate(pending[:3], start=1):
-        lines.append(f"{idx}. *{t.trip_id}* | {t.company_name} | {t.route or t.destination_city or 'Depot'}")
+        wh_name = getattr(t, 'origin_warehouse', 'Harare') or 'Harare'
+        lines.append(f"{idx}. *{t.trip_id}* | {t.company_name} | {wh_name} Hub -> {t.route or t.destination_city or 'Depot'}")
         # Button title strictly <= 20 chars, NO emojis, unique
         btn_title = f"{idx}. {t.trip_id}"
         if len(btn_title) > 20:
@@ -259,10 +262,12 @@ async def prompt_truck_plate(session: AsyncSession, phone: str, trip_id: str):
         current_data={"trip_id": trip_id},
         flow_name="fleet_edward"
     )
+    origin_wh = getattr(trip, 'origin_warehouse', None) or 'Harare'
     prompt = (
         f"🚛 *ALLOCATE VEHICLE: {trip_id}*\n"
         "────────────────────\n"
         f"Company: {trip.company_name}\n"
+        f"Warehouse: 🏢 {origin_wh} Hub\n"
         f"Route: {trip.route or trip.destination_city}\n"
         "────────────────────\n"
         "Please enter the truck plate number or fleet number:\n"
