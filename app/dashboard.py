@@ -379,48 +379,28 @@ async def api_update_fuel(request: Request, db: AsyncSession = Depends(get_db)):
     require_permission(user, "manage_fuel_price")
     
     body = await request.json()
-    new_price = float(body.get("fuel_price") or body.get("fuel_price_usd") or 1.55)
-    recalc = bool(body.get("recalculate_cities", False))
+    new_price = float(body.get("fuel_price") or body.get("fuel_price_usd") or 2.04)
     uname = user.get("name", "Admin")
     urole = user.get("role", "FLEET_ADMIN")
     old_price = get_fuel_price()
 
-    if recalc:
-        res = await recalculate_all_city_minimums(db, new_price, updated_by=uname)
-        audit = AuditLog(
-            username=uname,
-            user_role=urole,
-            action="UPDATE_FUEL_PRICE",
-            module="CONFIG",
-            permission_used="manage_fuel_price",
-            entity_id="fuel_price_usd",
-            previous_value={"fuel_price": old_price},
-            new_value={"fuel_price": new_price, "recalculate_cities": True},
-            remarks=f"Fuel price updated to ${new_price:.2f}/L with city recalculation",
-            ip_address=get_client_ip(request),
-            created_at=datetime.datetime.utcnow()
-        )
-        db.add(audit)
-        await db.commit()
-        return res
-    else:
-        await update_system_setting(db, "fuel_price_usd", new_price, changed_by=uname, reason=f"Fuel price updated to ${new_price:.2f}/L")
-        audit = AuditLog(
-            username=uname,
-            user_role=urole,
-            action="UPDATE_FUEL_PRICE",
-            module="CONFIG",
-            permission_used="manage_fuel_price",
-            entity_id="fuel_price_usd",
-            previous_value={"fuel_price": old_price},
-            new_value={"fuel_price": new_price, "recalculate_cities": False},
-            remarks=f"Fuel price updated to ${new_price:.2f}/L without city recalculation",
-            ip_address=get_client_ip(request),
-            created_at=datetime.datetime.utcnow()
-        )
-        db.add(audit)
-        await db.commit()
-        return {"status": "success", "fuel_price": new_price}
+    await update_system_setting(db, "fuel_price_usd", new_price, changed_by=uname, reason=f"Fuel price updated to ${new_price:.2f}/L")
+    audit = AuditLog(
+        username=uname,
+        user_role=urole,
+        action="UPDATE_FUEL_PRICE",
+        module="CONFIG",
+        permission_used="manage_fuel_price",
+        entity_id="fuel_price_usd",
+        previous_value={"fuel_price": old_price},
+        new_value={"fuel_price": new_price, "recalculate_cities": False},
+        remarks=f"Fuel price updated to ${new_price:.2f}/L (city minimums preserved from Excel)",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    return {"status": "success", "fuel_price": new_price}
 
 
 @router.post("/api/v2/config/update-city-minimum")
@@ -4280,7 +4260,7 @@ async def dashboard_view(request: Request):
                             Save Rates
                         </button>
                     </div>
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                         <div>
                             <label class="block text-[11px] text-zinc-500 mb-1">Meal Rate ($/meal)</label>
                             <input type="number" id="modal-meal-rate" step="0.5" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1 text-xs font-mono">
@@ -4292,10 +4272,6 @@ async def dashboard_view(request: Request):
                         <div>
                             <label class="block text-[11px] text-zinc-500 mb-1">Budget Threshold (%)</label>
                             <input type="number" id="modal-budget-pct" step="0.5" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1 text-xs font-mono">
-                        </div>
-                        <div>
-                            <label class="block text-[11px] text-zinc-500 mb-1">Van Surcharge ($)</label>
-                            <input type="number" id="modal-van-surcharge" step="1.0" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1 text-xs font-mono">
                         </div>
                     </div>
                 </div>
@@ -4739,6 +4715,19 @@ async def dashboard_view(request: Request):
         </div>
     </div>
 
+    <!-- Global Action Loading Modal Popup -->
+    <div id="globalLoadingPopup" class="modal-overlay fixed inset-0 z-[100] hidden flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-2xl max-w-xs w-full flex flex-col items-center text-center space-y-3.5">
+            <div class="relative w-10 h-10 flex items-center justify-center">
+                <div class="w-9 h-9 border-3 border-zinc-300 dark:border-zinc-700 border-t-zinc-900 dark:border-t-zinc-100 rounded-full animate-spin"></div>
+            </div>
+            <div>
+                <h4 id="globalLoadingTitle" class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Saving Changes...</h4>
+                <p id="globalLoadingMessage" class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">Please wait while the system updates.</p>
+            </div>
+        </div>
+    </div>
+
     <!-- Table pagination handled via renderPaginationControls in /static/js/dashboard.js -->
     <script>
         window.canViewBalances = {'true' if can_view_balances else 'false'};
@@ -4748,7 +4737,7 @@ async def dashboard_view(request: Request):
         window.currentUserCompany = '{user.get("company", "")}';
         window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.6.0"></script>
+    <script src="/static/js/dashboard.js?v=2.7.0"></script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)

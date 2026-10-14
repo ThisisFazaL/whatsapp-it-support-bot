@@ -37,22 +37,21 @@ async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: 
     tag = "🎭 *[SOLO TEST: SIMULATING LOGISTICS MANAGER]*\n" if is_solo else ""
 
     if abs(trip.discrepancy_amount) > 0.01:
-        header = "TRIP ADJUDICATION"
+        header = "TRIP CLOSURE"
         body = (
-            f"{tag}TRIP ADJUDICATION NEEDED\n"
+            f"{tag}TRIP CLOSURE WITH DISCREPANCY\n"
             "────────────────────\n"
             f"Company: {trip.company_name}\n"
             f"Trip: {trip.trip_id} | Route: {trip.route or trip.destination_city}\n"
             f"Driver: {trip.driver_name} | Truck: {trip.truck_plate}\n"
             "────────────────────\n"
-            f"Discrepancy: ${trip.discrepancy_amount:,.2f}\n"
-            f"Reason: {trip.discrepancy_reason or 'No notes provided'}\n"
+            f"⚠️ Discrepancy Amount: ${trip.discrepancy_amount:,.2f}\n"
+            f"📝 Reason: {trip.discrepancy_reason or 'No notes provided'}\n"
             "────────────────────\n"
-            "Please approve or reject reimbursement / deduction:"
+            "Discrepancy recorded for executive dashboard. Authorize final trip closure:"
         )
         buttons = [
-            {"id": f"flt_mgr_app_{trip.trip_id}", "title": "Approve"},
-            {"id": f"flt_mgr_rej_{trip.trip_id}", "title": "Reject"}
+            {"id": f"flt_mgr_close_{trip.trip_id}", "title": "Close Trip"}
         ]
     else:
         header = "TRIP CLOSURE"
@@ -62,7 +61,7 @@ async def notify_logistics_manager_adjudication(session: AsyncSession, trip_id: 
             f"Company: {trip.company_name}\n"
             f"Trip: {trip.trip_id} | Route: {trip.route or trip.destination_city}\n"
             f"Driver: {trip.driver_name} | Truck: {trip.truck_plate}\n"
-            f"Total Delivery Charges: ${summary.get('total_collected', 0.0):,.2f}\n"
+            "────────────────────\n"
             "Physical balancing settled with zero discrepancy.\n"
             "────────────────────\n"
             "Please authorize final trip closure:"
@@ -209,15 +208,20 @@ async def handle_logistics_manager_interaction(
     text_strip = message_text.strip()
     text_lower = text_strip.lower()
 
-    # 1. Close Trip (No discrepancy)
-    if text_lower.startswith("flt_mgr_close_"):
+    # 1. Close Trip (Both Balanced and Discrepancy cases)
+    if text_lower.startswith("flt_mgr_close_") or text_lower in {"close trip", "close", "1", "1️⃣"}:
         trip_id = text_strip.replace("flt_mgr_close_", "").strip()
+        if not trip_id and state and state.current_data:
+            trip_id = state.current_data.get("trip_id", "")
         trip = await get_fleet_trip_request_by_id(session, trip_id)
         if not trip:
             await meta_api.send_text_message(clean_p, f"⚠️ Trip {trip_id} not found.")
             return True
 
-        trip.reimbursement_status = "NONE"
+        if abs(trip.discrepancy_amount or 0.0) > 0.01:
+            trip.reimbursement_status = "RECORDED"
+        else:
+            trip.reimbursement_status = "NONE"
         await session.commit()
         await clear_user_state(session, clean_p)
 

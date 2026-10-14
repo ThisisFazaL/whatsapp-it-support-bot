@@ -128,6 +128,60 @@ async def handle_driver_interaction(
     text_strip = message_text.strip()
     text_lower = text_strip.lower()
 
+    # 0.0 Approver note submission for emergency rejection
+    if state and state.flow_name == "fleet_emg_reject" and state.current_step == "awaiting_emg_reject_note":
+        data = state.current_data or {}
+        exp_id = int(data.get("exp_id", 0))
+        approver_name = data.get("approver_name", "Logistics Approver")
+        peer_phone = data.get("peer_phone")
+        note = text_strip
+
+        exp = await get_emergency_expense_by_id(session, exp_id)
+        if exp:
+            await set_emergency_expense_status(session, exp_id, "REJECTED", approver_name)
+            exp.rejection_note = note
+            await session.commit()
+
+            ack = (
+                f"❌ *EMERGENCY EXPENSE REJECTED*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}* | Amount: *${exp.amount:,.2f}*\n"
+                f"Reason logged: {note}\n"
+                "────────────────────\n"
+                "Rejection note sent to driver."
+            )
+            await meta_api.send_text_message(clean_p, ack)
+
+            if peer_phone and peer_phone != clean_p:
+                peer_note = (
+                    f"ℹ️ *EMERGENCY EXPENSE REJECTED*\n"
+                    "────────────────────\n"
+                    f"Trip: *{exp.trip_id}* | Amount: *${exp.amount:,.2f}*\n"
+                    f"Rejected by: *{approver_name}*\n"
+                    f"Note: {note}"
+                )
+                try:
+                    await meta_api.send_text_message(peer_phone, peer_note)
+                except Exception as e:
+                    logger.warning(f"Could not notify peer manager: {e}")
+
+            drv_phone = clean_phone(exp.driver_phone)
+            drv_msg = (
+                f"❌ *EMERGENCY REQUEST DECLINED*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}*\n"
+                f"Type: *{exp.charge_type}*\n"
+                f"Amount: *${exp.amount:,.2f}*\n"
+                f"Declined by: *{approver_name}*\n"
+                f"Reason / Note: {note}\n"
+                "────────────────────\n"
+                "Please contact Logistics for assistance."
+            )
+            await meta_api.send_text_message(drv_phone, drv_msg)
+
+        await clear_user_state(session, clean_p)
+        return True
+
     # 0. Emergency Expense Approval by Edward / Zayn / Master Admin
     if text_lower.startswith(("flt_emg_appr_", "flt_emg_rej_")):
         is_approve = text_lower.startswith("flt_emg_appr_")
@@ -158,7 +212,6 @@ async def handle_driver_interaction(
             await meta_api.send_text_message(clean_p, already_msg)
             return True
 
-        new_status = "APPROVED" if is_approve else "REJECTED"
         edward_p = clean_phone(settings.edward_phone)
         zayn_p = clean_phone(settings.zayn_phone)
         master_p = clean_phone(settings.master_admin_phone)
@@ -176,12 +229,36 @@ async def handle_driver_interaction(
             approver_name = f"Logistics Manager ({clean_p})"
             peer_phone = None
 
-        await set_emergency_expense_status(session, exp_id, new_status, approver_name)
+        if not is_approve:
+            # Prompt approver for reason / note to send to driver
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_emg_reject_note",
+                current_data={
+                    "exp_id": exp_id,
+                    "approver_name": approver_name,
+                    "peer_phone": peer_phone,
+                    "trip_id": exp.trip_id
+                },
+                flow_name="fleet_emg_reject"
+            )
+            prompt = (
+                f"📝 *EMERGENCY REJECTION NOTE: #{exp_id}*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}* | Amount: *${exp.amount:,.2f}*\n"
+                "────────────────────\n"
+                "Please enter the reason / note for rejecting this emergency expense:\n"
+                "_(This will be sent directly to the driver.)_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
+
+        await set_emergency_expense_status(session, exp_id, "APPROVED", approver_name)
 
         # 1. Acknowledge Deciding Approver
-        status_icon = "✅" if is_approve else "❌"
         ack_approver = (
-            f"{status_icon} *EMERGENCY EXPENSE {new_status}*\n"
+            f"✅ *EMERGENCY EXPENSE APPROVED*\n"
             "────────────────────\n"
             f"Trip: *{exp.trip_id}*\n"
             f"Type: *{exp.charge_type}*\n"
@@ -199,7 +276,7 @@ async def handle_driver_interaction(
                 f"Trip: *{exp.trip_id}*\n"
                 f"Type: *{exp.charge_type}*\n"
                 f"Amount: *${exp.amount:,.2f}*\n"
-                f"Status: *{new_status}* by *{approver_name}*.\n"
+                f"Status: *APPROVED* by *{approver_name}*.\n"
                 "No further action required."
             )
             try:
@@ -207,43 +284,26 @@ async def handle_driver_interaction(
             except Exception as e:
                 logger.warning(f"Could not notify peer manager {peer_phone}: {e}")
 
-        # 3. Notify Driver Immediately
+        # 3. Notify Driver Immediately and request receipt photo
         drv_phone = clean_phone(exp.driver_phone)
-        if is_approve:
-            if exp.charge_type == "EMERGENCY_FUEL":
-                drv_msg = (
-                    f"✅ *EMERGENCY FUEL APPROVED*\n"
-                    "────────────────────\n"
-                    f"Trip: *{exp.trip_id}*\n"
-                    f"Authorized Amount: *${exp.amount:,.2f}*\n"
-                    f"Approved by: *{approver_name}*\n"
-                    "────────────────────\n"
-                    "🟢 *You may now proceed to fuel up at the nearest station.*\n"
-                    "Please retain your physical fuel receipt for final depot balancing."
-                )
-            else:
-                drv_msg = (
-                    f"✅ *EMERGENCY EXPENSE APPROVED*\n"
-                    "────────────────────\n"
-                    f"Trip: *{exp.trip_id}*\n"
-                    f"Type: *{exp.charge_type}*\n"
-                    f"Authorized Amount: *${exp.amount:,.2f}*\n"
-                    f"Approved by: *{approver_name}*\n"
-                    "────────────────────\n"
-                    "🟢 *You may now proceed with the emergency expenditure.*\n"
-                    "Please retain your repair receipt for final depot balancing."
-                )
-        else:
-            drv_msg = (
-                f"❌ *EMERGENCY REQUEST DECLINED*\n"
-                "────────────────────\n"
-                f"Trip: *{exp.trip_id}*\n"
-                f"Type: *{exp.charge_type}*\n"
-                f"Amount: *${exp.amount:,.2f}*\n"
-                f"Declined by: *{approver_name}*\n"
-                "────────────────────\n"
-                "Please contact Logistics for assistance."
-            )
+        drv_msg = (
+            f"✅ *EMERGENCY EXPENSE APPROVED*\n"
+            "────────────────────\n"
+            f"Trip: *{exp.trip_id}*\n"
+            f"Type: *{exp.charge_type}*\n"
+            f"Authorized Amount: *${exp.amount:,.2f}*\n"
+            f"Approved by: *{approver_name}*\n"
+            "────────────────────\n"
+            "🟢 *You may now proceed with the expenditure.*\n"
+            "📸 *Please take and upload a photo of your receipt:*"
+        )
+        await set_user_state(
+            session,
+            drv_phone,
+            current_step="awaiting_emergency_receipt",
+            current_data={"trip_id": exp.trip_id, "exp_id": exp.id},
+            flow_name="fleet_driver"
+        )
         await meta_api.send_text_message(drv_phone, drv_msg)
         return True
 
@@ -259,8 +319,12 @@ async def handle_driver_interaction(
         return True
 
     # 1. Driver clicks [Trip Started] -> Prompt for Start Odometer reading
-    if text_lower.startswith("flt_drv_start_"):
+    if text_lower.startswith("flt_drv_start_") or (
+        state and state.flow_name == "fleet_driver" and state.current_step == "awaiting_trip_start" and text_lower in {"trip started", "started", "start", "1", "1️⃣"}
+    ):
         trip_id = text_strip.replace("flt_drv_start_", "").strip()
+        if not trip_id and state and state.current_data:
+            trip_id = state.current_data.get("trip_id", "")
         trip = await get_fleet_trip_request_by_id(session, trip_id)
         if not trip:
             await meta_api.send_text_message(clean_p, f"⚠️ Trip {trip_id} not found.")
@@ -563,6 +627,25 @@ async def handle_driver_interaction(
                 await return_to_appropriate_driver_menu(session, clean_p, trip_id)
                 return True
 
+        # Awaiting Emergency Receipt photo
+        if state.current_step == "awaiting_emergency_receipt":
+            trip_id = data.get("trip_id", "")
+            exp_id = data.get("exp_id")
+            if exp_id and image_id:
+                exp = await get_emergency_expense_by_id(session, int(exp_id))
+                if exp:
+                    exp.receipt_image_id = image_id
+                    await session.commit()
+            ack_receipt = (
+                f"✅ *RECEIPT RECORDED: {trip_id}*\n"
+                "────────────────────\n"
+                "Receipt photo logged for depot balancing."
+            )
+            await meta_api.send_text_message(clean_p, ack_receipt)
+            await clear_user_state(session, clean_p)
+            await send_driver_transit_menu(session, clean_p, trip_id)
+            return True
+
         # Awaiting Start Odometer reading
         if state.current_step == "awaiting_start_odometer":
             if image_id:
@@ -577,8 +660,8 @@ async def handle_driver_interaction(
                         "Tap below to confirm, or reply with the correct numbers if different:"
                     )
                     buttons = [
-                        {"id": f"flt_odo_ok_start_{trip_id}_{odo_int_str}", "title": "✅ Confirm Reading"},
-                        {"id": f"flt_odo_edit_start_{trip_id}", "title": "✏️ Enter Manually"}
+                        {"id": f"flt_odo_ok_start_{trip_id}_{odo_int_str}", "title": "Confirm"},
+                        {"id": f"flt_odo_edit_start_{trip_id}", "title": "Edit Reading Manually"}
                     ]
                     await meta_api.send_button_message(
                         to_phone=clean_p,
@@ -654,8 +737,8 @@ async def handle_driver_interaction(
                         "Tap below to confirm, or reply with the correct numbers if different:"
                     )
                     buttons = [
-                        {"id": f"flt_odo_ok_end_{trip_id}_{odo_int_str}", "title": "✅ Confirm Reading"},
-                        {"id": f"flt_odo_edit_end_{trip_id}", "title": "✏️ Enter Manually"}
+                        {"id": f"flt_odo_ok_end_{trip_id}_{odo_int_str}", "title": "Confirm"},
+                        {"id": f"flt_odo_edit_end_{trip_id}", "title": "Edit Reading Manually"}
                     ]
                     await meta_api.send_button_message(
                         to_phone=clean_p,
@@ -949,13 +1032,13 @@ async def handle_driver_interaction(
         if state.current_step == "awaiting_other_desc":
             desc = text_strip
             data["other_desc"] = desc
-            await set_user_state(session, clean_p, "awaiting_other_photo", data, flow_name="fleet_driver")
+            await set_user_state(session, clean_p, "awaiting_other_amount", data, flow_name="fleet_driver")
             prompt = (
-                f"📸 *EMERGENCY EXPENSE: {trip_id}*\n"
+                f"🔧 *EMERGENCY EXPENSE: {trip_id}*\n"
                 f"Issue: *{desc}*\n"
                 "────────────────────\n"
-                "Please take and send a photo of the receipt, damaged part, or repair evidence:\n\n"
-                "_(Photo evidence is mandatory before entering the price.)_"
+                "Please enter the amount in USD for this emergency charge:\n"
+                "_(e.g. 25.00 or 15)_"
             )
             await meta_api.send_text_message(clean_p, prompt)
             return True

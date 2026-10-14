@@ -44,9 +44,30 @@ USERS_DB = {
     "sujit": {
         "username": "sujit",
         "password": os.getenv("DASHBOARD_SUJIT_PASS", "Sujit@Fleet2026!"),
-        "role": "FLEET_ADMIN",
-        "name": "Sujit (Fleet Admin)",
-        "allowed_domains": ["fleet", "logistics"]
+        "role": "MASTER_ADMIN",
+        "name": "Sujit (Master Admin)",
+        "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+    },
+    "faizan": {
+        "username": "faizan",
+        "password": os.getenv("DASHBOARD_FAIZAN_PASS", "Faizan@Master2026!"),
+        "role": "MASTER_ADMIN",
+        "name": "Faizan Patel",
+        "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+    },
+    "raiyaan": {
+        "username": "raiyaan",
+        "password": os.getenv("DASHBOARD_RAIYAAN_PASS", "Raiyaan@Master2026!"),
+        "role": "MASTER_ADMIN",
+        "name": "Raiyaan",
+        "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
+    },
+    "imraan": {
+        "username": "imraan",
+        "password": os.getenv("DASHBOARD_IMRAAN_PASS", "Imraan@Master2026!"),
+        "role": "MASTER_ADMIN",
+        "name": "Imraan",
+        "allowed_domains": ["it", "projects", "logistics", "fleet", "accounts", "admin"]
     },
     "logistics": {
         "username": "logistics",
@@ -130,6 +151,14 @@ USERS_DB = {
         "role": "ACCOUNTS_USER",
         "name": "Munashe Milca",
         "phone": "263788068567",
+        "allowed_domains": ["accounts", "fleet"]
+    },
+    "hujefa": {
+        "username": "hujefa",
+        "password": os.getenv("DASHBOARD_HUJEFA_PASS", "Hujefa@Accounts2026!"),
+        "role": "ACCOUNTS_USER",
+        "name": "Hujefa Patel",
+        "phone": "263778861934",
         "allowed_domains": ["accounts", "fleet"]
     },
 }

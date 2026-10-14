@@ -1,5 +1,6 @@
 import logging
 import re
+import difflib
 from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,35 +82,22 @@ async def resolve_truck_from_db(session: AsyncSession, query: str):
 async def resolve_driver_from_db(session: AsyncSession, query: str) -> Optional[Tuple[str, str]]:
     """
     Resolves and verifies a commercial driver from WorkshopStaff or Employee registry.
+    Supports exact match, token match, and fuzzy matching for driver first names with typo tolerance.
     Returns (official_full_name, clean_phone) if verified, else None.
     """
-    clean_query = (query or "").strip()
+    clean_query = (query or "").strip().lower()
     if not clean_query:
         return None
+
+    candidates: List[Tuple[str, str]] = []
 
     # 1. Match WorkshopStaff (drivers)
     try:
         from app.workshop.models import WorkshopStaff
         stmt = select(WorkshopStaff).where(WorkshopStaff.active == True)
         res = await session.execute(stmt)
-        all_staff = res.scalars().all()
-
-        # Exact match
-        for s in all_staff:
-            if s.full_name.lower() == clean_query.lower():
-                return s.full_name, clean_phone(s.phone)
-
-        # Substring match
-        for s in all_staff:
-            if clean_query.lower() in s.full_name.lower():
-                return s.full_name, clean_phone(s.phone)
-
-        # Token match (e.g. "Terrence" matches "Terrence Mupfumi" or "Kadungure" matches "Godknows Kadungure")
-        tokens = [tok.lower() for tok in clean_query.split() if len(tok) >= 3]
-        for s in all_staff:
-            s_tokens = s.full_name.lower().split()
-            if any(tok in s_tokens or any(tok in st for st in s_tokens) for tok in tokens):
-                return s.full_name, clean_phone(s.phone)
+        for s in res.scalars().all():
+            candidates.append((s.full_name, clean_phone(s.phone)))
     except Exception as e:
         logger.warning(f"Error resolving driver from WorkshopStaff: {e}")
 
@@ -118,23 +106,50 @@ async def resolve_driver_from_db(session: AsyncSession, query: str) -> Optional[
         from app.database import Employee
         stmt_emp = select(Employee).where(Employee.active == True)
         res_emp = await session.execute(stmt_emp)
-        all_emps = res_emp.scalars().all()
-
-        for emp in all_emps:
-            if emp.full_name.lower() == clean_query.lower():
-                return emp.full_name, clean_phone(emp.phone)
-
-        for emp in all_emps:
-            if clean_query.lower() in emp.full_name.lower():
-                return emp.full_name, clean_phone(emp.phone)
-
-        tokens = [tok.lower() for tok in clean_query.split() if len(tok) >= 3]
-        for emp in all_emps:
-            emp_tokens = emp.full_name.lower().split()
-            if any(tok in emp_tokens or any(tok in et for et in emp_tokens) for tok in tokens):
-                return emp.full_name, clean_phone(emp.phone)
+        for emp in res_emp.scalars().all():
+            candidates.append((emp.full_name, clean_phone(emp.phone)))
     except Exception as e:
         logger.warning(f"Error resolving driver from Employee: {e}")
+
+    if not candidates:
+        return None
+
+    # Step A: Exact matches (full name or first name)
+    for name, phone in candidates:
+        name_lower = name.lower()
+        if clean_query == name_lower:
+            return name, phone
+        first_name = name_lower.split()[0] if name_lower.split() else ""
+        if clean_query == first_name:
+            return name, phone
+
+    # Step B: Substring / token match
+    for name, phone in candidates:
+        name_lower = name.lower()
+        if clean_query in name_lower:
+            return name, phone
+
+    tokens = [tok for tok in clean_query.split() if len(tok) >= 3]
+    for name, phone in candidates:
+        tokens_in_name = name.lower().split()
+        if any(tok in tokens_in_name or any(tok in n for n in tokens_in_name) for tok in tokens):
+            return name, phone
+
+    # Step C: Fuzzy matching (Edward only types first name, potentially with spelling mistakes)
+    best_match: Optional[Tuple[str, str]] = None
+    best_score = 0.0
+    for name, phone in candidates:
+        name_lower = name.lower()
+        first_name = name_lower.split()[0] if name_lower.split() else name_lower
+        score_first = difflib.SequenceMatcher(None, clean_query, first_name).ratio()
+        score_full = difflib.SequenceMatcher(None, clean_query, name_lower).ratio()
+        max_score = max(score_first, score_full)
+        if max_score > best_score:
+            best_score = max_score
+            best_match = (name, phone)
+
+    if best_match and best_score >= 0.72:
+        return best_match
 
     return None
 
@@ -211,25 +226,12 @@ async def send_edward_queue(session: AsyncSession, phone: str):
         return
 
     lines = []
-    buttons = []
     trip_ids = [t.trip_id for t in pending]
-    for idx, t in enumerate(pending[:3], start=1):
+    for idx, t in enumerate(pending, start=1):
         wh_name = getattr(t, 'origin_warehouse', 'Harare') or 'Harare'
         lines.append(f"{idx}. *{t.trip_id}* | {t.company_name} | {wh_name} Hub -> {t.route or t.destination_city or 'Depot'}")
-        # Button title strictly <= 20 chars, NO emojis, unique
-        btn_title = f"{idx}. {t.trip_id}"
-        if len(btn_title) > 20:
-            btn_title = f"Allocate #{idx}"
-        buttons.append({"id": f"flt_edw_alloc_{t.trip_id}", "title": btn_title})
 
     queue_text = "\n".join(lines)
-    body = (
-        f"📋 *PENDING TRIPS QUEUE ({len(pending)})*\n"
-        "────────────────────\n"
-        f"{queue_text}\n"
-        "────────────────────\n"
-        "Select a trip to allocate by tapping below or replying with its number (1, 2, or 3):"
-    )
 
     await set_user_state(
         session,
@@ -239,12 +241,36 @@ async def send_edward_queue(session: AsyncSession, phone: str):
         flow_name="fleet_edward"
     )
 
-    await meta_api.send_button_message(
-        to_phone=clean_p,
-        body_text=body,
-        buttons=buttons,
-        header_text="TRIP QUEUE"
-    )
+    if len(pending) <= 3:
+        buttons = []
+        for idx, t in enumerate(pending, start=1):
+            btn_title = f"{idx}. {t.trip_id}"
+            if len(btn_title) > 20:
+                btn_title = f"Allocate #{idx}"
+            buttons.append({"id": f"flt_edw_alloc_{t.trip_id}", "title": btn_title})
+
+        body = (
+            f"📋 *PENDING TRIPS QUEUE ({len(pending)})*\n"
+            "────────────────────\n"
+            f"{queue_text}\n"
+            "────────────────────\n"
+            "Select a trip by clicking below or typing its number:"
+        )
+        await meta_api.send_button_message(
+            to_phone=clean_p,
+            body_text=body,
+            buttons=buttons,
+            header_text="TRIP QUEUE"
+        )
+    else:
+        body = (
+            f"📋 *PENDING TRIPS QUEUE ({len(pending)})*\n"
+            "────────────────────\n"
+            f"{queue_text}\n"
+            "────────────────────\n"
+            "Please type the number of the trip you want to allocate (e.g. 1, 2, 3, 4):"
+        )
+        await meta_api.send_text_message(clean_p, body)
 
 
 
@@ -387,8 +413,8 @@ async def handle_edward_interaction(
                     f"👤 *DRIVER ALLOCATION: {trip_id}*\n"
                     f"Truck: *{truck_plate}* ({verified_truck.model_make})\n"
                     "────────────────────\n"
-                    "Please enter the commercial driver's name:\n"
-                    "_(e.g. Terrence Mupfumi or Godknows)_"
+                    "Please enter the commercial driver's first name:\n"
+                    "_(e.g. Terrence or Godknows)_"
                 )
                 await meta_api.send_text_message(clean_p, prompt)
                 return True
@@ -409,8 +435,8 @@ async def handle_edward_interaction(
                     f"👤 *DRIVER ALLOCATION: {trip_id}*\n"
                     f"Truck: *{truck_plate}*\n"
                     "────────────────────\n"
-                    "Please type the driver's full name:\n"
-                    "_(e.g. Terrence Mupfumi)_"
+                    "Please enter the commercial driver's first name:\n"
+                    "_(e.g. Terrence or Godknows)_"
                 )
                 await meta_api.send_text_message(clean_p, prompt)
                 return True

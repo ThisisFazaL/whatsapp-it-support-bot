@@ -237,9 +237,9 @@ async def send_sales_portal_menu(session: AsyncSession, phone: str, employee: Op
     )
     footer = "Tap a button below to proceed"
     buttons = [
-        {"id": "btn_domain_fleet", "title": "🚛 Fleet Approval"},
-        {"id": "btn_sales_pending_menu", "title": "⚖️ Pending Balance"},
-        {"id": "btn_domain_it", "title": "💻 IT Support"}
+        {"id": "btn_domain_fleet", "title": "Fleet Approval"},
+        {"id": "btn_sales_pending_menu", "title": "Pending Balance"},
+        {"id": "btn_domain_it", "title": "IT Support"}
     ]
     await set_user_state(session, phone, "select_service", {}, flow_name="sales_portal")
     await meta_api.send_button_message(
@@ -458,18 +458,16 @@ async def handle_existing_trip_response(
                 f"💡 _Did customer pay transport? Tap *Add Transport* below to reduce your pending balance!_"
             )
         body = (
-            f"✅ *FLEET TRIP DETAILS*\n"
+            f"✅ *TRIP VERIFIED*\n"
             f"────────────────────\n"
             f"🚛 *Trip:* `{existing.trip_id}`\n"
             f"📍 *Destination:* {existing.destination_city}\n"
-            f"🎯 *Route Criteria:* ✅ Meets Route Minimum\n"
             f"────────────────────\n"
             f"Trip meets route requirements! Cleared for dispatch.{pending_notice}"
         )
         buttons = [
-            {"id": f"flt_disp_ok_{clean_btn_id}", "title": "Authorize Dispatch"},
-            {"id": f"flt_add_trans_{clean_btn_id}", "title": "Add Transport"},
-            {"id": "btn_sales_menu", "title": "↩️ Main Menu"}
+            {"id": f"flt_disp_ok_{clean_btn_id}", "title": "Dispatch Trip"},
+            {"id": f"flt_add_trans_{clean_btn_id}", "title": "Add Transport Charge"}
         ]
         await set_user_state(
             session,
@@ -489,7 +487,7 @@ async def handle_existing_trip_response(
             to_phone=phone,
             body_text=body,
             buttons=buttons,
-            header_text="✅ TRIP APPROVED"
+            header_text="TRIP VERIFIED"
         )
         return True
 
@@ -767,9 +765,30 @@ async def handle_sales_rep_allowance_interaction(
         await meta_api.send_text_message(clean_p, prompt)
         return True
 
+    # 0.5 Sales Rep taps [Re-Enter] to re-enter allowance details
+    if text_lower.startswith("flt_rep_reenter_") or (
+        state and state.flow_name == "fleet_rep_allowance" and text_lower in {"re-enter", "reenter", "re enter", "1"}
+    ):
+        trip_id = text_strip.replace("flt_rep_reenter_", "").strip()
+        if not trip_id and state and state.current_data:
+            trip_id = state.current_data.get("trip_id", "")
+        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        state_data = {"trip_id": trip_id}
+        await set_user_state(session, clean_p, "awaiting_rep_crew_count", state_data, flow_name="fleet_rep_allowance")
+        prompt = (
+            f"⚙️ *RE-ENTERING ALLOWANCES: {trip_id}*\n"
+            "────────────────────\n"
+            f"Truck: *{trip.truck_plate if trip else 'Truck'}* | Driver: *{trip.driver_name if trip else 'Driver'}*\n"
+            "────────────────────\n"
+            "Please enter the *number of crew members* (including driver):\n"
+            "_(e.g. 2)_"
+        )
+        await meta_api.send_text_message(clean_p, prompt)
+        return True
+
     # 1. Sales Rep submits allowances: [Submit Allowance]
     if text_lower.startswith("flt_rep_sub_allow_") or (
-        state and state.flow_name == "fleet_rep_allowance" and state.current_step == "awaiting_rep_submission" and text_lower in {"confirm", "submit", "yes", "done"}
+        state and state.flow_name == "fleet_rep_allowance" and state.current_step == "awaiting_rep_submission" and text_lower in {"confirm", "submit", "yes", "done", "submit allowance", "2"}
     ):
         trip_id = text_strip.replace("flt_rep_sub_allow_", "").strip()
         if not trip_id and state and state.current_data:
@@ -806,7 +825,7 @@ async def handle_sales_rep_allowance_interaction(
             await meta_api.send_text_message(clean_p, "Allowance entry cancelled.")
             return True
 
-        # Step 1: Crew count entered
+        # Step 1: Crew count entered -> Prompt Return Schedule
         if state.current_step == "awaiting_rep_crew_count":
             digits = re.sub(r"[^\d]", "", text_strip)
             try:
@@ -818,40 +837,41 @@ async def handle_sales_rep_allowance_interaction(
                 return True
 
             data["crew_count"] = crew_count
+            await set_user_state(session, clean_p, "awaiting_rep_return_time", data, flow_name="fleet_rep_allowance")
+            prompt = (
+                f"⏳ *RETURN SCHEDULE: {trip_id}*\n"
+                "────────────────────\n"
+                f"Crew: {crew_count} people\n"
+                "Please enter the estimated *return schedule* or *duration*:\n"
+                "_(e.g. 'tomorrow 08:00 PM', '2 days 4 hours', or '12 hours')_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
+
+        # Step 2: Return schedule entered -> Prompt Departure Time
+        if state.current_step == "awaiting_rep_return_time":
+            data["return_time"] = text_strip
             await set_user_state(session, clean_p, "awaiting_rep_departure_time", data, flow_name="fleet_rep_allowance")
             prompt = (
                 f"⏰ *DEPARTURE TIME: {trip_id}*\n"
                 "────────────────────\n"
-                f"Crew: {crew_count} people\n"
+                f"Return schedule: {text_strip}\n"
                 "Please enter the scheduled *departure time*:\n"
                 "_(e.g. 06:30 AM, 08:00 AM, or 2:00 PM)_"
             )
             await meta_api.send_text_message(clean_p, prompt)
             return True
 
-        # Step 2: Departure time entered
+        # Step 3: Departure time entered -> Prompt Toll Charges
         if state.current_step == "awaiting_rep_departure_time":
             data["departure_time"] = text_strip
-            await set_user_state(session, clean_p, "awaiting_rep_return_time", data, flow_name="fleet_rep_allowance")
-            prompt = (
-                f"⏳ *RETURN SCHEDULE: {trip_id}*\n"
-                "────────────────────\n"
-                f"Departure: {text_strip}\n"
-                "Please enter the estimated *return time* or *duration*:\n"
-                "_(e.g. '2 days 4 hours', '3 days 3 hours', 'tomorrow 08:00 PM', or '12 hours')_"
-            )
-            await meta_api.send_text_message(clean_p, prompt)
-            return True
-
-        # Step 3: Return time entered
-        if state.current_step == "awaiting_rep_return_time":
-            data["return_time"] = text_strip
             await set_user_state(session, clean_p, "awaiting_rep_toll_cost", data, flow_name="fleet_rep_allowance")
             prompt = (
                 f"🛣️ *TOLL CHARGES: {trip_id}*\n"
                 "────────────────────\n"
+                f"Departure: {text_strip}\n"
                 "Please enter the total *toll cost* in USD for this route:\n"
-                "_(e.g. 34.50, 20, or 0 if no tolls)_"
+                "_(e.g. 18.00, 20, or 0 if no tolls)_"
             )
             await meta_api.send_text_message(clean_p, prompt)
             return True
@@ -864,7 +884,7 @@ async def handle_sales_rep_allowance_interaction(
                 if toll_cost < 0:
                     raise ValueError()
             except ValueError:
-                await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid toll cost in USD (e.g. 34.50 or 0):")
+                await meta_api.send_text_message(clean_p, "⚠️ Please enter a valid toll cost in USD (e.g. 18.00 or 0):")
                 return True
 
             crew_count = int(data.get("crew_count", 2))
@@ -908,9 +928,10 @@ async def handle_sales_rep_allowance_interaction(
                 f"🛣️ Tolls: ${breakdown['toll_cost']:,.2f}\n"
                 "────────────────────\n"
                 f"💰 *Total Allowance: ${breakdown['total_allowance']:,.2f}*\n\n"
-                "Please review and submit for Zayn's approval:"
+                "Please review and confirm allowance:"
             )
             buttons = [
+                {"id": f"flt_rep_reenter_{trip_id}", "title": "Re-Enter"},
                 {"id": f"flt_rep_sub_allow_{trip_id}", "title": "Submit Allowance"}
             ]
             await set_user_state(session, clean_p, "awaiting_rep_submission", data, flow_name="fleet_rep_allowance")
@@ -1218,7 +1239,7 @@ async def handle_fleet_approval_flow(
 
     # 6. Standard Dispatch Button (For trips passing minimum sales threshold)
     if text_lower.startswith(("flt_disp_ok_", "btn_accept_fleet_", "btn_dispatch_")) or (
-        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"1", "1️⃣", "authorize dispatch", "dispatch", "authorize"}
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"1", "1️⃣", "authorize dispatch", "dispatch", "authorize", "dispatch trip"}
     ):
         trip_id = text_strip.replace("flt_disp_ok_", "").replace("btn_accept_fleet_", "").replace("btn_dispatch_", "").strip()
         data = (state.current_data or {}) if state else {}
@@ -1252,7 +1273,7 @@ async def handle_fleet_approval_flow(
 
     # 6.5. Add Transport Charge Button (When shortfall is not there, sales can add transport charge to reduce pending balance)
     if text_lower.startswith(("btn_add_trans_", "flt_add_trans_")) or (
-        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"add transport", "transport charge", "reduce pending", "add charge", "2", "2️⃣"}
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_decision" and text_lower in {"add transport", "add transport charge", "transport charge", "reduce pending", "add charge", "2", "2️⃣"}
     ):
         trip_id = ""
         clean_btn_id = ""
@@ -1837,18 +1858,17 @@ async def handle_fleet_approval_flow(
 
         # Ask Sales Rep: Select Departure Warehouse
         prompt_wh = (
-            f"📍 *SELECT DEPARTURE WAREHOUSE*\n"
+            f"✅ *TRIP DATA FETCHED*\n"
             f"────────────────────\n"
             f"🏢 *Company:* {company_name}\n"
             f"🚛 *Trip:* `{trip_id}`\n"
             f"📍 *Destination:* {dest}\n"
-            f"💰 *Order Total:* ${sales_val:,.2f}\n"
             f"────────────────────\n"
-            f"Please select the warehouse from which the stock will be transferred / dispatched:"
+            f"Please select departure warehouse:"
         )
         buttons_wh = [
-            {"id": "flt_wh_harare", "title": "🏢 Harare Hub"},
-            {"id": "flt_wh_masvingo", "title": "🏢 Masvingo Hub"}
+            {"id": "flt_wh_harare", "title": "Harare Hub"},
+            {"id": "flt_wh_masvingo", "title": "Masvingo Hub"}
         ]
         await set_user_state(
             session,
@@ -1963,20 +1983,18 @@ async def handle_fleet_approval_flow(
                 )
 
             card_body = (
-                f"✅ *FLEET TRIP DETAILS*\n"
+                f"✅ *TRIP VERIFIED*\n"
                 f"────────────────────\n"
                 f"🏢 *Company:* {company_name}\n"
-                f"📦 *Departure Hub:* {origin_warehouse} Warehouse\n"
+                f"📦 *Departure Hub:* {origin_warehouse} Hub\n"
                 f"🚛 *Trip:* `{trip_id}`\n"
                 f"📍 *Destination:* {dest}{route_str}\n"
-                f"🎯 *Route Criteria:* ✅ Meets Minimum Requirements\n"
                 f"────────────────────\n"
                 f"Trip meets route requirements! Cleared for dispatch.{pending_notice}"
             )
             buttons = [
-                {"id": f"flt_disp_ok_{clean_btn_id}", "title": "Authorize Dispatch"},
-                {"id": f"flt_add_trans_{clean_btn_id}", "title": "Add Transport"},
-                {"id": "btn_sales_menu", "title": "Main Menu"}
+                {"id": f"flt_disp_ok_{clean_btn_id}", "title": "Dispatch Trip"},
+                {"id": f"flt_add_trans_{clean_btn_id}", "title": "Add Transport Charge"}
             ]
             await set_user_state(
                 session,
@@ -2001,7 +2019,7 @@ async def handle_fleet_approval_flow(
                 to_phone=phone,
                 body_text=card_body,
                 buttons=buttons,
-                header_text="FLEET TRIP DETAILS"
+                header_text="TRIP VERIFIED"
             )
         else:
             # Shortfall detected -> Save record & Send 3 clean options
@@ -2026,16 +2044,15 @@ async def handle_fleet_approval_flow(
             await session.commit()
 
             card_body = (
-                f"📋 *FLEET TRIP DETAILS*\n"
+                f"⚠️ *TRIP NOT APPROVED*\n"
                 f"────────────────────\n"
                 f"🏢 *Company:* {company_name}\n"
-                f"📦 *Departure Hub:* {origin_warehouse} Warehouse\n"
+                f"📦 *Departure Hub:* {origin_warehouse} Hub\n"
                 f"🚛 *Trip:* `{trip_id}`\n"
                 f"📍 *Destination:* {dest}{route_str}\n"
-                f"🎯 *Route Criteria:* ⚠️ Shortfall Transport Required\n"
                 f"💸 *Transport Fee to Take:* *${transport_charge:,.2f}*\n"
                 f"────────────────────\n"
-                f"Please select an option below:"
+                f"Minimum sales not met. Please select an option below:"
             )
             buttons = [
                 {"id": f"flt_sf_full_{clean_btn_id}", "title": "Full Charge"},
@@ -2064,7 +2081,7 @@ async def handle_fleet_approval_flow(
                 to_phone=phone,
                 body_text=card_body,
                 buttons=buttons,
-                header_text="FLEET TRIP DETAILS"
+                header_text="TRIP NOT APPROVED"
             )
         return True
 

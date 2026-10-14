@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     sales_admin_lg_phone: str = "263787381215"  # Onelly Madziro (LG Plast Sales Admin)
     sales_admin_lg_backup_phone: str = "263718174894"  # Mazviita Sibongile Ruzvidzo (LG Plast Sales Admin)
     sales_admin_kreckle_phone: str = "263780216289"  # Everjoy Tias (Kreckle Sales Admin)
-    accounts_phones: list = ["263780100288", "263788068567"]  # Vigilance Bangezhano & Munashe Milca
+    accounts_phones: list = ["263780100288", "263788068567"]  # Harare Hub Accounts: Vigilance Bangezhano & Munashe Milca
+    hujefa_phone: str = "263778861934"  # Hujefa Patel (+263 77 886 1934) Accounts - Masvingo Hub
+    accounts_masvingo_phones: list = ["263778861934"]  # Masvingo Hub Accounts
     logistics_manager_phone: str = "263713866223"  # Zayn (+263 71 386 6223) Logistics Manager
     panashe_phone: str = "263777261203"  # Panashe Mutamangira (+263 77 726 1203) Logistics Assistant
     panashe_phones: list = ["263777261203", "263785322640"]  # Panashe Mutamangira primary and secondary

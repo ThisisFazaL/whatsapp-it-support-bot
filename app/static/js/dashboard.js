@@ -26,8 +26,28 @@ function escapeJsAttr(val) {
             'auditLogsModal',
             'addTruckModal',
             'addDriverModal',
-            'addSalesRepModal'
+            'addSalesRepModal',
+            'globalLoadingPopup'
         ];
+
+        function showLoadingPopup(title = 'Saving Changes...', message = 'Please wait while the system updates.') {
+            const popup = document.getElementById('globalLoadingPopup');
+            if (!popup) return;
+            const titleEl = document.getElementById('globalLoadingTitle');
+            const msgEl = document.getElementById('globalLoadingMessage');
+            if (titleEl) titleEl.textContent = title;
+            if (msgEl) msgEl.textContent = message;
+            popup.classList.remove('hidden');
+            syncBodyScrollLock();
+        }
+
+        function hideLoadingPopup() {
+            const popup = document.getElementById('globalLoadingPopup');
+            if (popup) popup.classList.add('hidden');
+            syncBodyScrollLock();
+        }
+        window.showLoadingPopup = showLoadingPopup;
+        window.hideLoadingPopup = hideLoadingPopup;
 
         function syncBodyScrollLock() {
             const anyOpen = ALL_MODAL_IDS.some(id => {
@@ -451,6 +471,7 @@ function escapeJsAttr(val) {
                 submitBtn.disabled = true;
                 submitBtn.innerHTML = 'Creating User...';
             }
+            showLoadingPopup('Creating User...', `Configuring account for ${uname}...`);
 
             try {
                 const res = await fetch('/api/v2/admin/users/create', {
@@ -480,6 +501,7 @@ function escapeJsAttr(val) {
                     submitBtn.disabled = false;
                     submitBtn.innerHTML = 'Create User';
                 }
+                hideLoadingPopup();
             }
         }
         window.submitCreateUser = submitCreateUser;
@@ -3813,10 +3835,6 @@ function escapeJsAttr(val) {
                 if (budgetInput && cachedData.fleet.expense_budget_pct !== undefined) {
                     budgetInput.value = (Number(cachedData.fleet.expense_budget_pct) * 100).toFixed(1);
                 }
-                const vanInput = document.getElementById('modal-van-surcharge');
-                if (vanInput && cachedData.fleet.van_minimum_surcharge !== undefined) {
-                    vanInput.value = Number(cachedData.fleet.van_minimum_surcharge).toFixed(2);
-                }
                 if (cachedData.fleet.route_rules) {
                     renderModalCityRules(cachedData.fleet.route_rules);
                 }
@@ -3834,7 +3852,6 @@ function escapeJsAttr(val) {
                 if (mealInput) mealInput.disabled = !canMeal;
                 if (accomInput) accomInput.disabled = !canAccom;
                 if (budgetInput) budgetInput.disabled = !canFuel;
-                if (vanInput) vanInput.disabled = !canCity;
 
                 const opsBtn = document.getElementById('modal-save-ops-btn');
                 if (opsBtn) opsBtn.style.display = (canMeal || canAccom || canFuel || canCity) ? '' : 'none';
@@ -3946,20 +3963,21 @@ function escapeJsAttr(val) {
             }
 
             btn.disabled = true;
-            btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Recalculating 45 Cities...';
+            btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Updating Fuel Price...';
             if (feedback) feedback.classList.add('hidden');
+            showLoadingPopup('Updating Fuel Price...', `Setting diesel fuel rate to $${newPrice.toFixed(2)}/L (preserving corridor minimums)...`);
 
             try {
                 const res = await fetch('/api/v2/config/update-fuel', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fuel_price: newPrice, recalculate_cities: true })
+                    body: JSON.stringify({ fuel_price: newPrice, recalculate_cities: false })
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    showToast(`Fuel price updated to $${newPrice.toFixed(2)}/L and 45 cities recalculated!`);
+                    showToast(`Fuel price updated to $${newPrice.toFixed(2)}/L! (City delivery minimums preserved)`);
                     if (feedback) {
-                        feedback.textContent = `Successfully recalculated all 45 cities based on $${newPrice.toFixed(2)}/L fuel rate`;
+                        feedback.textContent = `Successfully updated fuel rate to $${newPrice.toFixed(2)}/L. City delivery minimums preserved.`;
                         feedback.className = 'mt-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400 block';
                     }
                     await fetchDashboard();
@@ -3970,7 +3988,8 @@ function escapeJsAttr(val) {
                 alert('Network error while updating fuel price: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = 'Save & Recalculate 45 Cities';
+                btn.innerHTML = 'Update Fuel Price';
+                hideLoadingPopup();
             }
         }
 
@@ -3986,8 +4005,14 @@ function escapeJsAttr(val) {
 
             const minSales = parseFloat(minInput.value);
             const vanMin = parseFloat(vanInput.value);
+            if (isNaN(minSales) || isNaN(vanMin)) {
+                alert('Please enter valid numeric minimum sales amounts.');
+                return;
+            }
+
             btn.disabled = true;
             btn.textContent = '...';
+            showLoadingPopup('Updating City Minimum...', `Saving delivery minimums for ${cityKey.toUpperCase()}...`);
 
             try {
                 const res = await fetch('/api/v2/config/update-city-minimum', {
@@ -3996,6 +4021,12 @@ function escapeJsAttr(val) {
                     body: JSON.stringify({ city_key: cityKey, min_sales: minSales, van_min: vanMin })
                 });
                 if (res.ok) {
+                    const target = modalCityRulesCache.find(c => (c.key || c.city_key || '').toLowerCase() === cityKey.toLowerCase());
+                    if (target) {
+                        target.min_sales = minSales;
+                        target.van_min = vanMin;
+                    }
+
                     btn.textContent = 'Saved';
                     btn.className = 'bg-emerald-600 text-white font-medium px-2.5 py-1 rounded-md text-xs transition shadow-xs';
                     setTimeout(() => {
@@ -4014,6 +4045,8 @@ function escapeJsAttr(val) {
                 btn.disabled = false;
                 btn.textContent = 'Save';
                 alert('Network error: ' + err.message);
+            } finally {
+                hideLoadingPopup();
             }
         }
 
@@ -4138,6 +4171,7 @@ function escapeJsAttr(val) {
             btn.disabled = true;
             btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Processing Clearance...';
             if (feedback) feedback.classList.add('hidden');
+            showLoadingPopup('Processing Payment Clearance...', `Recording ${method === 'DEBT_WRITE_OFF' ? 'debt waiver' : 'payment'} of $${amt.toFixed(2)} for ${repName}...`);
 
             try {
                 const res = await fetch('/api/v2/finance/clear-sales-rep-payment', {
@@ -4178,6 +4212,7 @@ function escapeJsAttr(val) {
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = 'Record Payment';
+                hideLoadingPopup();
             }
         }
 
@@ -4254,17 +4289,15 @@ function escapeJsAttr(val) {
             const mealInput = document.getElementById('modal-meal-rate');
             const accomInput = document.getElementById('modal-accom-rate');
             const budgetInput = document.getElementById('modal-budget-pct');
-            const vanInput = document.getElementById('modal-van-surcharge');
-            const btn = document.getElementById('modal-save-rates-btn');
+            const btn = document.getElementById('modal-save-ops-btn') || document.getElementById('modal-save-rates-btn');
             const feedback = document.getElementById('rates-update-feedback');
-            if (!mealInput || !accomInput || !budgetInput || !vanInput || !btn) return;
+            if (!mealInput || !accomInput || !budgetInput || !btn) return;
 
             const mealRate = parseFloat(mealInput.value);
             const accomRate = parseFloat(accomInput.value);
             const budgetPct = parseFloat(budgetInput.value) / 100.0;
-            const vanSurcharge = parseFloat(vanInput.value);
 
-            if (isNaN(mealRate) || isNaN(accomRate) || isNaN(budgetPct) || isNaN(vanSurcharge)) {
+            if (isNaN(mealRate) || isNaN(accomRate) || isNaN(budgetPct)) {
                 alert('Please enter valid numeric values for all operational rates.');
                 return;
             }
@@ -4272,6 +4305,7 @@ function escapeJsAttr(val) {
             btn.disabled = true;
             btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Saving Rates...';
             if (feedback) feedback.classList.add('hidden');
+            showLoadingPopup('Saving Operational Rates...', 'Updating meal and accommodation allowances in system configuration...');
 
             try {
                 const res = await fetch('/api/v2/config/update-operational-params', {
@@ -4280,8 +4314,7 @@ function escapeJsAttr(val) {
                     body: JSON.stringify({
                         meal_rate: mealRate,
                         accommodation_rate: accomRate,
-                        expense_budget_pct: budgetPct,
-                        van_minimum_surcharge: vanSurcharge
+                        expense_budget_pct: budgetPct
                     })
                 });
                 const data = await res.json();
@@ -4299,7 +4332,8 @@ function escapeJsAttr(val) {
                 alert('Network error while updating operational rates: ' + err.message);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = 'Save Rates & Surcharges';
+                btn.innerHTML = 'Save Rates';
+                hideLoadingPopup();
             }
         }
 
@@ -4348,6 +4382,7 @@ function escapeJsAttr(val) {
 
             btn.disabled = true;
             btn.innerHTML = '<span class="inline-block animate-spin mr-1">↻</span> Saving Truck...';
+            showLoadingPopup('Saving Truck Details...', `Saving truck #${truckNum} (${plate}) into fleet database...`);
 
             try {
                 const res = await fetch('/api/v2/fleet/trucks/save', {
@@ -4381,6 +4416,7 @@ function escapeJsAttr(val) {
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = 'Save Truck Details';
+                hideLoadingPopup();
             }
         }
 
@@ -4447,6 +4483,7 @@ function escapeJsAttr(val) {
 
             btn.disabled = true;
             btn.innerHTML = 'Saving Driver...';
+            showLoadingPopup('Saving Driver Record...', `Saving driver ${name} to commercial drivers roster...`);
 
             try {
                 const res = await fetch('/api/v2/fleet/drivers/save', {
@@ -4478,6 +4515,7 @@ function escapeJsAttr(val) {
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = 'Save Driver';
+                hideLoadingPopup();
             }
         }
 
@@ -4541,6 +4579,7 @@ function escapeJsAttr(val) {
 
             btn.disabled = true;
             btn.innerHTML = 'Saving Sales Rep...';
+            showLoadingPopup('Saving Sales Representative...', `Saving ${name} (${company}) to sales representatives roster...`);
 
             try {
                 const res = await fetch('/api/v2/fleet/sales-reps/save', {
@@ -4574,6 +4613,7 @@ function escapeJsAttr(val) {
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = 'Save Sales Rep';
+                hideLoadingPopup();
             }
         }
 

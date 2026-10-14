@@ -18,7 +18,7 @@ logger = logging.getLogger("config_service")
 
 # In-memory synchronized caches
 SETTINGS_CACHE: Dict[str, Any] = {
-    "fuel_price_usd": 1.55,
+    "fuel_price_usd": 2.04,
     "expense_budget_pct": 0.04,
     "meal_rate_usd": 2.00,
     "accommodation_rate_usd": 15.00,
@@ -31,7 +31,7 @@ DEFAULT_SYSTEM_SETTINGS = [
     {
         "key": "fuel_price_usd",
         "category": "PRICING",
-        "value": "1.55",
+        "value": "2.04",
         "data_type": "float",
         "label": "Diesel Fuel Price ($ / Liter)",
         "description": "Standard diesel fuel price used for fleet trip costing and corridor minimum calculations."
@@ -340,15 +340,30 @@ async def update_city_rule(
     rule = res.scalars().first()
 
     if not rule:
-        return False
-
-    old_vals = {"min_sales": rule.min_sales, "van_min": rule.van_min}
-    rule.min_sales = round(float(min_sales), 2)
-    rule.van_min = round(float(van_min), 2)
-    if distance_km is not None:
-        rule.distance_km = round(float(distance_km), 2)
-    rule.updated_by = updated_by
-    rule.updated_at = datetime.datetime.utcnow()
+        from app.services.trip_pricing_service import CITY_MINIMUMS
+        city_meta = CITY_MINIMUMS.get(clean_key, {})
+        rule = FleetRouteRule(
+            city_key=clean_key,
+            city_name=city_meta.get("city_name", clean_key.title()),
+            corridor_name=city_meta.get("corridor", "General"),
+            route=city_meta.get("route", city_meta.get("corridor", "General")),
+            distance_km=round(float(distance_km if distance_km is not None else city_meta.get("distance_km", 0.0)), 2),
+            min_sales=round(float(min_sales), 2),
+            van_min=round(float(van_min), 2),
+            is_active=True,
+            updated_by=updated_by,
+            updated_at=datetime.datetime.utcnow()
+        )
+        session.add(rule)
+        old_vals = {"min_sales": 0.0, "van_min": 0.0}
+    else:
+        old_vals = {"min_sales": rule.min_sales, "van_min": rule.van_min}
+        rule.min_sales = round(float(min_sales), 2)
+        rule.van_min = round(float(van_min), 2)
+        if distance_km is not None:
+            rule.distance_km = round(float(distance_km), 2)
+        rule.updated_by = updated_by
+        rule.updated_at = datetime.datetime.utcnow()
 
     new_vals = {"min_sales": rule.min_sales, "van_min": rule.van_min}
 
@@ -371,6 +386,19 @@ async def update_city_rule(
         ROUTE_RULES_CACHE[clean_key]["van_min"] = rule.van_min
         if distance_km is not None:
             ROUTE_RULES_CACHE[clean_key]["distance_km"] = rule.distance_km
+    else:
+        ROUTE_RULES_CACHE[clean_key] = {
+            "id": getattr(rule, "id", None),
+            "city_key": clean_key,
+            "city_name": rule.city_name,
+            "corridor": rule.corridor_name,
+            "route": getattr(rule, "route", rule.corridor_name),
+            "distance_km": rule.distance_km,
+            "min_sales": rule.min_sales,
+            "van_min": rule.van_min,
+            "is_active": True,
+            "updated_at": rule.updated_at.isoformat() if rule.updated_at else ""
+        }
 
     sync_legacy_services()
     return True
@@ -380,18 +408,13 @@ async def recalculate_all_city_minimums(
     session: AsyncSession,
     new_fuel_price: float,
     updated_by: str = "Admin",
-    reason: str = "Batch recalculation from fuel price adjustment"
+    reason: str = "Fuel price adjustment (city minimums preserved from Excel)"
 ) -> Dict[str, Any]:
     """
-    Recalculates minimum sales for all 45 cities based on a new fuel price.
-    Formula: Total Expense / 0.04 (Expense = Fuel Cost + Fixed Road / Allowance Allocations).
-    Reflects the ratio of new_fuel_price / old_fuel_price proportionally on the fuel component.
+    Updates fuel price setting. City delivery minimums are preserved exactly per
+    company Excel standards and are only adjusted individually per corridor.
     """
     old_fuel_price = get_fuel_price()
-    if old_fuel_price <= 0:
-        old_fuel_price = 1.55
-
-    fuel_ratio = new_fuel_price / old_fuel_price
 
     # 1. Update fuel price setting
     await update_system_setting(
@@ -399,39 +422,13 @@ async def recalculate_all_city_minimums(
         changed_by=updated_by, reason=f"Fuel price adjusted to ${new_fuel_price:.2f}/L"
     )
 
-    # 2. Adjust city minimums proportionally (fuel contributes ~65% of trip expense)
-    stmt = select(FleetRouteRule).where(FleetRouteRule.is_active == True)
-    res = await session.execute(stmt)
-    rules = res.scalars().all()
-
-    updated_cities = []
-    for r in rules:
-        # Weighted fuel adjustment: 65% fuel, 35% fixed overheads
-        adjustment_factor = 0.35 + (0.65 * fuel_ratio)
-        new_min = round(r.min_sales * adjustment_factor, 2)
-        diff = round(r.van_min - r.min_sales, 2)
-        new_van = round(new_min + diff, 2)
-
-        r.min_sales = new_min
-        r.van_min = new_van
-        r.updated_by = updated_by
-        r.updated_at = datetime.datetime.utcnow()
-
-        updated_cities.append({
-            "city_key": r.city_key,
-            "city_name": r.city_name,
-            "corridor": r.corridor_name,
-            "new_min_sales": new_min,
-            "new_van_min": new_van
-        })
-
     audit = AuditLog(
         username=updated_by,
-        action="BATCH_RECALCULATE_MINIMUMS",
+        action="UPDATE_FUEL_PRICE",
         module="CONFIG",
-        entity_id="ALL_CITIES",
+        entity_id="fuel_price_usd",
         previous_value={"fuel_price": old_fuel_price},
-        new_value={"fuel_price": new_fuel_price, "cities_count": len(updated_cities)},
+        new_value={"fuel_price": new_fuel_price, "recalculate_cities": False},
         remarks=reason,
         created_at=datetime.datetime.utcnow()
     )
@@ -444,9 +441,10 @@ async def recalculate_all_city_minimums(
     return {
         "status": "success",
         "fuel_price": new_fuel_price,
-        "updated_cities_count": len(updated_cities),
-        "cities": updated_cities
+        "updated_cities_count": 0,
+        "message": "Fuel price updated. City delivery minimums preserved as configured."
     }
+
 
 
 async def seed_config_and_routes(session: AsyncSession):

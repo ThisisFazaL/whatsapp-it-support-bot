@@ -74,26 +74,40 @@ async def notify_zayn_allowance_approval(session: AsyncSession, trip_id: str):
 
 
 async def notify_accounts_allowance_transfer(session: AsyncSession, trip_id: str):
-    """Alerts Accounts department to execute the allowance bank transfer."""
+    """Alerts Accounts department to execute the allowance transfer."""
     trip = await get_fleet_trip_request_by_id(session, trip_id)
     if not trip:
         return
+
+    # Check departure warehouse to route to Masvingo (Hujefa Patel) or Harare Accounts
+    is_masvingo = False
+    wh = str(getattr(trip, "origin_warehouse", "") or "").strip()
+    if not wh or "unknown" in wh.lower():
+        from app.database import get_existing_trip_approval
+        approval = await get_existing_trip_approval(session, trip_id)
+        if approval and approval.origin_warehouse:
+            wh = str(approval.origin_warehouse).strip()
+
+    if "masvingo" in wh.lower():
+        is_masvingo = True
 
     from app.handlers.fleet_approval_handler import get_solo_test_mode
     is_solo = get_solo_test_mode()
     header = "ALLOWANCE APPROVED"
     tag = "🎭 *[SOLO TEST: SIMULATING ACCOUNTS]*\n" if is_solo else ""
+    hub_name = "Masvingo Hub" if is_masvingo else "Harare Hub"
     body = (
         f"{tag}ALLOWANCE APPROVED\n"
         "────────────────────\n"
         f"Trip: {trip.trip_id}\n"
+        f"Departure: {hub_name}\n"
         f"Company: {trip.company_name}\n"
         f"Driver: {trip.driver_name} (+{trip.driver_phone})\n"
         f"Truck: {trip.truck_plate}\n"
         f"Total Allowance: ${trip.total_allowance:,.2f}\n"
         f"(Tolls: ${trip.toll_cost:,.2f} | Food: ${trip.food_allowance:,.2f})\n"
         "────────────────────\n"
-        "Please handle money transfer and confirm below:"
+        "Please disburse money (Cash / Company Card) and confirm below:"
     )
     buttons = [
         {"id": f"flt_acc_done_{trip.trip_id}", "title": "Transfer Done"}
@@ -103,7 +117,13 @@ async def notify_accounts_allowance_transfer(session: AsyncSession, trip_id: str
     if trip.salesperson_phone and clean_phone(trip.salesperson_phone) not in tester_phones:
         tester_phones.append(clean_phone(trip.salesperson_phone))
 
-    account_phones = tester_phones if is_solo else [clean_phone(p) for p in settings.accounts_phones if clean_phone(p)]
+    if is_masvingo:
+        hujefa = clean_phone(getattr(settings, "hujefa_phone", "263778861934"))
+        target_phones = [hujefa] if hujefa else ["263778861934"]
+    else:
+        target_phones = [clean_phone(p) for p in settings.accounts_phones if clean_phone(p)]
+
+    account_phones = tester_phones if is_solo else target_phones
 
     for ap in account_phones:
         await meta_api.send_button_message(
@@ -112,7 +132,7 @@ async def notify_accounts_allowance_transfer(session: AsyncSession, trip_id: str
             buttons=buttons,
             header_text=header
         )
-    logger.info(f"Delivered Accounts transfer alert for {trip_id} to {account_phones}")
+    logger.info(f"Delivered Accounts transfer alert for {trip_id} ({hub_name}) to {account_phones}")
 
 
 async def handle_zayn_accounts_interaction(
@@ -240,11 +260,11 @@ async def handle_zayn_accounts_interaction(
             f"✅ *TRANSFER CONFIRMED: {trip_id}*\n"
             "────────────────────\n"
             f"Allowance: ${trip.total_allowance:,.2f}\n"
-            f"Driver {trip.driver_name} (+{trip.driver_phone}) has been notified to set departure time."
+            f"Driver {trip.driver_name} (+{trip.driver_phone}) has been notified with departure message."
         )
         await meta_api.send_text_message(clean_p, ack)
 
-        # Notify Driver for departure time
+        # Notify Driver with departure message and [Trip Started] button
         from app.handlers.fleet_approval_handler import get_solo_test_mode
         is_solo = get_solo_test_mode()
         drv_targets = set()
@@ -266,20 +286,28 @@ async def handle_zayn_accounts_interaction(
             "────────────────────\n"
             f"Truck: {trip.truck_plate}\n"
             f"Total Allowance: ${trip.total_allowance:,.2f}\n"
+            f"Scheduled Departure: {trip.departure_time or 'Immediate'}\n"
             "────────────────────\n"
-            "Please enter your scheduled departure time:\n"
-            "_(e.g. 06:30 AM or 07:00 AM)_"
+            "Allowance transfer complete! Please tap *Trip Started* once you board the vehicle and start your journey:"
         )
+        buttons = [
+            {"id": f"flt_drv_start_{trip.trip_id}", "title": "Trip Started"}
+        ]
         for dp in drv_targets:
             if dp:
                 await set_user_state(
                     session,
                     dp,
-                    current_step="awaiting_departure_time",
+                    current_step="awaiting_trip_start",
                     current_data={"trip_id": trip.trip_id},
                     flow_name="fleet_driver"
                 )
-                await meta_api.send_text_message(dp, drv_prompt)
+                await meta_api.send_button_message(
+                    to_phone=dp,
+                    body_text=drv_prompt,
+                    buttons=buttons,
+                    header_text="TRIP DEPARTURE"
+                )
         return True
 
     return False

@@ -97,7 +97,7 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
     )
     buttons = [
         {"id": f"flt_adm_bal_{trip.trip_id}", "title": "Balanced"},
-        {"id": f"flt_adm_unbal_{trip.trip_id}", "title": "Not Balancing"}
+        {"id": f"flt_adm_unbal_{trip.trip_id}", "title": "Not Balanced"}
     ]
 
     tester_phones = {clean_phone(settings.master_admin_phone)}
@@ -173,8 +173,8 @@ async def handle_sales_admin_interaction(
         await notify_logistics_manager_adjudication(session, trip_id)
         return True
 
-    # 2. Sales Admin clicks [Not Balancing]
-    if text_lower.startswith("flt_adm_unbal_"):
+    # 2. Sales Admin clicks [Not Balanced]
+    if text_lower.startswith("flt_adm_unbal_") or text_lower in {"not balanced", "not balancing", "unbalanced", "2", "2️⃣"}:
         trip_id = text_strip.replace("flt_adm_unbal_", "").strip()
         await set_user_state(
             session,
