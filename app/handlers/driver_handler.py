@@ -256,7 +256,41 @@ async def handle_driver_interaction(
 
         await set_emergency_expense_status(session, exp_id, "APPROVED", approver_name)
 
-        # 1. Acknowledge Deciding Approver
+        # 1. Determine Hub (Harare Hub vs Masvingo Hub), Company, and Personnel
+        trip = await get_fleet_trip_request_by_id(session, exp.trip_id)
+        origin_wh = getattr(trip, "origin_warehouse", "") if trip else ""
+        company_name = getattr(trip, "company_name", "") if trip else ""
+        driver_name = getattr(trip, "driver_name", "") if trip else ""
+        truck_plate = getattr(trip, "truck_plate", "") if trip else ""
+        salesperson_phone = getattr(trip, "salesperson_phone", "") if trip else ""
+        sales_admin_phone = getattr(trip, "sales_admin_phone", "") if trip else ""
+
+        if not origin_wh or "unknown" in str(origin_wh).lower() or not company_name:
+            from app.handlers.fleet_approval_handler import get_existing_trip_approval
+            approval = await get_existing_trip_approval(session, exp.trip_id)
+            if approval:
+                if not origin_wh and approval.origin_warehouse:
+                    origin_wh = approval.origin_warehouse
+                if not company_name and approval.raw_data and isinstance(approval.raw_data, dict):
+                    company_name = approval.raw_data.get("company_name", "")
+                if not salesperson_phone and approval.salesperson_phone:
+                    salesperson_phone = approval.salesperson_phone
+
+        is_masvingo = "masvingo" in str(origin_wh).lower()
+        hub_name = "Masvingo Hub" if is_masvingo else "Harare Hub"
+        driver_display = f"{driver_name} (+{exp.driver_phone})" if driver_name else f"+{exp.driver_phone}"
+        truck_display = truck_plate if truck_plate else "Assigned Fleet Truck"
+        comp_display = company_name if company_name else "Tagoneswa Fleet"
+        charge_label = "Emergency Fuel" if exp.charge_type == "EMERGENCY_FUEL" else (exp.charge_type or "Emergency Expense")
+
+        from app.handlers.fleet_approval_handler import get_solo_test_mode
+        is_solo = get_solo_test_mode()
+
+        tester_phones = [clean_phone(settings.master_admin_phone)]
+        if salesperson_phone and clean_phone(salesperson_phone) not in tester_phones:
+            tester_phones.append(clean_phone(salesperson_phone))
+
+        # 2. Acknowledge Deciding Approver
         ack_approver = (
             f"✅ *EMERGENCY EXPENSE APPROVED*\n"
             "────────────────────\n"
@@ -264,11 +298,11 @@ async def handle_driver_interaction(
             f"Type: *{exp.charge_type}*\n"
             f"Amount: *${exp.amount:,.2f}*\n"
             f"Decision logged by: *{approver_name}*.\n"
-            "Driver and logistics team have been notified."
+            f"Driver, {hub_name} Accounts, and Sales Admin have been notified."
         )
         await meta_api.send_text_message(clean_p, ack_approver)
 
-        # 2. Inform Peer Manager (if Zayn clicked, notify Edward; if Edward clicked, notify Zayn)
+        # 3. Inform Peer Manager (if Zayn clicked, notify Edward; if Edward clicked, notify Zayn)
         if peer_phone and peer_phone != clean_p:
             peer_note = (
                 f"ℹ️ *EMERGENCY EXPENSE DECIDED*\n"
@@ -284,7 +318,7 @@ async def handle_driver_interaction(
             except Exception as e:
                 logger.warning(f"Could not notify peer manager {peer_phone}: {e}")
 
-        # 3. Notify Driver Immediately and request receipt photo
+        # 4. Notify Driver Immediately and request receipt photo
         drv_phone = clean_phone(exp.driver_phone)
         drv_msg = (
             f"✅ *EMERGENCY EXPENSE APPROVED*\n"
@@ -305,6 +339,91 @@ async def handle_driver_interaction(
             flow_name="fleet_driver"
         )
         await meta_api.send_text_message(drv_phone, drv_msg)
+
+        # 5. Notify Accounts & Finance: Harare Hub -> Harare Accounts, Masvingo Hub -> Hujefa Patel
+        if is_masvingo:
+            hujefa = clean_phone(getattr(settings, "hujefa_phone", "263778861934"))
+            accounts_targets = [hujefa] if hujefa else ["263778861934"]
+        else:
+            accounts_targets = [clean_phone(p) for p in settings.accounts_phones if clean_phone(p)]
+
+        accounts_recipients = tester_phones if is_solo else accounts_targets
+        if not is_solo and getattr(settings, "test_user_role", "").upper() == "ACCOUNTS_USER":
+            accounts_recipients = list(set(accounts_recipients + tester_phones))
+
+        acc_msg = (
+            f"🚨 *EMERGENCY CHARGES APPROVED*\n"
+            "────────────────────\n"
+            f"Hub: *{hub_name}*\n"
+            f"Trip: *{exp.trip_id}*\n"
+            f"Company: *{comp_display}*\n"
+            f"Driver: *{driver_display}*\n"
+            f"Truck: *{truck_display}*\n"
+            "────────────────────\n"
+            f"Charge Type: *{charge_label}*\n"
+            f"Authorized Amount: *${exp.amount:,.2f}*\n"
+            f"Description: {exp.description or 'Emergency expense'}\n"
+            f"Approved by: *{approver_name}*\n"
+            "────────────────────\n"
+            f"ℹ️ _These emergency charges were approved by *{approver_name}*. Please record in accounts for driver reimbursement and trip settlement._"
+        )
+        for ap in set(accounts_recipients):
+            if ap:
+                try:
+                    await meta_api.send_text_message(ap, acc_msg)
+                except Exception as e:
+                    logger.warning(f"Could not notify accounts recipient {ap}: {e}")
+
+        # 6. Send Reimbursement details to Sales Admin
+        from app.handlers.sales_admin_handler import get_sales_admin_phones_for_company
+        admin_phones = []
+        if sales_admin_phone:
+            admin_phones.append(clean_phone(sales_admin_phone))
+        else:
+            admin_phones.extend(get_sales_admin_phones_for_company(company_name))
+        if not admin_phones:
+            admin_phones = [clean_phone(settings.sales_admin_tg_phone)]
+
+        sales_admin_recipients = tester_phones if is_solo else admin_phones
+        if not is_solo and getattr(settings, "test_user_role", "").upper() == "SALES_ADMIN":
+            sales_admin_recipients = list(set(sales_admin_recipients + tester_phones))
+
+        sales_admin_msg = (
+            f"🧾 *EMERGENCY REIMBURSEMENT APPROVED*\n"
+            "────────────────────\n"
+            f"Trip: *{exp.trip_id}*\n"
+            f"Company: *{comp_display}*\n"
+            f"Hub: *{hub_name}*\n"
+            f"Driver: *{driver_display}*\n"
+            f"Truck: *{truck_display}*\n"
+            "────────────────────\n"
+            f"Reimbursement Item: *{charge_label}*\n"
+            f"Authorized Amount: *${exp.amount:,.2f}*\n"
+            f"Description: {exp.description or 'Emergency expense'}\n"
+            f"Approved by: *{approver_name}*\n"
+            "────────────────────\n"
+            f"ℹ️ _Approved by *{approver_name}*. Please record this emergency reimbursement for final physical balancing and trip settlement upon driver return._"
+        )
+        for sap in set(sales_admin_recipients):
+            if sap:
+                try:
+                    await meta_api.send_text_message(sap, sales_admin_msg)
+                except Exception as e:
+                    logger.warning(f"Could not notify sales admin recipient {sap}: {e}")
+
+        # 7. Forward attached evidence photo to Accounts & Sales Admin if already available
+        if exp.receipt_image_id and str(exp.receipt_image_id).isdigit():
+            for recipient in set(accounts_recipients + sales_admin_recipients):
+                if recipient:
+                    try:
+                        await meta_api.send_image_message(
+                            to_phone=recipient,
+                            image_id=str(exp.receipt_image_id),
+                            caption=f"📸 Evidence for Trip {exp.trip_id}: {charge_label} (${exp.amount:,.2f})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not forward emergency photo to {recipient}: {e}")
+
         return True
 
     # 0.5 Location pin message - Disabled for anti-hijacking & cargo security
@@ -631,6 +750,7 @@ async def handle_driver_interaction(
         if state.current_step == "awaiting_emergency_receipt":
             trip_id = data.get("trip_id", "")
             exp_id = data.get("exp_id")
+            exp = None
             if exp_id and image_id:
                 exp = await get_emergency_expense_by_id(session, int(exp_id))
                 if exp:
@@ -642,6 +762,47 @@ async def handle_driver_interaction(
                 "Receipt photo logged for depot balancing."
             )
             await meta_api.send_text_message(clean_p, ack_receipt)
+
+            if exp and image_id and str(image_id).isdigit():
+                try:
+                    trip = await get_fleet_trip_request_by_id(session, trip_id)
+                    origin_wh = getattr(trip, "origin_warehouse", "") if trip else ""
+                    if not origin_wh:
+                        from app.handlers.fleet_approval_handler import get_existing_trip_approval
+                        approval = await get_existing_trip_approval(session, trip_id)
+                        if approval and approval.origin_warehouse:
+                            origin_wh = approval.origin_warehouse
+                    is_masvingo = "masvingo" in str(origin_wh).lower()
+
+                    from app.handlers.fleet_approval_handler import get_solo_test_mode
+                    is_solo = get_solo_test_mode()
+                    tester_phones = [clean_phone(settings.master_admin_phone)]
+                    if trip and trip.salesperson_phone:
+                        tester_phones.append(clean_phone(trip.salesperson_phone))
+
+                    if is_masvingo:
+                        hujefa = clean_phone(getattr(settings, "hujefa_phone", "263778861934"))
+                        acc_targets = [hujefa] if hujefa else ["263778861934"]
+                    else:
+                        acc_targets = [clean_phone(p) for p in settings.accounts_phones if clean_phone(p)]
+
+                    from app.handlers.sales_admin_handler import get_sales_admin_phones_for_company
+                    adm_targets = [clean_phone(trip.sales_admin_phone)] if trip and trip.sales_admin_phone else get_sales_admin_phones_for_company(trip.company_name if trip else "")
+
+                    fwd_recipients = tester_phones if is_solo else list(set(acc_targets + adm_targets))
+                    for fp in fwd_recipients:
+                        if fp:
+                            try:
+                                await meta_api.send_image_message(
+                                    to_phone=fp,
+                                    image_id=image_id,
+                                    caption=f"🧾 *Emergency Receipt Uploaded*\nTrip: {trip_id} | Amount: ${exp.amount:,.2f}\nDriver: +{exp.driver_phone}"
+                                )
+                            except Exception as ex:
+                                logger.warning(f"Could not forward receipt image to {fp}: {ex}")
+                except Exception as fe:
+                    logger.warning(f"Error forwarding emergency receipt: {fe}")
+
             await clear_user_state(session, clean_p)
             await send_driver_transit_menu(session, clean_p, trip_id)
             return True
