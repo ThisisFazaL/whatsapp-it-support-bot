@@ -1600,9 +1600,14 @@ async def get_system_vault_entry(session: AsyncSession, vault_key: str) -> Optio
         return None
 
 
-async def save_system_vault_entry(session: AsyncSession, vault_key: str, vault_data: str):
+async def save_system_vault_entry(session: AsyncSession, vault_key: str, vault_data: Any):
     """Upserts vault data string into system_vault table."""
     try:
+        import json
+        if isinstance(vault_data, (dict, list)):
+            vault_data = json.dumps(vault_data)
+        elif not isinstance(vault_data, str):
+            vault_data = str(vault_data)
         stmt = select(SystemVault).where(SystemVault.vault_key == vault_key.strip())
         res = await session.execute(stmt)
         entry = res.scalar_one_or_none()

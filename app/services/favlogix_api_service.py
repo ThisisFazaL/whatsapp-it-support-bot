@@ -254,12 +254,12 @@ class FavlogixAPIService:
                 t.token_expiry = self._decode_token_expiry(t.auth_token)
 
         # Pre-seed verified Tagoneswa session cookies if not already configured
-        if not self.tenants["TG"].cookies.get("session") or self.tenants["TG"].cookies.get("session") == "593e1403-5bd3-4186-956c-6e86f62bb91b":
+        if not self.tenants["TG"].cookies.get("session") or self.tenants["TG"].cookies.get("session") in ("593e1403-5bd3-4186-956c-6e86f62bb91b", "0f96d281-4bf3-45ee-8399-8d9d5589fc94"):
             self.tenants["TG"].cookies.update({
                 "device_id": "01a1115f-b837-7790-af5a-69a84cd1fe56",
-                "session": "0f96d281-4bf3-45ee-8399-8d9d5589fc94",
+                "session": "cf35a69f-8621-43cb-8745-f0e35eebf83e",
                 "tenant": "tagoneswa",
-                "csrf_token": "e81198fcd605d23a7d9a572d2fbedb98e0fbf438588a23a06005ea665712bdde"
+                "csrf_token": "f4775c453eb280ecfed4af78ba0aeaaa9e8ac6b3fdc2a49e615128af0c5e9ead"
             })
             self.tenants["TG"].device_key = "01a1115f-b837-7790-af5a-69a84cd1fe56"
 
@@ -274,12 +274,12 @@ class FavlogixAPIService:
             self.tenants["LG"].device_key = "01a11162-97d3-7d4a-845a-6bf8fc413a6a"
 
         # Pre-seed verified Kreckle Foods session cookies if not already configured
-        if not self.tenants["KRECKLE"].cookies.get("session"):
+        if not self.tenants["KRECKLE"].cookies.get("session") or self.tenants["KRECKLE"].cookies.get("session") == "bd80af2d-c0d1-422c-a146-1074eff6d017":
             self.tenants["KRECKLE"].cookies.update({
                 "device_id": "01a1103b-da5c-7de5-95bb-81631456a4e7",
-                "session": "bd80af2d-c0d1-422c-a146-1074eff6d017",
+                "session": "f2c1fc66-670e-4262-b442-b81e9dfb70e1",
                 "tenant": "kreckle",
-                "csrf_token": "887cc8eda442715fd32194281257ba29b2c26da89d8f1758812fa1e10f4baf7d"
+                "csrf_token": "c7d271f7fbe80accfe265817bf823b69f93613e461e2b0e2a95cac9ec9f94dab"
             })
             self.tenants["KRECKLE"].device_key = "01a1103b-da5c-7de5-95bb-81631456a4e7"
 

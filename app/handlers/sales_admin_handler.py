@@ -197,6 +197,14 @@ async def handle_sales_admin_interaction(
         await meta_api.send_text_message(clean_p, ack)
         return True
 
+    # 1.8 Sales Admin clicks [Updated] button
+    if text_lower.startswith("flt_adm_fav_updated_"):
+        trip_id = text_strip.replace("flt_adm_fav_updated_", "").strip()
+        data = (state.current_data if state and state.flow_name == "fleet_sales_admin" else None) or {}
+        if not data.get("trip_id"):
+            data["trip_id"] = trip_id
+        return await _verify_favlogix_and_finalize_balancing(session, clean_p, trip_id, data)
+
     # 2. Sales Admin clicks [Not Balanced] -> Prompt for collected amount
     if text_lower.startswith("flt_adm_unbal_") or text_lower in {"not balanced", "not balancing", "unbalanced", "2", "2️⃣"}:
         trip_id = text_strip.replace("flt_adm_unbal_", "").strip()
@@ -275,69 +283,162 @@ async def handle_sales_admin_interaction(
                 )
                 return True
             else:
-                # Discrepancy detected: Reimbursement = (Favlogix Collected - Sales Admin Entered Amount)
-                reimbursement_amt = round(api_collected - admin_collected, 2)
-                if trip:
-                    trip.status = "UNBALANCED"
-                    trip.discrepancy_amount = reimbursement_amt
-                    trip.discrepancy_reason = f"FavLogix Collected ${api_collected:,.2f} vs Admin Count ${admin_collected:,.2f}"
-                    await session.commit()
+                # Discrepancy detected: store difference and instruct Sales Admin to update FavLogix
+                diff = round(api_collected - admin_collected, 2)
+                await set_user_state(
+                    session,
+                    clean_p,
+                    current_step="awaiting_favlogix_update_confirm",
+                    current_data={
+                        "trip_id": trip_id,
+                        "admin_collected": admin_collected,
+                        "initial_favlogix_collected": api_collected,
+                        "initial_diff": diff
+                    },
+                    flow_name="fleet_sales_admin"
+                )
 
-                await clear_user_state(session, clean_p)
-
-                # 1. Inform Sales Admin of the exact reimbursement due
-                ack = (
+                discrepancy_msg = (
                     f"⚠️ *DISCREPANCY DETECTED: {trip_id}*\n"
                     "────────────────────\n"
-                    f"FavLogix Collected: *${api_collected:,.2f}*\n"
-                    f"Sales Admin Count: *${admin_collected:,.2f}*\n"
+                    f"• FavLogix System Collected: *${api_collected:,.2f}*\n"
+                    f"• Driver Physical Collected: *${admin_collected:,.2f}*\n"
+                    f"• Discrepancy Difference: *${abs(diff):,.2f}*\n"
                     "────────────────────\n"
-                    f"💵 *Reimbursement Amount: ${reimbursement_amt:,.2f}*\n"
-                    f"_(FavLogix Collected ${api_collected:,.2f} - Admin Count ${admin_collected:,.2f})_\n"
-                    "────────────────────\n"
-                    "Notice has been dispatched to the Sales Representative to verify and provide the reimbursement amount to the driver.\n\n"
-                    "You may close this trip once acknowledged:"
+                    f"⚠️ Physical collection from driver does not match FavLogix system record.\n\n"
+                    f"Please update the FavLogix system so the collected amount is *${admin_collected:,.2f}*.\n\n"
+                    "Once updated in FavLogix, tap the *Updated* button below to re-verify:"
                 )
                 buttons = [
-                    {"id": f"flt_adm_close_{trip_id}", "title": "Close Trip"}
+                    {"id": f"flt_adm_fav_updated_{trip_id}", "title": "Updated"}
                 ]
                 await meta_api.send_button_message(
                     to_phone=clean_p,
-                    body_text=ack,
+                    body_text=discrepancy_msg,
                     buttons=buttons,
-                    header_text="DISCREPANCY CALCULATED"
+                    header_text="UPDATE FAVLOGIX"
                 )
-
-                # 2. Notify Sales Representative to provide reimbursement to driver
-                sales_rep_phone = clean_phone(trip.salesperson_phone) if trip and trip.salesperson_phone else None
-                driver_display = f"{trip.driver_name} (+{trip.driver_phone})" if trip and trip.driver_name else f"+{trip.driver_phone}" if trip else "Driver"
-                sales_rep_msg = (
-                    f"🚨 *DRIVER REIMBURSEMENT REQUIRED*\n"
-                    "────────────────────\n"
-                    f"Trip: *{trip_id}*\n"
-                    f"Company: *{trip.company_name if trip else 'Tagoneswa Fleet'}*\n"
-                    f"Driver: *{driver_display}*\n"
-                    "────────────────────\n"
-                    f"FavLogix Recorded Collected: *${api_collected:,.2f}*\n"
-                    f"Sales Admin Physical Count: *${admin_collected:,.2f}*\n"
-                    "────────────────────\n"
-                    f"💵 *Reimbursement Amount: ${reimbursement_amt:,.2f}*\n"
-                    f"_(FavLogix Collected ${api_collected:,.2f} - Sales Admin Count ${admin_collected:,.2f})_\n"
-                    "────────────────────\n"
-                    "⚠️ _Please verify the transport charge discrepancy and provide this reimbursement amount to the driver._"
-                )
-
-                from app.handlers.fleet_approval_handler import get_solo_test_mode
-                is_solo = get_solo_test_mode()
-                targets = [clean_phone(settings.master_admin_phone)] if is_solo else ([sales_rep_phone] if sales_rep_phone else [clean_phone(settings.master_admin_phone)])
-                for rep_p in set(targets):
-                    if rep_p:
-                        try:
-                            await meta_api.send_text_message(rep_p, sales_rep_msg)
-                            logger.info(f"Dispatched driver reimbursement notice to {rep_p} for {trip_id}")
-                        except Exception as ex:
-                            logger.warning(f"Could not notify sales rep {rep_p}: {ex}")
-
                 return True
 
+        # Sales admin in awaiting_favlogix_update_confirm triggers verification via button or text
+        if state.current_step == "awaiting_favlogix_update_confirm":
+            return await _verify_favlogix_and_finalize_balancing(session, clean_p, trip_id, data)
+
     return False
+
+
+async def _verify_favlogix_and_finalize_balancing(session: AsyncSession, clean_p: str, trip_id: str, data: Dict[str, Any]) -> bool:
+    """Re-queries FavLogix after Sales Admin updates it, adds difference to Sales Rep ledger on match, and offers Close Trip."""
+    trip = await get_fleet_trip_request_by_id(session, trip_id)
+    if not trip:
+        await meta_api.send_text_message(clean_p, f"⚠️ Trip '{trip_id}' not found.")
+        return True
+
+    admin_collected = float(data.get("admin_collected", 0.0))
+    initial_diff = float(data.get("initial_diff", 0.0))
+    initial_favlogix = float(data.get("initial_favlogix_collected", 0.0))
+
+    company_name = trip.company_name if trip else None
+    from app.services.favlogix_api_service import favlogix_api_service
+    report_data = await favlogix_api_service.get_trip_report_data(trip_id, company_name)
+    new_api_collected = float(report_data.get("collected", 0.0))
+
+    is_matched = abs(new_api_collected - admin_collected) < 0.01
+
+    if not is_matched:
+        # Still not matching
+        still_unmatched_msg = (
+            f"❌ *FAVLOGIX NOT MATCHING YET: {trip_id}*\n"
+            "────────────────────\n"
+            f"• Driver Physical Count: *${admin_collected:,.2f}*\n"
+            f"• Current FavLogix Record: *${new_api_collected:,.2f}*\n"
+            "────────────────────\n"
+            f"FavLogix still shows *${new_api_collected:,.2f}* instead of *${admin_collected:,.2f}*.\n\n"
+            "Please ensure the trip report is saved in FavLogix, then tap *Updated* again:"
+        )
+        buttons = [
+            {"id": f"flt_adm_fav_updated_{trip_id}", "title": "Updated"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=clean_p,
+            body_text=still_unmatched_msg,
+            buttons=buttons,
+            header_text="NOT MATCHING"
+        )
+        return True
+    else:
+        # IT MATCHES!
+        diff_to_add = initial_diff
+        from app.database import record_pending_ledger_entry, get_sales_rep_pending_balance
+
+        sales_rep_phone = clean_phone(trip.salesperson_phone) if trip and trip.salesperson_phone else None
+        sales_rep_name = trip.salesperson_name if trip else "Sales Representative"
+
+        new_balance = 0.0
+        if sales_rep_phone and abs(diff_to_add) > 0.001:
+            entry_type = "DEFICIT" if diff_to_add > 0 else "SURPLUS"
+            notes = f"FavLogix collection discrepancy adjustment for Trip {trip_id} (FavLogix originally ${initial_favlogix:,.2f} vs Driver collected ${admin_collected:,.2f})"
+            await record_pending_ledger_entry(
+                session=session,
+                phone=sales_rep_phone,
+                name=sales_rep_name,
+                trip_id=trip_id,
+                entry_type=entry_type,
+                amount=diff_to_add,
+                notes=notes
+            )
+            new_balance = await get_sales_rep_pending_balance(session, sales_rep_phone)
+
+            # Notify Sales Rep of their updated pending amount
+            rep_alert = (
+                f"⚖️ *PENDING BALANCE ADJUSTMENT*\n"
+                "────────────────────\n"
+                f"Trip: *{trip_id}*\n"
+                f"Company: *{trip.company_name or 'Tagoneswa Fleet'}*\n"
+                f"Discrepancy Added: *${abs(diff_to_add):,.2f}* ({entry_type})\n"
+                f"New Net Pending Balance: *${new_balance:,.2f}*\n"
+                "────────────────────\n"
+                f"Note: Recorded after FavLogix collection reconciliation for Trip {trip_id}."
+            )
+            from app.handlers.fleet_approval_handler import get_solo_test_mode
+            is_solo = get_solo_test_mode()
+            targets = [clean_phone(settings.master_admin_phone)] if is_solo else ([sales_rep_phone] if sales_rep_phone else [clean_phone(settings.master_admin_phone)])
+            for rep_p in set(targets):
+                if rep_p:
+                    try:
+                        await meta_api.send_text_message(rep_p, rep_alert)
+                        logger.info(f"Dispatched pending balance adjustment notice to {rep_p} for {trip_id}")
+                    except Exception as ex:
+                        logger.warning(f"Could not notify sales rep {rep_p}: {ex}")
+
+        # Update trip in DB
+        if trip:
+            trip.status = "BALANCED"
+            trip.discrepancy_amount = diff_to_add
+            trip.discrepancy_reason = f"FavLogix reconciled to ${admin_collected:,.2f}; diff ${diff_to_add:,.2f} added to sales rep pending ledger"
+            await session.commit()
+
+        await clear_user_state(session, clean_p)
+
+        # Send confirmation & Close Trip button to Sales Admin
+        success_msg = (
+            f"✅ *FAVLOGIX UPDATE CONFIRMED*\n"
+            "────────────────────\n"
+            f"Trip: *{trip_id}*\n"
+            f"• Verified FavLogix Collected: *${new_api_collected:,.2f}*\n"
+            f"• Driver Physical Count: *${admin_collected:,.2f}*\n"
+            f"• Discrepancy Added to Rep Pending: *${abs(diff_to_add):,.2f}*\n"
+            "────────────────────\n"
+            "Transportation charges are now balanced.\n\n"
+            "Tap below to officially close this trip:"
+        )
+        buttons = [
+            {"id": f"flt_adm_close_{trip_id}", "title": "Close Trip"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=clean_p,
+            body_text=success_msg,
+            buttons=buttons,
+            header_text="CLOSE TRIP"
+        )
+        return True
