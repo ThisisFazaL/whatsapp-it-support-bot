@@ -254,22 +254,22 @@ class FavlogixAPIService:
                 t.token_expiry = self._decode_token_expiry(t.auth_token)
 
         # Pre-seed verified Tagoneswa session cookies if not already configured
-        if not self.tenants["TG"].cookies.get("session"):
+        if not self.tenants["TG"].cookies.get("session") or self.tenants["TG"].cookies.get("session") == "593e1403-5bd3-4186-956c-6e86f62bb91b":
             self.tenants["TG"].cookies.update({
                 "device_id": "01a1115f-b837-7790-af5a-69a84cd1fe56",
-                "session": "593e1403-5bd3-4186-956c-6e86f62bb91b",
+                "session": "0f96d281-4bf3-45ee-8399-8d9d5589fc94",
                 "tenant": "tagoneswa",
-                "csrf_token": "da2a9d99cccd04e7919691463cee0c062caf52f2a41b8af86378922f0be72406"
+                "csrf_token": "e81198fcd605d23a7d9a572d2fbedb98e0fbf438588a23a06005ea665712bdde"
             })
             self.tenants["TG"].device_key = "01a1115f-b837-7790-af5a-69a84cd1fe56"
 
         # Pre-seed verified LG Plast session cookies if not already configured
-        if not self.tenants["LG"].cookies.get("session"):
+        if not self.tenants["LG"].cookies.get("session") or self.tenants["LG"].cookies.get("session") == "7242ad0b-1aa6-413c-af56-e473e0b0ba19":
             self.tenants["LG"].cookies.update({
                 "device_id": "01a11162-97d3-7d4a-845a-6bf8fc413a6a",
-                "session": "7242ad0b-1aa6-413c-af56-e473e0b0ba19",
+                "session": "eb1f5f4f-77c0-4831-b133-b0d5006f6764",
                 "tenant": "lgplast",
-                "csrf_token": "d4d272384c5da814246628eaa136094a02899566dd70049cc4e58d3aac332eb9"
+                "csrf_token": "2a18b3792f41802b5a156565e2a45cd5a8f50f80c42598360558b1884ff48060"
             })
             self.tenants["LG"].device_key = "01a11162-97d3-7d4a-845a-6bf8fc413a6a"
 
@@ -1003,5 +1003,125 @@ class FavlogixAPIService:
                 for t in trips.values()
             ][:limit]
 
+    async def get_trip_report_data(self, trip_id: str, company_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Fetches the Trip Report entry for a given trip from Favlogix fio platform.
+        Extracts the 'collected' column, cash, bank, ordered, delivered, and pending values.
+        If sales:trip-report:read is forbidden (403), falls back to trip detail order calculation.
+        """
+        tenant = self.get_tenant(company_name, trip_id)
+        clean_trip = trip_id.strip().upper().replace("TRIP-", "").strip()
+        base = self._base_url(tenant)
+        is_fio = self._is_fio(tenant)
+
+        if not is_fio:
+            return {"found": False, "error": "Trip report is only supported on fio.favlogix.com", "collected": 0.0}
+
+        headers = {
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+            "Referer": "https://fio.favlogix.com/sales/trip-report",
+            "Origin": "https://fio.favlogix.com"
+        }
+        if "csrf_token" in tenant.cookies:
+            headers["x-csrf-token"] = tenant.cookies["csrf_token"]
+        if tenant.auth_token and not ("=" in tenant.auth_token or ";" in tenant.auth_token) and not tenant.auth_token.startswith("cookie-"):
+            headers["Authorization"] = f"Bearer {tenant.auth_token}"
+
+        async with httpx.AsyncClient(timeout=15.0, cookies=tenant.cookies) as client:
+            # 1. Try detail trip report
+            detail_report_url = f"{base}/tenant/sales/trip-report/detail"
+            try:
+                res_det = await client.get(detail_report_url, params={"tripId": clean_trip}, headers=headers)
+                if res_det.status_code == 200:
+                    d_json = res_det.json()
+                    item = d_json.get("data") or d_json
+                    col = float(item.get("collected") or 0.0)
+                    logger.info(f"Retrieved trip report detail for '{clean_trip}': Collected=${col}")
+                    return {
+                        "found": True,
+                        "trip_id": clean_trip,
+                        "collected": col,
+                        "collected_cash": float(item.get("collectedCash") or 0.0),
+                        "collected_bank": float(item.get("collectedBank") or 0.0),
+                        "ordered": float(item.get("ordered") or 0.0),
+                        "delivered": float(item.get("delivered") or 0.0),
+                        "pending": float(item.get("pending") or 0.0),
+                        "source": "trip_report_detail",
+                        "tenant": tenant.display_name
+                    }
+            except Exception as e:
+                logger.warning(f"Error fetching trip-report detail: {e}")
+
+            # 2. Try list trip report with search
+            list_report_url = f"{base}/tenant/sales/trip-report"
+            try:
+                res_list = await client.get(list_report_url, params={"search": clean_trip, "limit": 100}, headers=headers)
+                if res_list.status_code == 200:
+                    l_json = res_list.json()
+                    items = l_json.get("data", []) if isinstance(l_json, dict) else l_json
+                    matching = [
+                        it for it in items
+                        if clean_trip.lower() in str(it.get("tripId", "")).lower()
+                        or str(it.get("tripId", "")).lower().endswith(clean_trip.lower())
+                    ]
+                    if matching:
+                        m = matching[0]
+                        col = float(m.get("collected") or 0.0)
+                        logger.info(f"Found trip in trip-report list for '{clean_trip}': Collected=${col}")
+                        return {
+                            "found": True,
+                            "trip_id": m.get("tripId", clean_trip),
+                            "collected": col,
+                            "collected_cash": float(m.get("collectedCash") or 0.0),
+                            "collected_bank": float(m.get("collectedBank") or 0.0),
+                            "ordered": float(m.get("ordered") or 0.0),
+                            "delivered": float(m.get("delivered") or 0.0),
+                            "pending": float(m.get("pending") or 0.0),
+                            "source": "trip_report_list",
+                            "tenant": tenant.display_name
+                        }
+            except Exception as e:
+                logger.warning(f"Error fetching trip-report list: {e}")
+
+            # 3. Fallback: Trip detail query
+            try:
+                trip_detail_url = f"{base}/tenant/sales/trip/detail"
+                res_trip = await client.get(trip_detail_url, params={"tripId": clean_trip}, headers=headers)
+                if res_trip.status_code == 200:
+                    t_json = res_trip.json()
+                    orders = t_json.get("orders", [])
+                    tot_collected = 0.0
+                    for ord_item in orders:
+                        inv = ord_item.get("invoice") or {}
+                        tot = float(inv.get("total") or 0.0)
+                        bal = float(inv.get("balanceDue") or 0.0)
+                        if tot > bal:
+                            tot_collected += (tot - bal)
+                    logger.info(f"Computed collected from trip detail fallback for '{clean_trip}': Collected=${tot_collected}")
+                    return {
+                        "found": True,
+                        "trip_id": clean_trip,
+                        "collected": round(tot_collected, 2),
+                        "collected_cash": 0.0,
+                        "collected_bank": 0.0,
+                        "ordered": float(t_json.get("trip", {}).get("totalAmount", 0.0)),
+                        "delivered": 0.0,
+                        "pending": 0.0,
+                        "source": "trip_orders_fallback",
+                        "tenant": tenant.display_name
+                    }
+            except Exception as e:
+                logger.warning(f"Error in trip detail fallback: {e}")
+
+        return {
+            "found": False,
+            "trip_id": clean_trip,
+            "collected": 0.0,
+            "error": f"Trip '{clean_trip}' not found in Favlogix ({tenant.display_name})"
+        }
+
 
 favlogix_api_service = FavlogixAPIService()
+
