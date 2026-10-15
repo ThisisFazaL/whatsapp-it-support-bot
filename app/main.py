@@ -226,11 +226,11 @@ async def send_morning_shift_opener(session: AsyncSession):
 async def scheduled_morning_staff_wakeup_loop():
     """
     Background task to send a morning shift opener & 24h window keep-alive
-    to all Support Admins and Workshop Staff strictly once daily at 08:00 AM Zimbabwe Time (06:00 UTC / 08:00 AM CAT).
+    to all Support Admins and Workshop Staff strictly once daily at 07:30 AM Zimbabwe Time (05:30 UTC / 07:30 AM CAT).
     """
     now_init = datetime.datetime.utcnow()
-    target_today_utc = now_init.replace(hour=6, minute=0, second=0, microsecond=0)
-    # If starting up AFTER 06:15 UTC (past today's 8:00 AM CAT window), do not send retroactively today.
+    target_today_utc = now_init.replace(hour=5, minute=30, second=0, microsecond=0)
+    # If starting up AFTER 05:45 UTC (past today's 7:30 AM CAT window), do not send retroactively today.
     last_wakeup_date = now_init.strftime("%Y-%m-%d") if now_init > (target_today_utc + datetime.timedelta(minutes=15)) else None
 
     while True:
@@ -238,20 +238,20 @@ async def scheduled_morning_staff_wakeup_loop():
             now_utc = datetime.datetime.utcnow()
             today_date_str = now_utc.strftime("%Y-%m-%d")
             
-            # Target is 06:00 UTC (08:00 AM CAT / Zimbabwe time)
-            target_utc = now_utc.replace(hour=6, minute=0, second=0, microsecond=0)
+            # Target is 05:30 UTC (07:30 AM CAT / Zimbabwe time)
+            target_utc = now_utc.replace(hour=5, minute=30, second=0, microsecond=0)
             
-            # Only trigger within a 30-minute window starting at 06:00 UTC and only once per day
+            # Only trigger within a 30-minute window starting at 05:30 UTC and only once per day
             if target_utc <= now_utc < (target_utc + datetime.timedelta(minutes=30)) and last_wakeup_date != today_date_str:
-                logger.info("08:00 AM Zimbabwe CAT reached (06:00 UTC). Sending morning shift opener to Support Admins and Workshop Staff...")
+                logger.info("07:30 AM Zimbabwe CAT reached (05:30 UTC). Sending morning shift opener to Support Admins and Workshop Staff...")
                 async with async_session_factory() as session:
                     await send_morning_shift_opener(session)
                 last_wakeup_date = today_date_str
                 logger.info("Morning staff shift opener sent successfully for today!")
 
-            # Sleep until next check (recalculate next 06:00 UTC target)
+            # Sleep until next check (recalculate next 05:30 UTC target)
             now_utc = datetime.datetime.utcnow()
-            next_target = now_utc.replace(hour=6, minute=0, second=0, microsecond=0)
+            next_target = now_utc.replace(hour=5, minute=30, second=0, microsecond=0)
             if now_utc >= next_target:
                 next_target += datetime.timedelta(days=1)
             sleep_seconds = (next_target - now_utc).total_seconds()
@@ -328,7 +328,7 @@ async def lifespan(app: FastAPI):
     keepalive_task = asyncio.create_task(keep_alive_ping_loop())
     # Start Daily Automated Audit loop (runs morning 04:00 UTC + startup verification)
     audit_task = asyncio.create_task(scheduled_daily_audit_loop())
-    # Start 8:00 AM CAT Morning Staff Wakeup Loop
+    # Start 7:30 AM CAT Morning Staff Wakeup Loop
     wakeup_task = asyncio.create_task(scheduled_morning_staff_wakeup_loop())
     yield
     report_task.cancel()
@@ -440,7 +440,7 @@ async def trigger_run_audit_endpoint():
 
 @app.get("/api/admin/trigger-morning-opener")
 async def trigger_morning_opener_endpoint(db: AsyncSession = Depends(get_db)):
-    """Triggers the 08:00 AM CAT morning shift opener with [ ☀️ Start My Shift ] button to all real admins & workshop staff."""
+    """Triggers the 07:30 AM CAT morning shift opener with [ ☀️ Start My Shift ] button to all real admins & workshop staff."""
     await send_morning_shift_opener(db)
     return {"status": "SUCCESS", "message": "Morning shift opener sent to all real Support Admins and Workshop Staff!"}
 
