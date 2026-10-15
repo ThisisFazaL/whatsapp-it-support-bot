@@ -369,6 +369,19 @@ async def handle_driver_interaction(
                 except Exception as e:
                     logger.warning(f"Could not notify accounts recipient {ap}: {e}")
 
+        # 6. Forward attached evidence photo to Accounts if available
+        if exp.receipt_image_id and str(exp.receipt_image_id).isdigit():
+            for recipient in set(accounts_recipients):
+                if recipient:
+                    try:
+                        await meta_api.send_image_message(
+                            to_phone=recipient,
+                            image_id=str(exp.receipt_image_id),
+                            caption=f"📸 Evidence for Trip {exp.trip_id}: {charge_label} (${exp.amount:,.2f})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not forward emergency photo to {recipient}: {e}")
+
         return True
 
     # 0.5 Location pin message - Disabled for anti-hijacking & cargo security
@@ -444,21 +457,21 @@ async def handle_driver_interaction(
         )
         return True
 
-    # 4. Emergency Fuel clicked -> Prompt for Fuel Amount directly
+    # 4. Emergency Fuel clicked -> Prompt for Photo First
     if text_lower.startswith("flt_emg_fuel_"):
         trip_id = text_strip.replace("flt_emg_fuel_", "").strip()
         await set_user_state(
             session,
             clean_p,
-            current_step="awaiting_fuel_amount",
+            current_step="awaiting_fuel_photo",
             current_data={"trip_id": trip_id},
             flow_name="fleet_driver"
         )
         prompt = (
             f"⛽ *EMERGENCY FUEL REQUEST: {trip_id}*\n"
             "────────────────────\n"
-            "Please enter the fuel amount needed in USD:\n"
-            "_(e.g. 25.00)_"
+            "📸 *Please take and send a photo of your dashboard / odometer cluster showing low fuel:*\n\n"
+            "_(Dashboard photo showing low fuel is mandatory before requesting fuel amount.)_"
         )
         await meta_api.send_text_message(clean_p, prompt)
         return True
@@ -1027,24 +1040,28 @@ async def handle_driver_interaction(
             )
             return True
 
-        # Awaiting Emergency Fuel Photo or Amount
+        # Awaiting Emergency Fuel Photo
         if state.current_step == "awaiting_fuel_photo":
-            clean_val = re.sub(r"[^\d.]", "", text_strip)
-            if clean_val:
-                state.current_step = "awaiting_fuel_amount"
-            elif image_id:
-                data["receipt_image_id"] = image_id
-                await set_user_state(session, clean_p, "awaiting_fuel_amount", data, flow_name="fleet_driver")
-                prompt = (
-                    f"⛽ *EMERGENCY FUEL: {trip_id}*\n\n"
-                    "Please enter the fuel amount needed in USD:\n"
-                    "_(e.g. 25.00)_"
+            if not image_id:
+                await meta_api.send_text_message(
+                    clean_p,
+                    "⚠️ *Dashboard photo is mandatory before entering the fuel amount.*\n\n"
+                    "Please take and send a clear photo of your vehicle's dashboard / odometer showing the low fuel gauge:"
                 )
-                await meta_api.send_text_message(clean_p, prompt)
                 return True
-            else:
-                await meta_api.send_text_message(clean_p, "Please enter the fuel amount needed in USD (e.g. 25.00):")
-                return True
+
+            data["receipt_image_id"] = image_id
+            await set_user_state(session, clean_p, "awaiting_fuel_amount", data, flow_name="fleet_driver")
+            prompt = (
+                f"✅ *Dashboard photo received!*\n"
+                "────────────────────\n"
+                f"⛽ *EMERGENCY FUEL: {trip_id}*\n\n"
+                "How much fuel is needed in USD?\n"
+                "Please reply with the amount needed:\n"
+                "_(e.g. 25.00)_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
 
         # Awaiting Emergency Fuel Amount -> Route for Approval by Edward or Zayn
         if state.current_step == "awaiting_fuel_amount":
@@ -1053,7 +1070,7 @@ async def handle_driver_interaction(
                 await set_user_state(session, clean_p, "awaiting_fuel_amount", data, flow_name="fleet_driver")
                 await meta_api.send_text_message(
                     clean_p,
-                    "Now please reply with the fuel amount needed in USD (e.g. 25.00):"
+                    "✅ *Photo updated.* Now please reply with the fuel amount needed in USD (e.g. 25.00):"
                 )
                 return True
 
@@ -1092,6 +1109,7 @@ async def handle_driver_interaction(
                 f"Trip: *{trip_id}*\n"
                 f"Driver: `{clean_p}`\n"
                 f"Requested: *${fuel_amt:,.2f}* for fuel\n"
+                "Evidence: *Low fuel gauge / odometer photo attached*\n"
                 "────────────────────\n"
                 "⚡ *First-come approval*: Tap below to authorize driver to fuel up:"
             )
@@ -1106,7 +1124,7 @@ async def handle_driver_interaction(
                             await meta_api.send_image_message(
                                 to_phone=ap_phone,
                                 image_id=str(receipt_img),
-                                caption=f"📸 Photo for Trip {trip_id} (Requested: ${fuel_amt:,.2f})"
+                                caption=f"📸 Dashboard / Low Fuel Gauge for Trip {trip_id} (Requested: ${fuel_amt:,.2f})"
                             )
                         except Exception as e:
                             logger.warning(f"Could not send receipt photo to {ap_phone}: {e}")
@@ -1122,6 +1140,7 @@ async def handle_driver_interaction(
                 f"⏳ *FUEL REQUEST SUBMITTED*\n"
                 "────────────────────\n"
                 f"Requested: *${fuel_amt:,.2f}*\n"
+                "📸 Low fuel dashboard photo attached.\n"
                 "Approval request dispatched to Zayn & Edward.\n"
                 "⚠️ *Wait for approval before fueling up!* You will be notified immediately when authorized."
             )
