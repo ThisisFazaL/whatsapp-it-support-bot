@@ -71,7 +71,7 @@ async def notify_sales_admin_balancing_session(session: AsyncSession, trip_id: s
         emg_lines.append(f"• {e.charge_type}: ${e.amount:,.2f} ({e.description or ''})")
     emg_text = "\n".join(emg_lines) if emg_lines else "• None"
     if has_fuel_emg:
-        emg_text += "\n💡 _Driver to present recorded video of fuel pump & fuel gauge on phone._"
+        emg_text += "\n💡 _Driver to present physical receipt from trip._"
 
     from app.handlers.fleet_approval_handler import get_solo_test_mode
     is_solo = get_solo_test_mode()
