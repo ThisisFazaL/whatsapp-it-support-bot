@@ -24,7 +24,7 @@ def is_fleet_interaction(phone: str, message_text: str, state: Optional[Any]) ->
     if txt in {"cmd_start_shift", "cmd_start_day", "start shift", "start my shift", "start workday", "start the day", "start day", "☀️ start my shift"} or txt.startswith("cmd_start_shift"):
         return False
 
-    if txt.startswith(("flt_", "location_pin_", "btn_dispatch_", "btn_add_trans_", "btn_short_")) or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges"}:
+    if txt.startswith(("flt_", "location_pin_", "btn_dispatch_", "btn_add_trans_", "btn_short_")) or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges", "extra allowance", "allowance"}:
         return True
 
     if state and state.flow_name:
@@ -65,7 +65,7 @@ async def dispatch_fleet_message(
         "flt_disp_", "btn_dispatch_", "btn_accept_fleet_",
         "flt_add_trans_", "btn_add_trans_",
         "flt_sf_", "btn_short_",
-        "flt_chg_"
+        "flt_chg_", "flt_pkg_", "flt_wh_"
     )):
         from app.handlers.fleet_approval_handler import handle_fleet_approval_flow
         from app.database import Employee
@@ -96,7 +96,7 @@ async def dispatch_fleet_message(
             return True
 
     # 3. Driver Transit Actions
-    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "flt_odo_", "location_pin_")) or fn == "fleet_driver" or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges"}:
+    if txt.startswith(("flt_drv_", "flt_pay_", "flt_emg_", "flt_alw_", "flt_odo_", "location_pin_")) or fn == "fleet_driver" or txt in {"i have returned", "returned", "have returned", "i am returning", "emergency charges", "extra allowance", "allowance"}:
         handled = await handle_driver_interaction(session, clean_p, message_text, state, image_id=image_id)
         if handled:
             return True

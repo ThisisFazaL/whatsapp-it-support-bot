@@ -41,6 +41,7 @@ async def send_driver_transit_menu(session: AsyncSession, phone: str, trip_id: s
 
     buttons = [
         {"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"},
+        {"id": f"flt_drv_allow_{trip_id}", "title": "Extra Allowance"},
         {"id": f"flt_drv_returned_{trip_id}", "title": "I Have Returned"}
     ]
 
@@ -70,6 +71,7 @@ async def send_driver_returning_menu(session: AsyncSession, phone: str, trip_id:
     )
     buttons = [
         {"id": f"flt_drv_emerg_{trip_id}", "title": "Emergency Charges"},
+        {"id": f"flt_drv_allow_{trip_id}", "title": "Extra Allowance"},
         {"id": f"flt_drv_returned_{trip_id}", "title": "I Have Returned"}
     ]
     await set_user_state(
@@ -85,6 +87,45 @@ async def send_driver_returning_menu(session: AsyncSession, phone: str, trip_id:
         buttons=buttons,
         header_text=header
     )
+
+async def send_extra_allowance_summary(session: AsyncSession, phone: str, data: Dict[str, Any]) -> bool:
+    """Displays summary of requested extra allowance with Submit and Re-enter buttons."""
+    trip_id = data.get("trip_id", "")
+    reason = data.get("reason", "Extra Allowance")
+    accom_amt = float(data.get("accom_amount", 0.0))
+    food_amt = float(data.get("food_amount", 0.0))
+    total_extra = round(accom_amt + food_amt, 2)
+    data["total_extra"] = total_extra
+
+    await set_user_state(
+        session,
+        phone,
+        current_step="awaiting_allowance_confirm",
+        current_data=data,
+        flow_name="fleet_driver"
+    )
+
+    summary = (
+        f"📋 *EXTRA ALLOWANCE SUMMARY: {trip_id}*\n"
+        "────────────────────\n"
+        f"📝 *Reason:* {reason}\n"
+        f"🏨 *Accommodation:* ${accom_amt:,.2f}\n"
+        f"🍱 *Food:* ${food_amt:,.2f}\n"
+        "────────────────────\n"
+        f"💰 *Total Allowance Requested:* *${total_extra:,.2f}*\n\n"
+        "Please review and confirm:"
+    )
+    buttons = [
+        {"id": f"flt_alw_submit_{trip_id}", "title": "Submit for Approval"},
+        {"id": f"flt_alw_reenter_{trip_id}", "title": "Re-enter Amount"}
+    ]
+    await meta_api.send_button_message(
+        to_phone=phone,
+        body_text=summary,
+        buttons=buttons,
+        header_text="EXTRA ALLOWANCE"
+    )
+    return True
 
 
 async def return_to_appropriate_driver_menu(session: AsyncSession, phone: str, trip_id: str):
@@ -142,8 +183,10 @@ async def handle_driver_interaction(
             exp.rejection_note = note
             await session.commit()
 
+            is_extra = (exp.charge_type == "EXTRA_ALLOWANCE")
+            label = "EXTRA ALLOWANCE" if is_extra else "EMERGENCY EXPENSE"
             ack = (
-                f"❌ *EMERGENCY EXPENSE REJECTED*\n"
+                f"❌ *{label} REJECTED*\n"
                 "────────────────────\n"
                 f"Trip: *{exp.trip_id}* | Amount: *${exp.amount:,.2f}*\n"
                 f"Reason logged: {note}\n"
@@ -154,7 +197,7 @@ async def handle_driver_interaction(
 
             if peer_phone and peer_phone != clean_p:
                 peer_note = (
-                    f"ℹ️ *EMERGENCY EXPENSE REJECTED*\n"
+                    f"ℹ️ *{label} REJECTED*\n"
                     "────────────────────\n"
                     f"Trip: *{exp.trip_id}* | Amount: *${exp.amount:,.2f}*\n"
                     f"Rejected by: *{approver_name}*\n"
@@ -167,7 +210,7 @@ async def handle_driver_interaction(
 
             drv_phone = clean_phone(exp.driver_phone)
             drv_msg = (
-                f"❌ *EMERGENCY REQUEST DECLINED*\n"
+                f"❌ *{label} DECLINED*\n"
                 "────────────────────\n"
                 f"Trip: *{exp.trip_id}*\n"
                 f"Type: *{exp.charge_type}*\n"
@@ -281,7 +324,9 @@ async def handle_driver_interaction(
         driver_display = f"{driver_name} (+{exp.driver_phone})" if driver_name else f"+{exp.driver_phone}"
         truck_display = truck_plate if truck_plate else "Assigned Fleet Truck"
         comp_display = company_name if company_name else "Tagoneswa Fleet"
-        charge_label = "Emergency Fuel" if exp.charge_type == "EMERGENCY_FUEL" else (exp.charge_type or "Emergency Expense")
+        is_extra_allowance = (exp.charge_type == "EXTRA_ALLOWANCE")
+        title_type = "EXTRA ALLOWANCE" if is_extra_allowance else "EMERGENCY EXPENSE"
+        charge_label = "Extra Allowance" if is_extra_allowance else ("Emergency Fuel" if exp.charge_type == "EMERGENCY_FUEL" else (exp.charge_type or "Emergency Expense"))
 
         from app.handlers.fleet_approval_handler import get_solo_test_mode
         is_solo = get_solo_test_mode()
@@ -292,20 +337,20 @@ async def handle_driver_interaction(
 
         # 2. Acknowledge Deciding Approver
         ack_approver = (
-            f"✅ *EMERGENCY EXPENSE APPROVED*\n"
+            f"✅ *{title_type} APPROVED*\n"
             "────────────────────\n"
             f"Trip: *{exp.trip_id}*\n"
             f"Type: *{exp.charge_type}*\n"
             f"Amount: *${exp.amount:,.2f}*\n"
             f"Decision logged by: *{approver_name}*.\n"
-            f"Driver and {hub_name} Accounts have been notified."
+            f"Driver, {hub_name} Accounts, and Sales Admin have been notified."
         )
         await meta_api.send_text_message(clean_p, ack_approver)
 
         # 3. Inform Peer Manager (if Zayn clicked, notify Edward; if Edward clicked, notify Zayn)
         if peer_phone and peer_phone != clean_p:
             peer_note = (
-                f"ℹ️ *EMERGENCY EXPENSE DECIDED*\n"
+                f"ℹ️ *{title_type} DECIDED*\n"
                 "────────────────────\n"
                 f"Trip: *{exp.trip_id}*\n"
                 f"Type: *{exp.charge_type}*\n"
@@ -320,17 +365,29 @@ async def handle_driver_interaction(
 
         # 4. Notify Driver Immediately (no photo of receipt or video required via chatbot)
         drv_phone = clean_phone(exp.driver_phone)
-        drv_msg = (
-            f"✅ *EMERGENCY EXPENSE APPROVED*\n"
-            "────────────────────\n"
-            f"Trip: *{exp.trip_id}*\n"
-            f"Type: *{exp.charge_type}*\n"
-            f"Authorized Amount: *${exp.amount:,.2f}*\n"
-            f"Approved by: *{approver_name}*\n"
-            "────────────────────\n"
-            "🟢 *You may now proceed with the expenditure.*\n"
-            "🧾 _Please retain your physical receipt to show upon return from trip._"
-        )
+        if is_extra_allowance:
+            drv_msg = (
+                f"✅ *EXTRA ALLOWANCE APPROVED*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}*\n"
+                f"Authorized Amount: *${exp.amount:,.2f}*\n"
+                f"Approved by: *{approver_name}*\n"
+                "────────────────────\n"
+                "🟢 *Your extra allowance request has been approved.*\n"
+                "Accounts will disburse the funds accordingly."
+            )
+        else:
+            drv_msg = (
+                f"✅ *EMERGENCY EXPENSE APPROVED*\n"
+                "────────────────────\n"
+                f"Trip: *{exp.trip_id}*\n"
+                f"Type: *{exp.charge_type}*\n"
+                f"Authorized Amount: *${exp.amount:,.2f}*\n"
+                f"Approved by: *{approver_name}*\n"
+                "────────────────────\n"
+                "🟢 *You may now proceed with the expenditure.*\n"
+                "🧾 _Please retain your physical receipt to show upon return from trip._"
+            )
         await clear_user_state(session, drv_phone)
         await meta_api.send_text_message(drv_phone, drv_msg)
         await send_driver_transit_menu(session, drv_phone, exp.trip_id)
@@ -346,8 +403,9 @@ async def handle_driver_interaction(
         if not is_solo and getattr(settings, "test_user_role", "").upper() == "ACCOUNTS_USER":
             accounts_recipients = list(set(accounts_recipients + tester_phones))
 
+        acc_title = "EXTRA ALLOWANCE APPROVED" if is_extra_allowance else "EMERGENCY CHARGES APPROVED"
         acc_msg = (
-            f"🚨 *EMERGENCY CHARGES APPROVED*\n"
+            f"🚨 *{acc_title}*\n"
             "────────────────────\n"
             f"Hub: *{hub_name}*\n"
             f"Trip: *{exp.trip_id}*\n"
@@ -357,10 +415,10 @@ async def handle_driver_interaction(
             "────────────────────\n"
             f"Charge Type: *{charge_label}*\n"
             f"Authorized Amount: *${exp.amount:,.2f}*\n"
-            f"Description: {exp.description or 'Emergency expense'}\n"
+            f"Description: {exp.description or charge_label}\n"
             f"Approved by: *{approver_name}*\n"
             "────────────────────\n"
-            f"ℹ️ _These emergency charges were approved by *{approver_name}*. Please send money to the driver / disburse funds accordingly._"
+            f"ℹ️ _These charges were approved by *{approver_name}*. Please send money to the driver / disburse funds accordingly._"
         )
         for ap in set(accounts_recipients):
             if ap:
@@ -368,6 +426,78 @@ async def handle_driver_interaction(
                     await meta_api.send_text_message(ap, acc_msg)
                 except Exception as e:
                     logger.warning(f"Could not notify accounts recipient {ap}: {e}")
+
+        # 5.5 Notify Sales Admin (for BOTH Emergency Charges & Extra Allowance)
+        from app.handlers.sales_admin_handler import get_sales_admin_phones_for_company
+        admin_targets = get_sales_admin_phones_for_company(company_name)
+        if sales_admin_phone and clean_phone(sales_admin_phone) not in admin_targets:
+            admin_targets.append(clean_phone(sales_admin_phone))
+
+        admin_recipients = tester_phones if is_solo else admin_targets
+        if not is_solo and getattr(settings, "test_user_role", "").upper() == "SALES_ADMIN":
+            admin_recipients = list(set(admin_recipients + tester_phones))
+
+        adm_title = "EXTRA ALLOWANCE APPROVED" if is_extra_allowance else "EMERGENCY CHARGES APPROVED"
+        adm_msg = (
+            f"ℹ️ *FLEET EXPENSE UPDATE: {adm_title}*\n"
+            "────────────────────\n"
+            f"Hub: *{hub_name}*\n"
+            f"Trip: *{exp.trip_id}*\n"
+            f"Company: *{comp_display}*\n"
+            f"Driver: *{driver_display}*\n"
+            f"Truck: *{truck_display}*\n"
+            "────────────────────\n"
+            f"Charge Type: *{charge_label}*\n"
+            f"Authorized Amount: *${exp.amount:,.2f}*\n"
+            f"Approved by: *{approver_name}*\n"
+            f"Description: {exp.description or charge_label}\n"
+            "────────────────────\n"
+            "ℹ️ _Notification for sales admin records and physical balancing verification._"
+        )
+        for adm_p in set(admin_recipients):
+            if adm_p:
+                try:
+                    await meta_api.send_text_message(adm_p, adm_msg)
+                except Exception as e:
+                    logger.warning(f"Could not notify sales admin recipient {adm_p}: {e}")
+
+        # 5.6 Add Extra Allowance to Respective Sales Rep's Pending Amount
+        if is_extra_allowance:
+            rep_phone_clean = clean_phone(salesperson_phone) if salesperson_phone else ""
+            if not rep_phone_clean:
+                from app.handlers.fleet_approval_handler import get_existing_trip_approval
+                approval = await get_existing_trip_approval(session, exp.trip_id)
+                if approval and approval.salesperson_phone:
+                    rep_phone_clean = clean_phone(approval.salesperson_phone)
+
+            if rep_phone_clean:
+                from app.database import record_pending_ledger_entry, get_sales_rep_pending_balance
+                await record_pending_ledger_entry(
+                    session=session,
+                    phone=rep_phone_clean,
+                    name=driver_name or "Sales Colleague",
+                    trip_id=exp.trip_id,
+                    entry_type="EXTRA_ALLOWANCE",
+                    amount=float(exp.amount),
+                    notes=f"Extra allowance authorized by {approver_name} on trip {exp.trip_id}: {exp.description or ''}"
+                )
+                new_bal = await get_sales_rep_pending_balance(session, rep_phone_clean)
+
+                rep_notice = (
+                    f"⚠️ *EXTRA ALLOWANCE CHARGED TO PENDING*\n"
+                    "────────────────────\n"
+                    f"Trip: *{exp.trip_id}*\n"
+                    f"Driver: *{driver_display}*\n"
+                    f"Authorized Amount: *${exp.amount:,.2f}*\n"
+                    f"Approved by: *{approver_name}*\n"
+                    "────────────────────\n"
+                    f"⚖️ *Updated Net Pending Balance:* *${new_bal:,.2f}*\n"
+                    f"ℹ️ _This extra allowance has been added to your pending recovery balance._"
+                )
+                try:
+                    await meta_api.send_text_message(rep_phone_clean, rep_notice)
+                except Exception as e:
+                    logger.warning(f"Could not notify sales rep {rep_phone_clean} of extra allowance: {e}")
 
         # 6. Forward attached evidence photo to Accounts if available
         if exp.receipt_image_id and str(exp.receipt_image_id).isdigit():
@@ -455,6 +585,247 @@ async def handle_driver_interaction(
             buttons=buttons,
             header_text=header
         )
+        return True
+
+    # 3.5. Driver clicks [Extra Allowance]
+    if text_lower.startswith("flt_drv_allow_") or text_lower in {"extra allowance", "allowance"}:
+        trip_id = text_strip.replace("flt_drv_allow_", "").strip()
+        if not trip_id and state and state.current_data:
+            trip_id = state.current_data.get("trip_id", "")
+        if not trip_id:
+            trip = await get_active_trip_for_driver(session, clean_p)
+            if trip:
+                trip_id = trip.trip_id
+        if not trip_id:
+            await meta_api.send_text_message(clean_p, "⚠️ Active trip not found.")
+            return True
+
+        await set_user_state(
+            session,
+            clean_p,
+            current_step="awaiting_allowance_reason",
+            current_data={"trip_id": trip_id},
+            flow_name="fleet_driver"
+        )
+        prompt = (
+            f"📋 *EXTRA ALLOWANCE: {trip_id}*\n"
+            "────────────────────\n"
+            "Please enter the *Reason* for requesting an extra allowance:\n\n"
+            "_(e.g. Detour due to bridge maintenance, vehicle breakdown repair delay)_"
+        )
+        await meta_api.send_text_message(clean_p, prompt)
+        return True
+
+    # 3.6. Extra Allowance: Accommodation Decision (Yes / No)
+    if text_lower.startswith(("flt_alw_ac_y_", "flt_alw_ac_n_")) or (
+        state and state.flow_name == "fleet_driver" and state.current_step == "awaiting_allowance_accom_decision" and text_lower in {"yes", "no", "y", "n", "1", "2", "1️⃣", "2️⃣"}
+    ):
+        data = (state.current_data or {}) if state else {}
+        trip_id = data.get("trip_id", "")
+        for pfx in ["flt_alw_ac_y_", "flt_alw_ac_n_"]:
+            if text_strip.startswith(pfx):
+                trip_id = text_strip[len(pfx):].strip() or trip_id
+                break
+        if trip_id:
+            data["trip_id"] = trip_id
+
+        is_yes = text_lower.startswith("flt_alw_ac_y_") or text_lower in {"yes", "y", "1", "1️⃣"}
+        if is_yes:
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_allowance_accom_amount",
+                current_data=data,
+                flow_name="fleet_driver"
+            )
+            prompt = (
+                f"🏨 *ACCOMMODATION AMOUNT: {trip_id}*\n"
+                "────────────────────\n"
+                "Please enter the accommodation allowance amount needed in USD:\n"
+                "_(e.g. 20.00)_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
+        else:
+            data["accom_amount"] = 0.0
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_allowance_food_decision",
+                current_data=data,
+                flow_name="fleet_driver"
+            )
+            prompt = (
+                f"🍱 *FOOD ALLOWANCE: {trip_id}*\n"
+                "────────────────────\n"
+                "Do you need an allowance for *food*?"
+            )
+            buttons = [
+                {"id": f"flt_alw_fd_y_{trip_id}", "title": "Yes"},
+                {"id": f"flt_alw_fd_n_{trip_id}", "title": "No"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="EXTRA ALLOWANCE"
+            )
+            return True
+
+    # 3.7. Extra Allowance: Food Decision (Yes / No)
+    if text_lower.startswith(("flt_alw_fd_y_", "flt_alw_fd_n_")) or (
+        state and state.flow_name == "fleet_driver" and state.current_step == "awaiting_allowance_food_decision" and text_lower in {"yes", "no", "y", "n", "1", "2", "1️⃣", "2️⃣"}
+    ):
+        data = (state.current_data or {}) if state else {}
+        trip_id = data.get("trip_id", "")
+        for pfx in ["flt_alw_fd_y_", "flt_alw_fd_n_"]:
+            if text_strip.startswith(pfx):
+                trip_id = text_strip[len(pfx):].strip() or trip_id
+                break
+        if trip_id:
+            data["trip_id"] = trip_id
+
+        is_yes = text_lower.startswith("flt_alw_fd_y_") or text_lower in {"yes", "y", "1", "1️⃣"}
+        if is_yes:
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_allowance_food_amount",
+                current_data=data,
+                flow_name="fleet_driver"
+            )
+            prompt = (
+                f"🍱 *FOOD AMOUNT: {trip_id}*\n"
+                "────────────────────\n"
+                "Please enter the food allowance amount needed in USD:\n"
+                "_(e.g. 15.00)_"
+            )
+            await meta_api.send_text_message(clean_p, prompt)
+            return True
+        else:
+            data["food_amount"] = 0.0
+            return await send_extra_allowance_summary(session, clean_p, data)
+
+    # 3.8. Extra Allowance: Re-enter Amount
+    if text_lower.startswith("flt_alw_reenter_") or (
+        state and state.flow_name == "fleet_driver" and state.current_step == "awaiting_allowance_confirm" and text_lower in {"re-enter", "reenter", "re-enter amount", "edit", "2", "2️⃣"}
+    ):
+        data = (state.current_data or {}) if state else {}
+        trip_id = data.get("trip_id", "")
+        if text_strip.startswith("flt_alw_reenter_"):
+            trip_id = text_strip.replace("flt_alw_reenter_", "").strip() or trip_id
+        data["trip_id"] = trip_id
+        data["accom_amount"] = 0.0
+        data["food_amount"] = 0.0
+
+        await set_user_state(
+            session,
+            clean_p,
+            current_step="awaiting_allowance_accom_decision",
+            current_data=data,
+            flow_name="fleet_driver"
+        )
+        prompt = (
+            f"🏨 *ACCOMMODATION ALLOWANCE: {trip_id}*\n"
+            "────────────────────\n"
+            f"Reason: *{data.get('reason', '')}*\n\n"
+            "Do you need an allowance for *accommodation*?"
+        )
+        buttons = [
+            {"id": f"flt_alw_ac_y_{trip_id}", "title": "Yes"},
+            {"id": f"flt_alw_ac_n_{trip_id}", "title": "No"}
+        ]
+        await meta_api.send_button_message(
+            to_phone=clean_p,
+            body_text=prompt,
+            buttons=buttons,
+            header_text="EXTRA ALLOWANCE"
+        )
+        return True
+
+    # 3.9. Extra Allowance: Submit for Approval
+    if text_lower.startswith("flt_alw_submit_") or (
+        state and state.flow_name == "fleet_driver" and state.current_step == "awaiting_allowance_confirm" and text_lower in {"submit", "submit for approval", "1", "1️⃣"}
+    ):
+        data = (state.current_data or {}) if state else {}
+        trip_id = data.get("trip_id", "")
+        if text_strip.startswith("flt_alw_submit_"):
+            trip_id = text_strip.replace("flt_alw_submit_", "").strip() or trip_id
+
+        reason = data.get("reason", "Extra Allowance")
+        accom_amt = float(data.get("accom_amount", 0.0))
+        food_amt = float(data.get("food_amount", 0.0))
+        total_extra = float(data.get("total_extra", accom_amt + food_amt))
+
+        if total_extra <= 0:
+            await meta_api.send_text_message(
+                clean_p,
+                "⚠️ Total requested extra allowance is $0.00. Please tap 'Re-enter Amount' or reply 'cancel'."
+            )
+            return True
+
+        desc = f"Extra Allowance ({reason}) | Accom: ${accom_amt:,.2f}, Food: ${food_amt:,.2f}"
+        exp = await record_emergency_expense(
+            session=session,
+            trip_id=trip_id,
+            driver_phone=clean_p,
+            charge_type="EXTRA_ALLOWANCE",
+            amount=total_extra,
+            description=desc,
+            has_video=False,
+            receipt_image_id=None,
+            status="PENDING"
+        )
+
+        trip = await get_fleet_trip_request_by_id(session, trip_id)
+        driver_name = getattr(trip, "driver_name", "") if trip else ""
+        driver_display = f"{driver_name} (+{clean_p})" if driver_name else f"+{clean_p}"
+
+        # Send authorization request to Edward & Zayn
+        approvers = [
+            clean_phone(settings.edward_phone),
+            clean_phone(settings.zayn_phone)
+        ]
+        approvers = [ap for ap in approvers if ap and ap != clean_p]
+
+        alw_alert = (
+            f"📋 *EXTRA ALLOWANCE APPROVAL REQUIRED*\n"
+            "────────────────────\n"
+            f"Trip: *{trip_id}*\n"
+            f"Driver: {driver_display}\n"
+            f"Reason: *{reason}*\n"
+            f"🏨 Accommodation: *${accom_amt:,.2f}*\n"
+            f"🍱 Food: *${food_amt:,.2f}*\n"
+            "────────────────────\n"
+            f"💰 *Total Requested:* *${total_extra:,.2f}*\n"
+            "────────────────────\n"
+            "⚡ *First-come approval*: Tap below to approve or reject:"
+        )
+        buttons = [
+            {"id": f"flt_emg_appr_{exp.id}", "title": "Approve Allowance"},
+            {"id": f"flt_emg_rej_{exp.id}", "title": "Reject"}
+        ]
+        for ap_phone in set(approvers):
+            if ap_phone and ap_phone != clean_p:
+                await meta_api.send_button_message(
+                    to_phone=ap_phone,
+                    body_text=alw_alert,
+                    buttons=buttons,
+                    header_text="EXTRA ALLOWANCE REQUEST"
+                )
+
+        await meta_api.send_text_message(
+            clean_p,
+            f"⏳ *EXTRA ALLOWANCE SUBMITTED*\n"
+            "────────────────────\n"
+            f"Trip: *{trip_id}*\n"
+            f"Reason: {reason}\n"
+            f"Total Requested: *${total_extra:,.2f}*\n"
+            "Approval request dispatched to Zayn & Edward.\n"
+            "You will be notified immediately when authorized."
+        )
+        await clear_user_state(session, clean_p)
+        await return_to_appropriate_driver_menu(session, clean_p, trip_id)
         return True
 
     # 4. Emergency Fuel clicked -> Prompt for Photo First
@@ -703,6 +1074,150 @@ async def handle_driver_interaction(
             else:
                 await return_to_appropriate_driver_menu(session, clean_p, trip_id)
                 return True
+
+        # Awaiting Extra Allowance Reason
+        if state.current_step == "awaiting_allowance_reason":
+            reason = text_strip
+            data["reason"] = reason
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_allowance_accom_decision",
+                current_data=data,
+                flow_name="fleet_driver"
+            )
+            prompt = (
+                f"🏨 *ACCOMMODATION ALLOWANCE: {trip_id}*\n"
+                "────────────────────\n"
+                f"Reason: *{reason}*\n\n"
+                "Do you need an allowance for *accommodation*?"
+            )
+            buttons = [
+                {"id": f"flt_alw_ac_y_{trip_id}", "title": "Yes"},
+                {"id": f"flt_alw_ac_n_{trip_id}", "title": "No"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="EXTRA ALLOWANCE"
+            )
+            return True
+
+        # Awaiting Extra Allowance Accommodation Decision (Prompt if user sent non-yes/no text)
+        if state.current_step == "awaiting_allowance_accom_decision":
+            prompt = (
+                f"🏨 *ACCOMMODATION ALLOWANCE: {trip_id}*\n"
+                "────────────────────\n"
+                f"Reason: *{data.get('reason', '')}*\n\n"
+                "Please tap *Yes* or *No* for accommodation allowance:"
+            )
+            buttons = [
+                {"id": f"flt_alw_ac_y_{trip_id}", "title": "Yes"},
+                {"id": f"flt_alw_ac_n_{trip_id}", "title": "No"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="EXTRA ALLOWANCE"
+            )
+            return True
+
+        # Awaiting Extra Allowance Accommodation Amount
+        if state.current_step == "awaiting_allowance_accom_amount":
+            clean_val = re.sub(r"[^\d.]", "", text_strip)
+            try:
+                accom_amt = float(clean_val)
+                if accom_amt < 0:
+                    raise ValueError()
+            except ValueError:
+                await meta_api.send_text_message(
+                    clean_p,
+                    "⚠️ Please enter a valid number for accommodation (e.g. 20.00 or 0):"
+                )
+                return True
+
+            data["accom_amount"] = accom_amt
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_allowance_food_decision",
+                current_data=data,
+                flow_name="fleet_driver"
+            )
+            prompt = (
+                f"✅ Accommodation logged: *${accom_amt:,.2f}*\n"
+                "────────────────────\n"
+                f"🍱 *FOOD ALLOWANCE: {trip_id}*\n\n"
+                "Do you need an allowance for *food*?"
+            )
+            buttons = [
+                {"id": f"flt_alw_fd_y_{trip_id}", "title": "Yes"},
+                {"id": f"flt_alw_fd_n_{trip_id}", "title": "No"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="EXTRA ALLOWANCE"
+            )
+            return True
+
+        # Awaiting Extra Allowance Food Decision (Prompt if user sent non-yes/no text)
+        if state.current_step == "awaiting_allowance_food_decision":
+            prompt = (
+                f"🍱 *FOOD ALLOWANCE: {trip_id}*\n"
+                "────────────────────\n"
+                "Please tap *Yes* or *No* for food allowance:"
+            )
+            buttons = [
+                {"id": f"flt_alw_fd_y_{trip_id}", "title": "Yes"},
+                {"id": f"flt_alw_fd_n_{trip_id}", "title": "No"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="EXTRA ALLOWANCE"
+            )
+            return True
+
+        # Awaiting Extra Allowance Food Amount
+        if state.current_step == "awaiting_allowance_food_amount":
+            clean_val = re.sub(r"[^\d.]", "", text_strip)
+            try:
+                food_amt = float(clean_val)
+                if food_amt < 0:
+                    raise ValueError()
+            except ValueError:
+                await meta_api.send_text_message(
+                    clean_p,
+                    "⚠️ Please enter a valid number for food (e.g. 15.00 or 0):"
+                )
+                return True
+
+            data["food_amount"] = food_amt
+            return await send_extra_allowance_summary(session, clean_p, data)
+
+        # Awaiting Extra Allowance Confirm (Prompt if user sent unparsed text)
+        if state.current_step == "awaiting_allowance_confirm":
+            prompt = (
+                f"📋 *EXTRA ALLOWANCE CONFIRMATION: {trip_id}*\n"
+                "────────────────────\n"
+                "Please tap *Submit for Approval* or *Re-enter Amount* below:"
+            )
+            buttons = [
+                {"id": f"flt_alw_submit_{trip_id}", "title": "Submit for Approval"},
+                {"id": f"flt_alw_reenter_{trip_id}", "title": "Re-enter Amount"}
+            ]
+            await meta_api.send_button_message(
+                to_phone=clean_p,
+                body_text=prompt,
+                buttons=buttons,
+                header_text="EXTRA ALLOWANCE"
+            )
+            return True
 
         # Awaiting Emergency Receipt photo
         if state.current_step == "awaiting_emergency_receipt":

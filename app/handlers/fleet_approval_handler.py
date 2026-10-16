@@ -1856,12 +1856,237 @@ async def handle_fleet_approval_flow(
         dest = raw_data.get("destination_city", "Unknown")
         sales_val = float(raw_data.get("total_amount", 0.0))
 
-        # Ask Sales Rep: Select Departure Warehouse
-        prompt_wh = (
-            f"✅ *TRIP DATA FETCHED*\n"
+        # Ask Sales Rep: Multi-company Packaging List
+        prompt_pkg = (
+            f"✅ *TRIP DATA RETRIEVED*\n"
             f"────────────────────\n"
             f"🏢 *Company:* {company_name}\n"
             f"🚛 *Trip:* `{trip_id}`\n"
+            f"📍 *Destination:* {dest}\n"
+            f"💰 *Sales Value:* *${sales_val:,.2f}*\n"
+            f"────────────────────\n"
+            f"Do you have a packaging list for same trip but different company?"
+        )
+        buttons_pkg = [
+            {"id": "flt_pkg_multico_yes", "title": "Yes"},
+            {"id": "flt_pkg_multico_no", "title": "No"}
+        ]
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_multico_decision",
+            {
+                "trip_id": trip_id,
+                "company_name": company_name,
+                "destination_city": dest,
+                "sales_amount": sales_val,
+                "raw_trip_data": raw_data
+            },
+            flow_name="fleet_approval"
+        )
+        await meta_api.send_button_message(
+            to_phone=phone,
+            body_text=prompt_pkg,
+            buttons=buttons_pkg,
+            header_text="PACKAGING LIST"
+        )
+        return True
+
+    # 12.5 Handle Multi-Company Decision (Yes vs No)
+    if text_lower in {"flt_pkg_multico_yes", "flt_pkg_multico_no"} or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_multico_decision"
+    ):
+        if (
+            clean_kw in GLOBAL_RESET_KEYWORDS
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or text_lower in {"cancel", "reset", "menu", "back", "exit"}
+        ):
+            await clear_user_state(session, phone)
+            await send_sales_portal_menu(session, phone, employee)
+            return True
+
+        is_yes = text_lower in {"flt_pkg_multico_yes", "yes", "y", "1", "1️⃣"}
+        data = state.current_data or {} if state else {}
+        trip_id = data.get("trip_id", "")
+        company_name = data.get("company_name", "")
+        sales_val = float(data.get("sales_amount", 0.0))
+        dest = data.get("destination_city", "Unknown")
+        raw_data = data.get("raw_trip_data", {})
+
+        if not is_yes:
+            # Sales Rep clicks No: Continue the flow by prompting for departure warehouse
+            prompt_wh = (
+                f"📍 *DEPARTURE WAREHOUSE: {trip_id}*\n"
+                f"────────────────────\n"
+                f"🏢 *Company:* {company_name}\n"
+                f"💰 *Sales Value:* *${sales_val:,.2f}*\n"
+                f"📍 *Destination:* {dest}\n"
+                f"────────────────────\n"
+                f"Please select departure warehouse:"
+            )
+            buttons_wh = [
+                {"id": "flt_wh_harare", "title": "Harare Hub"},
+                {"id": "flt_wh_masvingo", "title": "Masvingo Hub"}
+            ]
+            await set_user_state(
+                session,
+                phone,
+                "awaiting_warehouse_selection",
+                {
+                    "trip_id": trip_id,
+                    "company_name": company_name,
+                    "raw_trip_data": raw_data
+                },
+                flow_name="fleet_approval"
+            )
+            await meta_api.send_button_message(
+                to_phone=phone,
+                body_text=prompt_wh,
+                buttons=buttons_wh,
+                header_text="DEPARTURE WAREHOUSE"
+            )
+            return True
+        else:
+            # Sales Rep clicks Yes: Ask to select company of 2nd packaging list (Tagoneswa vs LG Plast)
+            prompt_co = (
+                f"🏢 *SECOND PACKAGING LIST*\n"
+                f"────────────────────\n"
+                f"Primary Trip: `{trip_id}` ({company_name} - ${sales_val:,.2f})\n\n"
+                f"Please select the company for the second packaging list:"
+            )
+            buttons_co = [
+                {"id": "flt_pkg_co_tg", "title": "Tagoneswa"},
+                {"id": "flt_pkg_co_lg", "title": "LG Plast"}
+            ]
+            await set_user_state(
+                session,
+                phone,
+                "awaiting_second_packaging_company",
+                {
+                    "first_trip_id": trip_id,
+                    "first_company_name": company_name,
+                    "first_sales_amount": sales_val,
+                    "destination_city": dest,
+                    "first_raw_trip_data": raw_data
+                },
+                flow_name="fleet_approval"
+            )
+            await meta_api.send_button_message(
+                to_phone=phone,
+                body_text=prompt_co,
+                buttons=buttons_co,
+                header_text="SELECT COMPANY"
+            )
+            return True
+
+    # 12.6 Handle Second Packaging Company Selection (Tagoneswa vs LG Plast)
+    if text_lower in {"flt_pkg_co_tg", "flt_pkg_co_lg"} or (
+        state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_second_packaging_company"
+    ):
+        if (
+            clean_kw in GLOBAL_RESET_KEYWORDS
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or text_lower in {"cancel", "reset", "menu", "back", "exit"}
+        ):
+            await clear_user_state(session, phone)
+            await send_sales_portal_menu(session, phone, employee)
+            return True
+
+        second_company = "LG Plast" if (
+            text_lower in {"flt_pkg_co_lg", "lg plast", "lg", "2", "2️⃣"}
+            or "lg" in text_lower
+        ) else "Tagoneswa Hardware"
+
+        data = state.current_data or {} if state else {}
+        data["second_company_name"] = second_company
+
+        await set_user_state(
+            session,
+            phone,
+            "awaiting_second_trip_id",
+            data,
+            flow_name="fleet_approval"
+        )
+        prompt_id2 = (
+            f"🚛 *ENTER 2ND TRIP ID: {second_company}*\n"
+            f"────────────────────\n"
+            f"Please enter the Trip ID for the second packaging list ({second_company}):\n"
+            f"_(e.g. 20042026-LG-ZVISH)_"
+        )
+        await meta_api.send_text_message(phone, prompt_id2)
+        return True
+
+    # 12.7 Handle Second Trip ID Entry
+    if state and state.flow_name == "fleet_approval" and state.current_step == "awaiting_second_trip_id":
+        if (
+            clean_kw in GLOBAL_RESET_KEYWORDS
+            or text_lower in GLOBAL_RESET_KEYWORDS
+            or text_lower in {"cancel", "reset", "menu", "back", "exit"}
+        ):
+            await clear_user_state(session, phone)
+            await send_sales_portal_menu(session, phone, employee)
+            return True
+
+        second_trip_query = text_strip.upper().replace("TRIP-", "").strip()
+        data = state.current_data or {}
+        second_company = data.get("second_company_name", "Tagoneswa Hardware")
+
+        await meta_api.send_text_message(
+            phone,
+            f"⏳ *Verifying Second Trip `{second_trip_query}` with Favlogix ERP ({second_company})...*\n_Please wait..._"
+        )
+
+        raw_res_2 = await trip_verification_service.fetch_raw_trip_data(second_trip_query, company_name=second_company)
+        if not raw_res_2.get("success"):
+            err_msg = raw_res_2.get("error", "Could not verify second trip.")
+            fail_card = (
+                f"❌ *SECOND TRIP VERIFICATION ERROR*\n"
+                f"────────────────────\n"
+                f"⚠️ *Reason:* {err_msg}\n\n"
+                f"Please check the Trip ID in Favlogix for {second_company} and try again, or reply *cancel* to return to the main menu."
+            )
+            await meta_api.send_text_message(phone, fail_card)
+            return True
+
+        raw_data_2 = raw_res_2.get("raw_data", {})
+        second_sales_val = float(raw_data_2.get("total_amount", 0.0))
+        second_trip_id = raw_data_2.get("trip_id", second_trip_query)
+
+        first_trip_id = data.get("first_trip_id", "")
+        first_company_name = data.get("first_company_name", "")
+        first_sales_val = float(data.get("first_sales_amount", 0.0))
+        first_raw = data.get("first_raw_trip_data", {})
+        combined_sales = round(first_sales_val + second_sales_val, 2)
+
+        combined_trip_display = f"{first_trip_id} + {second_trip_id}"
+        if len(combined_trip_display) > 80:
+            combined_trip_display = combined_trip_display[:80]
+
+        combined_raw = dict(first_raw)
+        combined_raw["trip_id"] = combined_trip_display
+        combined_raw["total_amount"] = combined_sales
+        combined_raw["first_trip_id"] = first_trip_id
+        combined_raw["first_company_name"] = first_company_name
+        combined_raw["first_sales_amount"] = first_sales_val
+        combined_raw["second_trip_id"] = second_trip_id
+        combined_raw["second_company_name"] = second_company
+        combined_raw["second_sales_amount"] = second_sales_val
+        combined_raw["is_multico"] = True
+
+        c1 = first_raw.get("customers", [])
+        c2 = raw_data_2.get("customers", [])
+        combined_raw["customers"] = c1 + c2
+        combined_raw["order_count"] = len(combined_raw["customers"])
+
+        dest = first_raw.get("destination_city", "Unknown")
+
+        prompt_wh = (
+            f"✅ *BOTH PACKAGING LISTS VERIFIED*\n"
+            f"────────────────────\n"
+            f"🏢 *{first_company_name}:* `{first_trip_id}` -> *${first_sales_val:,.2f}*\n"
+            f"🏢 *{second_company}:* `{second_trip_id}` -> *${second_sales_val:,.2f}*\n"
+            f"────────────────────\n"
+            f"💰 *Combined Total Sales:* *${combined_sales:,.2f}*\n"
             f"📍 *Destination:* {dest}\n"
             f"────────────────────\n"
             f"Please select departure warehouse:"
@@ -1875,9 +2100,9 @@ async def handle_fleet_approval_flow(
             phone,
             "awaiting_warehouse_selection",
             {
-                "trip_id": trip_id,
-                "company_name": company_name,
-                "raw_trip_data": raw_data
+                "trip_id": combined_trip_display,
+                "company_name": f"{first_company_name} & {second_company}",
+                "raw_trip_data": combined_raw
             },
             flow_name="fleet_approval"
         )
