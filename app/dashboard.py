@@ -1639,6 +1639,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "priority": t.priority.priority_name if t.priority else "Medium",
                 "status": t.status.status_name if t.status else "Open",
                 "description": t.description,
+                "resolution_note": t.resolution_note or "",
+                "estimated_completion_time": getattr(t, "estimated_completion_time", None) or "",
+                "actual_time_taken": getattr(t, "actual_time_taken", None) or "",
                 "assigned_admin": admin.full_name if admin else "Unassigned",
                 "created_at": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "",
                 "resolution_time": solving_str
@@ -1727,6 +1730,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "priority": t.priority.priority_name if t.priority else "Medium",
                 "status": t.status.status_name if t.status else "Open",
                 "description": t.description,
+                "resolution_note": t.resolution_note or "",
+                "estimated_completion_time": getattr(t, "estimated_completion_time", None) or "",
+                "actual_time_taken": getattr(t, "actual_time_taken", None) or "",
                 "assigned_admin": admin.full_name if admin else "Omar / Stanclea",
                 "created_at": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else ""
             })
@@ -3441,6 +3447,8 @@ async def dashboard_view(request: Request):
 
                         <select id="it-status-filter" onchange="filterITTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-950 dark:focus:ring-zinc-300 transition">
                             <option value="ALL">All Statuses</option>
+                            <option value="ONGOING">⚡ Ongoing Work (Open & In Progress)</option>
+                            <option value="COMPLETED">✅ Completed Work (Resolved & Closed)</option>
                             <option value="Open">Open</option>
                             <option value="In Progress">In Progress</option>
                             <option value="Resolved">Resolved</option>
@@ -3569,8 +3577,11 @@ async def dashboard_view(request: Request):
 
                         <select id="proj-status-filter" onchange="filterProjectsTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-950 dark:focus:ring-zinc-300 transition">
                             <option value="ALL">All Statuses</option>
+                            <option value="ONGOING">⚡ Ongoing Work (Open & In Progress)</option>
+                            <option value="COMPLETED">✅ Completed Work (Resolved & Closed)</option>
                             <option value="Open">Open</option>
                             <option value="In Progress">In Progress</option>
+                            <option value="Resolved">Resolved</option>
                             <option value="Closed">Closed</option>
                         </select>
                     </div>
@@ -3596,6 +3607,8 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 py-3 whitespace-nowrap">Category & Description</th>
                                 <th class="px-4 py-3 whitespace-nowrap">Status</th>
                                 <th class="px-4 py-3 whitespace-nowrap">Assigned Lead</th>
+                                <th class="px-4 py-3 whitespace-nowrap">Est. Time (ETC)</th>
+                                <th class="px-4 py-3 whitespace-nowrap">Time Taken & Work Done</th>
                                 <th class="px-4 py-3 whitespace-nowrap">Date Created</th>
                             </tr>
                         </thead>

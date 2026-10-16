@@ -25,7 +25,9 @@ STATUS_NAMES = {
 
 async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmin, sender_phone: str, message_text: str, state: ConversationState) -> bool:
     """
-    Handles resolution note input typed by admin after tapping [ 🟢 Resolve Ticket ].
+    Step 1 of Resolution Flow:
+    Admin replies with description of what work was done after tapping [ 🟢 Resolve Ticket ].
+    Saves note to state data, transitions to 'awaiting_actual_time_taken', and prompts for time taken.
     """
     if not state or state.flow_name != "admin_resolution" or state.current_step != "awaiting_admin_resolution_note":
         return False
@@ -37,6 +39,64 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
     if not ticket_id:
         await clear_user_state(session, sender_phone)
         return False
+
+    resolution_note = message_text.strip()
+    if resolution_note.lower().startswith(("resolve_", "claim_", "cmd_", "btn_", "confirm_", "reopen_")):
+        logger.warning(f"Ignored button payload '{resolution_note}' as resolution note text.")
+        return False
+
+    if len(resolution_note) < 2:
+        await meta_api.send_text_message(sender_phone, "⚠️ Resolution note is too short. Please type a brief description of what was done to fix the issue:")
+        return True
+
+    # Save resolution note in conversation state and ask for actual time taken
+    curr_data = dict(state.current_data or {})
+    curr_data["resolution_note"] = resolution_note
+    await set_user_state(
+        session=session,
+        phone=sender_phone,
+        current_step="awaiting_actual_time_taken",
+        current_data=curr_data,
+        flow_name="admin_resolution"
+    )
+
+    prompt_time = (
+        f"⏱️ *ACTUAL TIME TAKEN*\n\n"
+        f"📝 *Work Done:* _{resolution_note}_\n\n"
+        f"Please reply with how much time it took to complete this task:\n"
+        f"_(e.g., '45 mins', '2 hours', '1 day', '3.5 hours'):_"
+    )
+    await meta_api.send_text_message(sender_phone, prompt_time)
+    return True
+
+
+async def handle_admin_actual_time_taken(session: AsyncSession, admin: SupportAdmin, sender_phone: str, message_text: str, state: ConversationState) -> bool:
+    """
+    Step 2 of Resolution Flow:
+    Admin replies with how much time it took to complete the task.
+    Saves actual_time_taken, marks ticket as Resolved (status 3), assigns admin,
+    notifies reporter, admin, Master Admin, and Executive Observers.
+    """
+    if not state or state.flow_name != "admin_resolution" or state.current_step != "awaiting_actual_time_taken":
+        return False
+
+    ticket_id = state.current_data.get("ticket_id") if state.current_data else None
+    ticket_num = state.current_data.get("ticket_number", "") if state.current_data else ""
+    resolution_note = state.current_data.get("resolution_note", "") if state.current_data else ""
+    is_maint = "TKT-MNT" in ticket_num or state.current_data.get("is_maint", False)
+
+    if not ticket_id:
+        await clear_user_state(session, sender_phone)
+        return False
+
+    actual_time = message_text.strip()
+    if actual_time.lower().startswith(("resolve_", "claim_", "cmd_", "btn_", "confirm_", "reopen_")):
+        logger.warning(f"Ignored button payload '{actual_time}' as actual time taken.")
+        return False
+
+    if len(actual_time) < 1:
+        await meta_api.send_text_message(sender_phone, "⚠️ Please enter the time taken (e.g., '45 mins', '2 hours', '1 day'):")
+        return True
 
     if is_maint:
         stmt = (
@@ -69,18 +129,10 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
         await meta_api.send_text_message(sender_phone, "❌ Ticket not found.")
         return True
 
-    resolution_note = message_text.strip()
-    if resolution_note.lower().startswith(("resolve_", "claim_", "cmd_", "btn_", "confirm_", "reopen_")):
-        logger.warning(f"Ignored button payload '{resolution_note}' as resolution note text.")
-        return False
-
-    if len(resolution_note) < 2:
-        await meta_api.send_text_message(sender_phone, "⚠️ Resolution note is too short. Please type a brief description of what was done to fix the issue:")
-        return True
-
-    # Update Ticket Status & Note
-    ticket.status_id = 3 # Resolved
+    # Update Ticket Status, Resolution Note, & Actual Time Taken
+    ticket.status_id = 3  # Resolved
     ticket.resolution_note = resolution_note
+    ticket.actual_time_taken = actual_time
     ticket.updated_at = datetime.datetime.utcnow()
 
     # Assign Admin
@@ -102,6 +154,12 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
     await session.commit()
     await clear_user_state(session, sender_phone)
 
+    cat_name = ticket.category.category_name if ticket.category else "N/A"
+    sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
+    issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
+    domain_title = "Building Projects" if is_maint else "IT Support"
+    etc_display = ticket.estimated_completion_time or "N/A"
+
     # 1. Notify Employee / Reporter
     if ticket.employee:
         await set_user_state(
@@ -116,18 +174,14 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
             flow_name="resolution_confirmation"
         )
 
-        cat_name = ticket.category.category_name if ticket.category else "N/A"
-        sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
-        issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
-        domain_title = "Building Projects" if is_maint else "IT Support"
-
         emp_header = "🔔 TICKET RESOLUTION CONFIRMATION"
         emp_body = (
             f"Your {domain_title} ticket *{ticket.ticket_number}* has been marked as **RESOLVED** by Admin ({admin.full_name}).\n\n"
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
             f"📝 *Description:* {ticket.description}\n"
-            f"🔧 *Resolution Note:* _{resolution_note}_\n\n"
+            f"🔧 *Work Done:* _{resolution_note}_\n"
+            f"⏱️ *Time Taken:* *{actual_time}*\n\n"
             f"Please confirm if your issue has been completely fixed."
         )
         emp_footer = "Tap a button below to respond"
@@ -155,16 +209,15 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
         f"✅ *Ticket Marked as Resolved!*\n\n"
         f"🎫 Ticket: *{ticket.ticket_number}*\n"
         f"👤 Reporter: {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
-        f"🔧 Note: _{resolution_note}_\n\n"
+        f"🔧 Work Done: _{resolution_note}_\n"
+        f"⏱️ Time Taken: *{actual_time}*\n"
+        f"⏱️ Estimated Time (ETC): *{etc_display}*\n\n"
         f"Resolution confirmation prompt sent to reporter."
     )
     await meta_api.send_text_message(sender_phone, admin_msg)
 
-    # 3. Master Admin Alert
+    # 3. Master Admin Alert (Fazal)
     if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
-        cat_name = ticket.category.category_name if ticket.category else "N/A"
-        sub_name = ticket.subcategory.subcategory_name if ticket.subcategory else "N/A"
-        issue_name = ticket.issue_type.issue_name if ticket.issue_type else "Custom Issue"
         emp_name = ticket.employee.full_name if ticket.employee else "N/A"
         emp_phone = f" (+{ticket.employee.phone})" if ticket.employee else ""
 
@@ -175,7 +228,9 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
             f"📝 *Description:* {ticket.description}\n"
-            f"🔧 *Resolution Note:* _{resolution_note}_\n\n"
+            f"🔧 *Work Done:* _{resolution_note}_\n"
+            f"⏱️ *Actual Time Taken:* *{actual_time}*\n"
+            f"⏱️ *Estimated Time (ETC):* *{etc_display}*\n\n"
             f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
             f"📊 *Status:* 🔵 RESOLVED"
         )
@@ -189,13 +244,124 @@ async def handle_admin_resolution_note(session: AsyncSession, admin: SupportAdmi
         f"✅ *[EXECUTIVE OBSERVER ALERT] TICKET RESOLVED*\n\n"
         f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
         f"👤 *Reporter:* {ticket.employee.full_name if ticket.employee else 'N/A'}\n"
-        f"🔧 *Note:* _{resolution_note}_\n"
+        f"🔧 *Work Done:* _{resolution_note}_\n"
+        f"⏱️ *Time Taken:* *{actual_time}*\n"
+        f"⏱️ *Estimated Time:* *{etc_display}*\n"
         f"👤 *Resolved By Admin:* {admin.full_name} (`+{admin.phone}`)"
     )
 
     for obs_phone in settings.executive_observer_phones:
         if obs_phone != settings.master_admin_phone and obs_phone != sender_phone:
             await meta_api.send_text_message(obs_phone, observer_resolved)
+
+    return True
+
+
+async def handle_admin_claim_etc(session: AsyncSession, admin: SupportAdmin, sender_phone: str, message_text: str, state: ConversationState) -> bool:
+    """
+    Handles Estimated Time of Completion (ETC) response typed by admin right after claiming a ticket.
+    Saves estimated_completion_time on ticket, clears state, and confirms with Resolve button.
+    """
+    if not state or state.flow_name != "admin_claim_etc" or state.current_step != "awaiting_estimated_completion_time":
+        return False
+
+    ticket_id = state.current_data.get("ticket_id") if state.current_data else None
+    ticket_num = state.current_data.get("ticket_number", "") if state.current_data else ""
+    is_maint = "TKT-MNT" in ticket_num or state.current_data.get("is_maint", False)
+
+    if not ticket_id:
+        await clear_user_state(session, sender_phone)
+        return False
+
+    etc_text = message_text.strip()
+    if etc_text.lower().startswith(("resolve_", "claim_", "cmd_", "btn_", "confirm_", "reopen_")):
+        logger.warning(f"Ignored button payload '{etc_text}' as ETC.")
+        return False
+
+    if len(etc_text) < 1:
+        await meta_api.send_text_message(sender_phone, "⚠️ Please enter your estimated completion time (e.g., '2 hours', 'Today by 5 PM', 'Tomorrow afternoon', '3 days'):")
+        return True
+
+    if is_maint:
+        stmt = (
+            select(MaintenanceTicket)
+            .options(
+                selectinload(MaintenanceTicket.employee),
+                selectinload(MaintenanceTicket.category),
+                selectinload(MaintenanceTicket.subcategory),
+                selectinload(MaintenanceTicket.issue_type)
+            )
+            .where(MaintenanceTicket.ticket_id == ticket_id)
+        )
+    else:
+        stmt = (
+            select(Ticket)
+            .options(
+                selectinload(Ticket.employee),
+                selectinload(Ticket.category),
+                selectinload(Ticket.subcategory),
+                selectinload(Ticket.issue_type)
+            )
+            .where(Ticket.ticket_id == ticket_id)
+        )
+
+    res = await session.execute(stmt)
+    ticket = res.scalars().first()
+
+    if not ticket:
+        await clear_user_state(session, sender_phone)
+        await meta_api.send_text_message(sender_phone, "❌ Ticket not found.")
+        return True
+
+    # Save Estimated Completion Time
+    ticket.estimated_completion_time = etc_text
+    ticket.updated_at = datetime.datetime.utcnow()
+    await session.commit()
+    await clear_user_state(session, sender_phone)
+
+    # 1. Confirm to Claiming Admin with Resolve button
+    admin_confirm = (
+        f"⏱️ *ESTIMATED TIME SAVED!*\n\n"
+        f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+        f"⏱️ *Estimated Completion Time (ETC):* *{etc_text}*\n\n"
+        f"Your estimated time has been recorded and updated on the dashboard.\n\n"
+        f"Tap below when the work has been completed:"
+    )
+    buttons = [
+        {"id": f"resolve_{ticket.ticket_number}", "title": "🟢 Resolve Ticket"}
+    ]
+    try:
+        await meta_api.send_button_message(
+            to_phone=sender_phone,
+            body_text=admin_confirm,
+            buttons=buttons,
+            header_text="✅ ETC RECORDED",
+            footer_text="Tap to resolve when done"
+        )
+    except Exception as e:
+        logger.error(f"Error sending button confirmation: {e}")
+        await meta_api.send_text_message(sender_phone, admin_confirm)
+
+    # 2. Master Admin Alert (Fazal)
+    if settings.master_admin_phone and sender_phone != settings.master_admin_phone:
+        master_etc_msg = (
+            f"⏱️ *[MASTER ALERT] TICKET CLAIMED (ETC RECORDED)* 🔵\n\n"
+            f"🎫 *Ticket ID:* `{ticket.ticket_number}`\n"
+            f"👤 *Claimed By Admin:* {admin.full_name} (`+{admin.phone}`)\n"
+            f"⏱️ *Estimated Time of Completion:* *{etc_text}*\n"
+            f"📊 *Status:* 🔵 IN PROGRESS"
+        )
+        await meta_api.send_text_message(settings.master_admin_phone, master_etc_msg)
+
+    # 3. Reporter Update
+    if ticket.employee and ticket.employee.phone:
+        domain_title = "Building Projects" if is_maint else "IT Support"
+        emp_etc_msg = (
+            f"👨‍💻 *{domain_title} Support Update*\n\n"
+            f"Your ticket *{ticket.ticket_number}* is now being worked on by Admin *{admin.full_name}*.\n"
+            f"⏱️ *Estimated Completion:* *{etc_text}*"
+        )
+        await meta_api.send_text_message(ticket.employee.phone, emp_etc_msg)
 
     return True
 
@@ -695,10 +861,14 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         if not is_explicit_admin_interrupt:
             return False
 
-    # Check if admin is currently answering resolution note prompt (ONLY IF NOT A BUTTON/COMMAND)
+    # Check if admin is currently answering claim ETC or resolution prompts (ONLY IF NOT A BUTTON/COMMAND)
     if not claim_match and not resolve_match and not is_greeting and not is_view_assigned and not is_unassigned_cmd and not is_summary and not is_raise_cmd:
+        if state and state.flow_name == "admin_claim_etc" and state.current_step == "awaiting_estimated_completion_time":
+            return await handle_admin_claim_etc(session, admin, sender_phone, message_text, state)
         if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_admin_resolution_note":
             return await handle_admin_resolution_note(session, admin, sender_phone, message_text, state)
+        if state and state.flow_name == "admin_resolution" and state.current_step == "awaiting_actual_time_taken":
+            return await handle_admin_actual_time_taken(session, admin, sender_phone, message_text, state)
         # If not an admin command or greeting, return False so main handler handles normally
         return False
 
@@ -1155,7 +1325,19 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         ticket.updated_at = datetime.datetime.utcnow()
         await session.commit()
 
-        # 1. Confirm to claiming admin with interactive Resolve button
+        # Prompt claiming admin for Estimated Time of Completion (ETC)
+        await set_user_state(
+            session=session,
+            phone=sender_phone,
+            current_step="awaiting_estimated_completion_time",
+            current_data={
+                "ticket_id": ticket_id,
+                "ticket_number": ticket_num,
+                "is_maint": is_maint_ticket
+            },
+            flow_name="admin_claim_etc"
+        )
+
         claim_confirm_msg = (
             f"✅ *TICKET CLAIMED SUCCESSFULLY!*\n\n"
             f"🎫 *Ticket ID:* `{ticket_num}`\n"
@@ -1163,22 +1345,16 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
             f"📌 *Category:* {cat_name} ➡️ {sub_name}\n"
             f"⚙️ *Issue:* {issue_name}\n"
             f"📝 *Description:* {ticket_desc}\n\n"
-            f"You are now the assigned support admin for this ticket. Tap below when completed:"
+            f"⏱️ *Estimated Time of Completion (ETC):*\n"
+            f"Please reply with your estimated completion time for this ticket:\n"
+            f"_(e.g., '2 hours', 'Today by 5 PM', 'Tomorrow afternoon', '3 days'):_"
         )
-        resolve_btns = [
-            {"id": f"resolve_{ticket_num}", "title": "🟢 Resolve Ticket"}
-        ]
-        try:
-            await meta_api.send_button_message(
-                to_phone=sender_phone,
-                body_text=claim_confirm_msg,
-                buttons=resolve_btns,
-                header_text="✅ TICKET ASSIGNED TO YOU",
-                footer_text="Tap button to resolve when done",
-                image_id=ticket_image_id
-            )
-        except Exception as send_err:
-            logger.error(f"Error sending button confirmation: {send_err}", exc_info=True)
+        if ticket_image_id:
+            try:
+                await meta_api.send_image_message(sender_phone, ticket_image_id, caption=claim_confirm_msg)
+            except Exception:
+                await meta_api.send_text_message(sender_phone, claim_confirm_msg)
+        else:
             await meta_api.send_text_message(sender_phone, claim_confirm_msg)
 
         # 2. Notify co-admins in the same domain
@@ -1253,9 +1429,9 @@ async def handle_admin_command(session: AsyncSession, sender_phone: str, message
         )
 
         prompt_msg = (
-            f"📝 *RESOLUTION NOTE REQUIRED*\n\n"
-            f"You are resolving Ticket *{ticket.ticket_number}*.\n"
-            f"Please reply with a brief note describing what was done to fix the issue:\n"
+            f"📝 *WORK DONE / RESOLUTION NOTE*\n\n"
+            f"You are closing/resolving Ticket *{ticket.ticket_number}*.\n"
+            f"Please reply with a note describing what work was done to complete this task:\n"
             f"_(e.g., 'Replaced broken door latch and tested clip')_"
         )
         await meta_api.send_text_message(sender_phone, prompt_msg)

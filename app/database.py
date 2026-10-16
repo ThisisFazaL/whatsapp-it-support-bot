@@ -114,6 +114,8 @@ class Ticket(Base):
     is_safety_hazard = Column(Boolean, default=False)
     description = Column(Text, nullable=False)
     resolution_note = Column(Text, nullable=True)
+    estimated_completion_time = Column(String(100), nullable=True)
+    actual_time_taken = Column(String(100), nullable=True)
     image_id = Column(String(100), nullable=True) # Optional Meta image attachment ID
     priority_id = Column(Integer, ForeignKey("priorities.priority_id"), default=2)
     status_id = Column(Integer, ForeignKey("ticket_status.status_id"), default=1)
@@ -153,6 +155,8 @@ class MaintenanceTicket(Base):
     is_safety_hazard = Column(Boolean, default=False)
     description = Column(Text, nullable=False)
     resolution_note = Column(Text, nullable=True)
+    estimated_completion_time = Column(String(100), nullable=True)
+    actual_time_taken = Column(String(100), nullable=True)
     image_id = Column(String(100), nullable=True)
     priority_id = Column(Integer, ForeignKey("priorities.priority_id"), default=2)
     status_id = Column(Integer, ForeignKey("ticket_status.status_id"), default=1)
@@ -529,6 +533,22 @@ async def init_db_models():
                     await conn.execute(text("ALTER TABLE fleet_trip_requests ADD COLUMN origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
                 except Exception:
                     pass
+                try:
+                    await conn.execute(text("ALTER TABLE tickets ADD COLUMN estimated_completion_time VARCHAR(100)"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE tickets ADD COLUMN actual_time_taken VARCHAR(100)"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE maintenance_tickets ADD COLUMN estimated_completion_time VARCHAR(100)"))
+                except Exception:
+                    pass
+                try:
+                    await conn.execute(text("ALTER TABLE maintenance_tickets ADD COLUMN actual_time_taken VARCHAR(100)"))
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Schema verification note: {e}")
     else:
@@ -867,6 +887,13 @@ async def init_db_models():
                     await conn.execute(text("ALTER TABLE fleet_trip_requests ADD COLUMN IF NOT EXISTS origin_warehouse VARCHAR(50) DEFAULT 'Harare'"))
                 except Exception:
                     pass
+                try:
+                    await conn.execute(text("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS estimated_completion_time VARCHAR(100)"))
+                    await conn.execute(text("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS actual_time_taken VARCHAR(100)"))
+                    await conn.execute(text("ALTER TABLE maintenance_tickets ADD COLUMN IF NOT EXISTS estimated_completion_time VARCHAR(100)"))
+                    await conn.execute(text("ALTER TABLE maintenance_tickets ADD COLUMN IF NOT EXISTS actual_time_taken VARCHAR(100)"))
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Database table init note: {e}")
             
@@ -1118,6 +1145,8 @@ async def init_db_models():
             {"name": "Faruk Patel", "phone": "263780515663"},
             {"name": "Stanclea", "phone": "263780099291"},
             {"name": "Omar Arizai", "phone": "263771333602"},
+            {"name": "Melody", "phone": "263712002058"},
+            {"name": "Primrose Mutamba", "phone": "263787061699"},
         ]
         reps_by_phone = {rep["phone"]: rep["name"] for rep in maint_reporters_data}
         existing_reps = (await session.execute(

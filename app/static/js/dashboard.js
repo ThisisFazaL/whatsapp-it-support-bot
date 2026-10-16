@@ -2285,8 +2285,22 @@ function escapeJsAttr(val) {
                                  r.employee_name.toLowerCase().includes(q) ||
                                  r.issue.toLowerCase().includes(q) ||
                                  r.description.toLowerCase().includes(q) ||
-                                 r.category.toLowerCase().includes(q);
-                const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
+                                 r.category.toLowerCase().includes(q) ||
+                                 (r.resolution_note && r.resolution_note.toLowerCase().includes(q)) ||
+                                 (r.estimated_completion_time && r.estimated_completion_time.toLowerCase().includes(q)) ||
+                                 (r.actual_time_taken && r.actual_time_taken.toLowerCase().includes(q));
+                
+                let matchesStatus = false;
+                if (statusFilter === 'ALL') {
+                    matchesStatus = true;
+                } else if (statusFilter === 'ONGOING') {
+                    matchesStatus = (r.status === 'Open' || r.status === 'In Progress');
+                } else if (statusFilter === 'COMPLETED') {
+                    matchesStatus = (r.status === 'Resolved' || r.status === 'Closed');
+                } else {
+                    matchesStatus = (r.status === statusFilter);
+                }
+
                 const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
                 return matchesQ && matchesStatus && matchesAdmin;
             });
@@ -2338,7 +2352,12 @@ function escapeJsAttr(val) {
                                     </span>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
-                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.resolution_time}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-700 dark:text-zinc-300">
+                                    <div class="font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">${r.resolution_time}</div>
+                                    ${r.estimated_completion_time ? `<div class="mt-1"><span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 whitespace-nowrap">⏱️ ETC: ${r.estimated_completion_time}</span></div>` : ''}
+                                    ${r.actual_time_taken ? `<div class="mt-0.5"><span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 whitespace-nowrap">⏱️ Took: ${r.actual_time_taken}</span></div>` : ''}
+                                    ${r.resolution_note ? `<div class="text-[11px] text-zinc-500 dark:text-zinc-400 italic mt-0.5 truncate max-w-xs">"${r.resolution_note}"</div>` : ''}
+                                </td>
                             </tr>
                         `;
                     }).join('');
@@ -2383,6 +2402,18 @@ function escapeJsAttr(val) {
                                     <div class="font-medium text-zinc-900 dark:text-zinc-100 flex items-center gap-1">${r.category} <svg class="w-3 h-3 text-zinc-400 inline mx-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg> ${r.subcategory}</div>
                                     <div class="text-zinc-500 dark:text-zinc-400 text-[11px] mt-0.5">${r.issue}</div>
                                 </div>
+                                ${r.estimated_completion_time ? `
+                                    <div class="flex items-center justify-between text-[11px] text-zinc-600 dark:text-zinc-400 bg-blue-500/5 dark:bg-blue-500/10 px-2.5 py-1 rounded-md border border-blue-200/50 dark:border-blue-500/20">
+                                        <span>⏱️ Estimated Time (ETC):</span>
+                                        <strong class="text-blue-700 dark:text-blue-300">${r.estimated_completion_time}</strong>
+                                    </div>
+                                ` : ''}
+                                ${(r.actual_time_taken || r.resolution_note) ? `
+                                    <div class="space-y-1 text-[11px] bg-emerald-500/5 dark:bg-emerald-500/10 p-2 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">
+                                        ${r.actual_time_taken ? `<div class="flex justify-between"><span>⏱️ Actual Time Taken:</span><strong class="text-emerald-700 dark:text-emerald-300">${r.actual_time_taken}</strong></div>` : ''}
+                                        ${r.resolution_note ? `<div class="text-zinc-600 dark:text-zinc-400 italic">Work Done: "${r.resolution_note}"</div>` : ''}
+                                    </div>
+                                ` : ''}
                                 <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1 border-t border-zinc-100 dark:border-zinc-900">
                                     <span>Tech: <strong class="text-zinc-800 dark:text-zinc-200">${r.assigned_admin}</strong></span>
                                     <span class="font-mono">${r.resolution_time}</span>
@@ -2438,10 +2469,24 @@ function escapeJsAttr(val) {
                 const matchesQ = !q || r.ticket_number.toLowerCase().includes(q) ||
                                  r.location.toLowerCase().includes(q) ||
                                  r.description.toLowerCase().includes(q) ||
-                                 r.category.toLowerCase().includes(q);
+                                 r.category.toLowerCase().includes(q) ||
+                                 (r.resolution_note && r.resolution_note.toLowerCase().includes(q)) ||
+                                 (r.estimated_completion_time && r.estimated_completion_time.toLowerCase().includes(q)) ||
+                                 (r.actual_time_taken && r.actual_time_taken.toLowerCase().includes(q));
                 const matchesLoc = locFilter === 'ALL' || r.location === locFilter;
                 const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
-                const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
+                
+                let matchesStatus = false;
+                if (statusFilter === 'ALL') {
+                    matchesStatus = true;
+                } else if (statusFilter === 'ONGOING') {
+                    matchesStatus = (r.status === 'Open' || r.status === 'In Progress');
+                } else if (statusFilter === 'COMPLETED') {
+                    matchesStatus = (r.status === 'Resolved' || r.status === 'Closed');
+                } else {
+                    matchesStatus = (r.status === statusFilter);
+                }
+
                 return matchesQ && matchesLoc && matchesAdmin && matchesStatus;
             });
 
@@ -2460,7 +2505,7 @@ function escapeJsAttr(val) {
             const projMobile = document.getElementById('proj-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching project tickets found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching project tickets found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
@@ -2486,6 +2531,13 @@ function escapeJsAttr(val) {
                                     </span>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
+                                    ${r.estimated_completion_time ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 whitespace-nowrap">⏱️ ${r.estimated_completion_time}</span>` : '<span class="text-zinc-400 dark:text-zinc-500 font-mono text-[11px]">--</span>'}
+                                </td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 min-w-[150px]">
+                                    ${r.actual_time_taken ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 whitespace-nowrap">⏱️ ${r.actual_time_taken}</span><br>` : ''}
+                                    ${r.resolution_note ? `<small class="text-zinc-600 dark:text-zinc-400 italic">Work: "${r.resolution_note}"</small>` : (!r.actual_time_taken ? '<span class="text-zinc-400 dark:text-zinc-500 font-mono text-[11px]">--</span>' : '')}
+                                </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${r.created_at}</td>
                             </tr>
                         `;
@@ -2524,6 +2576,18 @@ function escapeJsAttr(val) {
                                     <div class="font-medium text-zinc-900 dark:text-zinc-100">${r.category}</div>
                                     <div class="text-zinc-500 dark:text-zinc-400 text-[11px] mt-0.5">${r.description}</div>
                                 </div>
+                                ${r.estimated_completion_time ? `
+                                    <div class="flex items-center justify-between text-[11px] text-zinc-600 dark:text-zinc-400 bg-blue-500/5 dark:bg-blue-500/10 px-2.5 py-1 rounded-md border border-blue-200/50 dark:border-blue-500/20">
+                                        <span>⏱️ Estimated Time (ETC):</span>
+                                        <strong class="text-blue-700 dark:text-blue-300">${r.estimated_completion_time}</strong>
+                                    </div>
+                                ` : ''}
+                                ${(r.actual_time_taken || r.resolution_note) ? `
+                                    <div class="space-y-1 text-[11px] bg-emerald-500/5 dark:bg-emerald-500/10 p-2 rounded-md border border-emerald-200/50 dark:border-emerald-500/20">
+                                        ${r.actual_time_taken ? `<div class="flex justify-between"><span>⏱️ Actual Time Taken:</span><strong class="text-emerald-700 dark:text-emerald-300">${r.actual_time_taken}</strong></div>` : ''}
+                                        ${r.resolution_note ? `<div class="text-zinc-600 dark:text-zinc-400 italic">Work Done: "${r.resolution_note}"</div>` : ''}
+                                    </div>
+                                ` : ''}
                                 <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1 border-t border-zinc-100 dark:border-zinc-900">
                                     <span>Lead: <strong class="text-zinc-800 dark:text-zinc-200">${r.assigned_admin}</strong></span>
                                     <span class="font-mono">${r.created_at}</span>

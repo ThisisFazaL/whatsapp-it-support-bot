@@ -1633,6 +1633,39 @@ async def add_projects_reporter(phone: str = "263780515663", name: str = "Faruk 
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
 
+@app.get("/sync-melody-and-primrose")
+async def sync_melody_and_primrose(db: AsyncSession = Depends(get_db)):
+    """Guarantees Melody and Primrose Mutamba are added as active maintenance reporters."""
+    try:
+        from app.database import Employee
+        reporters = [
+            {"name": "Melody", "phone": "263712002058"},
+            {"name": "Primrose Mutamba", "phone": "263787061699"}
+        ]
+        results = []
+        for r in reporters:
+            p = r["phone"]
+            stmt = select(Employee).where((Employee.phone == p) | (Employee.phone.like(f"%{p[-9:]}")))
+            emp = (await db.execute(stmt)).scalars().first()
+            if not emp:
+                emp = Employee(
+                    employee_code=f"EMP_MNT_{p[-4:]}",
+                    full_name=r["name"],
+                    phone=p,
+                    is_maintenance_reporter=True,
+                    active=True
+                )
+                db.add(emp)
+            else:
+                emp.is_maintenance_reporter = True
+                emp.active = True
+                emp.full_name = r["name"]
+            results.append({"name": r["name"], "phone": p, "is_maintenance_reporter": True})
+        await db.commit()
+        return {"status": "SUCCESS", "reporters": results}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/send-zayn-project-ticket-2-to-stanclea")
 @app.get("/trigger-send-zayn-ticket-to-stanclea")
 async def trigger_send_zayn_ticket_to_stanclea(db: AsyncSession = Depends(get_db)):
