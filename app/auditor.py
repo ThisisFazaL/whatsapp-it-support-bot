@@ -216,16 +216,26 @@ async def run_daily_button_audit() -> Dict[str, Any]:
                     await session.refresh(tkt)
                     record_test("Admin Buttons", f"Button: claim_{tkt.ticket_number} -> Sets In Progress", handled_claim is True and tkt.status_id == 2, f"Status ID: {tkt.status_id}")
 
+                    # 5.4b Admin enters Estimated Completion Time (ETC)
+                    handled_etc = await handle_admin_command(session, "263783709724", "2 hours")
+                    await session.refresh(tkt)
+                    record_test("Admin ETC", "Admin enters ETC -> Saves estimated_completion_time", handled_etc is True and tkt.estimated_completion_time == "2 hours", f"ETC: {tkt.estimated_completion_time}")
+
                 # 5.5 resolve_{ticket_number}
                 if tkt:
                     handled_resolve_btn = await handle_admin_command(session, "263783709724", f"resolve_{tkt.ticket_number}")
                     s_admin = await get_user_state(session, "263783709724")
                     record_test("Admin Buttons", f"Button: resolve_{tkt.ticket_number} -> Prompts for note", handled_resolve_btn is True and s_admin.current_step == "awaiting_admin_resolution_note", f"Step: {s_admin.current_step if s_admin else None}")
 
-                    # Submit note
+                    # Submit note -> Prompts for actual time taken
                     handled_note = await handle_admin_command(session, "263783709724", "Replaced with new OEM battery and tested health")
+                    s_admin_after_note = await get_user_state(session, "263783709724")
+                    record_test("Admin Resolution Note", "Admin types resolution note -> Prompts for time taken", handled_note is True and s_admin_after_note.current_step == "awaiting_actual_time_taken", f"Step: {s_admin_after_note.current_step if s_admin_after_note else None}")
+
+                    # Submit actual time taken -> Sets status to Resolved (3)
+                    handled_time = await handle_admin_command(session, "263783709724", "1 hour 30 mins")
                     await session.refresh(tkt)
-                    record_test("Admin Resolution", "Admin types resolution note -> Sets status to Resolved (3)", handled_note is True and tkt.status_id == 3 and tkt.resolution_note == "Replaced with new OEM battery and tested health", f"Status: {tkt.status_id}, Note: {tkt.resolution_note}")
+                    record_test("Admin Resolution", "Admin types actual time taken -> Sets status to Resolved (3)", handled_time is True and tkt.status_id == 3 and tkt.resolution_note == "Replaced with new OEM battery and tested health" and tkt.actual_time_taken == "1 hour 30 mins", f"Status: {tkt.status_id}, Note: {tkt.resolution_note}, Time: {tkt.actual_time_taken}")
 
                 # -----------------------------------------------------------------
                 # TEST GROUP 6: Reporter Confirmation Loop Buttons

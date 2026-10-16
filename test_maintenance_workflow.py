@@ -119,11 +119,20 @@ async def run_test():
         note_text = "Replaced cabinet hinge screws, aligned door, and tested latch mechanism."
         await handle_admin_command(session, admin_phone, note_text)
 
+        admin_state_after_note = await get_user_state(session, admin_phone)
+        assert admin_state_after_note.current_step == "awaiting_actual_time_taken"
+
+        # 14. Admin enters actual time taken -> Ticket Resolved!
+        logger.info("\n--- STEP 14: Admin enters actual time taken ---")
+        time_text = "45 mins"
+        await handle_admin_command(session, admin_phone, time_text)
+
         # Check final ticket state
         await session.refresh(latest_ticket)
-        logger.info(f"Ticket after resolution: Status={latest_ticket.status_id}, Resolution Note='{latest_ticket.resolution_note}'")
+        logger.info(f"Ticket after resolution: Status={latest_ticket.status_id}, Resolution Note='{latest_ticket.resolution_note}', Time Taken='{latest_ticket.actual_time_taken}'")
         assert latest_ticket.status_id == 3 # Resolved
         assert latest_ticket.resolution_note == note_text
+        assert latest_ticket.actual_time_taken == time_text
 
         logger.info("\n🎉 ALL VERIFICATION TESTS PASSED SUCCESSFULLY!")
 

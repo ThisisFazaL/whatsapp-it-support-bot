@@ -1071,7 +1071,11 @@ async def process_webhook_payload(body: dict):
             }
             if clean_kw in PASSIVE_CHATTER or clean_txt in PASSIVE_CHATTER:
                 # If user is in an active data-entry step that expects freeform notes or trip ID, fall through
-                freeform_steps = {"awaiting_description", "awaiting_note", "awaiting_resolution_note", "awaiting_admin_resolution_note", "awaiting_trip_id", "awaiting_recovery_trip_id"}
+                freeform_steps = {
+                    "awaiting_description", "awaiting_note", "awaiting_resolution_note",
+                    "awaiting_admin_resolution_note", "awaiting_estimated_completion_time",
+                    "awaiting_actual_time_taken", "awaiting_trip_id", "awaiting_recovery_trip_id"
+                }
                 if not state or not state.current_step or state.current_step not in freeform_steps:
                     logger.info(f"Silently acknowledged passive chatter '{message_text}' from {sender_phone} without unsolicited reply.")
                     return
