@@ -27,6 +27,8 @@ function escapeJsAttr(val) {
             'addTruckModal',
             'addDriverModal',
             'addSalesRepModal',
+            'driverApprovalDetailModal',
+            'rejectExpenseModal',
             'globalLoadingPopup'
         ];
 
@@ -71,6 +73,8 @@ function escapeJsAttr(val) {
                 case 'addDriverModal': closeAddDriverModal(); break;
                 case 'addSalesRepModal': closeAddSalesRepModal(); break;
                 case 'userManagementModal': closeUserManagementModal(); break;
+                case 'driverApprovalDetailModal': closeDriverApprovalModal(); break;
+                case 'rejectExpenseModal': closeRejectExpenseModal(); break;
                 default:
                     const el = document.getElementById(id);
                     if (el) el.classList.add('hidden');
@@ -598,6 +602,9 @@ function escapeJsAttr(val) {
         function changeProjPage(p) { projPage = p; filterProjectsTable(false); }
         function changeWSPage(p) { wsPage = p; filterFleetTable(false); }
         function changeFleetPage(p) { fleetPage = p; filterFleetApprovalsTable(false); }
+        let driverApprPage = 1;
+        const driverApprPageSize = 10;
+        function changeDriverApprPage(p) { driverApprPage = p; filterDriverApprovalsTable(false); }
         function changeLedgerPage(p) { ledgerPage = p; filterLedgerTable(false); }
         function changeTripsPage(p) { tripsPage = p; filterTripsTable(false); }
         function changeTrucksPage(p) { trucksPage = p; filterTrucksTable(false); }
@@ -683,6 +690,7 @@ function escapeJsAttr(val) {
                 if (typeof filterDriversTable === 'function') filterDriversTable(false);
             } else if (viewId === 'approvals') {
                 if (typeof filterFleetApprovalsTable === 'function') filterFleetApprovalsTable(false);
+                if (typeof filterDriverApprovalsTable === 'function') filterDriverApprovalsTable(false);
             } else if (viewId === 'ledger') {
                 if (typeof filterLedgerTable === 'function') filterLedgerTable(false);
             } else if (viewId === 'analytics') {
@@ -755,6 +763,7 @@ function escapeJsAttr(val) {
 
             // 3. Re-filter Approvals table
             if (typeof filterFleetApprovalsTable === 'function') filterFleetApprovalsTable(true);
+            if (typeof filterDriverApprovalsTable === 'function') filterDriverApprovalsTable(true);
             if (typeof filterApprovalsTable === 'function') filterApprovalsTable(true);
 
             // 4. Re-filter Payments table
@@ -2956,6 +2965,7 @@ function escapeJsAttr(val) {
             filterPaymentsTable(false);
             filterLedgerTable(false);
             filterFleetApprovalsTable(false);
+            filterDriverApprovalsTable(false);
             populatePaySalespersonDropdown(fleet.salespersons);
             if (fleet.route_rules) renderModalCityRules(fleet.route_rules);
         }
@@ -3263,9 +3273,11 @@ function escapeJsAttr(val) {
 
             const tbody = document.getElementById('fleet-approvals-table-body');
             const apprMobile = document.getElementById('approvals-cards-list');
+            const isMasterAdmin = window.currentUserRole === 'MASTER_ADMIN' || hasPermission('approve_trips');
+
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trip approvals found${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="11" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching trip approvals found${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
                     if (apprMobile) apprMobile.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching trip approvals found${comp !== 'ALL' ? ' for ' + comp : ''}.</div>`;
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
@@ -3282,6 +3294,18 @@ function escapeJsAttr(val) {
                         let auditBadge = '<span class="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Verified Parity</span>';
                         if (!r.is_clean) {
                             auditBadge = `<span class="inline-flex items-center gap-1.5 bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-500/30 text-[10px] font-bold px-2 py-0.5 rounded whitespace-nowrap" title="${r.audit_flags.join('; ')}"><span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>Audit Alert (${r.audit_flags.length})</span>`;
+                        }
+
+                        let approverHtml = '<span class="text-zinc-400 dark:text-zinc-500 font-mono text-[10px]">Pending</span>';
+                        if (r.approved_by) {
+                            approverHtml = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">✅ ${r.approved_by}</span>`;
+                        }
+
+                        let shortfallAction = '<span class="text-zinc-400 dark:text-zinc-500 text-xs">—</span>';
+                        if (isMasterAdmin && r.status === 'SHORTFALL_RECORDED') {
+                            shortfallAction = `<button onclick="decideTripShortfall('${r.trip_id}', 'APPROVE')" class="px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs cursor-pointer whitespace-nowrap">Approve</button>`;
+                        } else if (r.status === 'APPROVED' || r.status === 'DISPATCHED') {
+                            shortfallAction = `<span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap"><span>✓</span> Cleared</span>`;
                         }
 
                         return `
@@ -3313,7 +3337,9 @@ function escapeJsAttr(val) {
                                         ${r.status.replace(/_/g, ' ')}
                                     </span>
                                 </td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">${approverHtml}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-500 dark:text-zinc-400 text-[11px] font-mono whitespace-nowrap">${r.created_at}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-right whitespace-nowrap">${shortfallAction}</td>
                             </tr>
                         `;
                     }).join('');
@@ -3369,6 +3395,18 @@ function escapeJsAttr(val) {
                                     <div class="text-right">Debt Added: <strong class="font-mono text-amber-600 dark:text-amber-400">$${r.pending_balance_recorded.toFixed(2)}</strong></div>
                                 </div>
                                 ` : ''}
+                                <div class="flex items-center justify-between pt-1">
+                                    <div>
+                                        ${r.approved_by ? `<span class="text-[11px] font-bold text-emerald-700 dark:text-emerald-400">Approved by: ${r.approved_by}</span>` : '<span class="text-[11px] text-zinc-400 font-mono">Pending Approval</span>'}
+                                    </div>
+                                    <div>
+                                        ${isMasterAdmin && r.status === 'SHORTFALL_RECORDED' ? `
+                                            <button onclick="decideTripShortfall('${r.trip_id}', 'APPROVE')" class="px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs cursor-pointer">
+                                                Approve Shortfall
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </div>
                             </div>
                         `;
                     }).join('');
@@ -3376,6 +3414,492 @@ function escapeJsAttr(val) {
             }
 
             renderPaginationControls('fleet-pagination-info', 'fleet-pagination-controls', fleetPage, records.length, fleetPageSize, 'changeFleetPage');
+        }
+
+        // =============================================================
+        // SUBVIEW 6 (CARD 1): DRIVER EXPENSES & EXTRA ALLOWANCE REQUESTS
+        // =============================================================
+        function filterDriverApprovalsTable(resetPage = false) {
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.driver_approvals) return;
+            if (resetPage) driverApprPage = 1;
+
+            const q = (document.getElementById('driver-appr-search')?.value || '').toLowerCase().trim();
+            const typeFilter = document.getElementById('driver-appr-type-filter')?.value || 'ALL';
+            const statusFilter = document.getElementById('driver-appr-status-filter')?.value || 'ALL';
+            const comp = window.selectedFleetCompany || 'ALL';
+
+            let records = cachedData.fleet.driver_approvals.filter(r => {
+                const matchesQ = !q ||
+                    (r.trip_id && r.trip_id.toLowerCase().includes(q)) ||
+                    (r.driver_name && r.driver_name.toLowerCase().includes(q)) ||
+                    (r.driver_phone && r.driver_phone.toLowerCase().includes(q)) ||
+                    (r.salesperson_name && r.salesperson_name.toLowerCase().includes(q)) ||
+                    (r.destination_city && r.destination_city.toLowerCase().includes(q)) ||
+                    (r.description && r.description.toLowerCase().includes(q)) ||
+                    (r.charge_label && r.charge_label.toLowerCase().includes(q)) ||
+                    (r.approved_by && r.approved_by.toLowerCase().includes(q));
+
+                const matchesType = (typeFilter === 'ALL') || (r.charge_type === typeFilter);
+                const matchesStatus = (statusFilter === 'ALL') || (r.status === statusFilter);
+
+                let matchesCompany = true;
+                if (comp !== 'ALL') {
+                    const rComp = r.company_name || r.company;
+                    matchesCompany = isCompanyMatch(rComp, comp);
+                }
+
+                return matchesQ && matchesType && matchesStatus && matchesCompany;
+            });
+
+            // Enforce newest first by ID
+            records.sort((a, b) => (b.id || 0) - (a.id || 0));
+
+            const pendingCount = records.filter(r => r.status === 'PENDING').length;
+            const badgeEl = document.getElementById('driver-appr-count-badge');
+            if (badgeEl) {
+                badgeEl.textContent = `${records.length} Request${records.length === 1 ? '' : 's'}${pendingCount > 0 ? ' (' + pendingCount + ' Pending)' : ''}`;
+            }
+
+            // Pagination Slicing (10 per page)
+            const totalPages = Math.max(1, Math.ceil(records.length / driverApprPageSize));
+            if (driverApprPage > totalPages) driverApprPage = totalPages;
+            const startIndex = (driverApprPage - 1) * driverApprPageSize;
+            const pagedRecords = records.slice(startIndex, startIndex + driverApprPageSize);
+
+            const isMasterAdmin = window.currentUserRole === 'MASTER_ADMIN' || hasPermission('approve_trips');
+
+            const tbody = document.getElementById('driver-approvals-tbody');
+            const mobileContainer = document.getElementById('driver-approvals-mobile-list');
+
+            if (tbody) {
+                if (records.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching driver expense or extra allowance requests found${comp !== 'ALL' ? ' for ' + comp : ''}.</td></tr>`;
+                } else {
+                    tbody.innerHTML = pagedRecords.map(r => {
+                        // Type Badge
+                        let typeBadge = '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700">Expense</span>';
+                        if (r.charge_type === 'EXTRA_ALLOWANCE') {
+                            typeBadge = '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30 whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>Extra Allowance</span>';
+                        } else if (r.charge_type === 'EMERGENCY_FUEL') {
+                            typeBadge = '<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30 whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>Emergency Fuel</span>';
+                        } else {
+                            typeBadge = `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30 whitespace-nowrap"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>${r.charge_label || 'Other Expense'}</span>`;
+                        }
+
+                        // Status Badge
+                        let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
+                        let statusDot = 'bg-amber-500 animate-pulse';
+                        let statusText = 'Pending Review';
+                        if (r.status === 'APPROVED') {
+                            statusBadge = 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30';
+                            statusDot = 'bg-emerald-500';
+                            statusText = 'Approved';
+                        } else if (r.status === 'REJECTED') {
+                            statusBadge = 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30';
+                            statusDot = 'bg-rose-500';
+                            statusText = 'Rejected';
+                        }
+
+                        // Approver Column
+                        let approverHtml = '<span class="text-zinc-400 dark:text-zinc-500 font-mono text-[11px]">Pending</span>';
+                        if (r.status === 'APPROVED') {
+                            approverHtml = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800" title="Authorized disbursement">✅ ${r.approved_by || 'Management'}</span>`;
+                        } else if (r.status === 'REJECTED') {
+                            approverHtml = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800" title="${escapeJsAttr(r.rejection_note || 'Declined')}">❌ ${r.approved_by || 'Management'}</span>`;
+                        }
+
+                        // Company pill style
+                        let coBadge = 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300';
+                        const coLow = (r.company_name || '').toLowerCase();
+                        if (coLow.includes('tagoneswa')) {
+                            coBadge = 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200 dark:border-blue-800';
+                        } else if (coLow.includes('lg')) {
+                            coBadge = 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800';
+                        } else if (coLow.includes('kreckle')) {
+                            coBadge = 'bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800';
+                        }
+
+                        // Action buttons
+                        let actionButtons = '';
+                        if (isMasterAdmin && r.status === 'PENDING') {
+                            actionButtons = `
+                                <div class="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                                    <button onclick="confirmApproveExpense(${r.id})" class="px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs cursor-pointer flex items-center gap-1" title="Approve Request">
+                                        <span>✓</span> Approve
+                                    </button>
+                                    <button onclick="openRejectExpenseModal(${r.id})" class="px-2 py-1 rounded-md text-xs font-medium border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer" title="Reject Request">
+                                        Reject
+                                    </button>
+                                    <button onclick="openApprovalDetailModal(${r.id})" class="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer" title="View Details">
+                                        🔍
+                                    </button>
+                                </div>
+                            `;
+                        } else {
+                            actionButtons = `
+                                <div class="flex items-center justify-end">
+                                    <button onclick="openApprovalDetailModal(${r.id})" class="px-2.5 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">
+                                        Details
+                                    </button>
+                                </div>
+                            `;
+                        }
+
+                        return `
+                            <tr class="hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition">
+                                <td class="px-3.5 py-3 whitespace-nowrap">
+                                    <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.trip_id || 'N/A'}</span>
+                                    <div class="flex items-center gap-1.5 mt-0.5">
+                                        <span class="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold ${coBadge}">${r.company_name || 'Tagoneswa'}</span>
+                                        <span class="text-zinc-400 font-mono text-[10px]">#EXP-${r.id}</span>
+                                    </div>
+                                </td>
+                                <td class="px-3.5 py-3 whitespace-nowrap">${typeBadge}</td>
+                                <td class="px-3.5 py-3 whitespace-nowrap">
+                                    <strong class="text-zinc-900 dark:text-zinc-100">${r.driver_name || 'Assigned Driver'}</strong>
+                                    <br><small class="text-zinc-400 dark:text-zinc-500 font-mono">+${r.driver_phone || ''}</small>
+                                </td>
+                                <td class="px-3.5 py-3 font-mono whitespace-nowrap">
+                                    <span class="font-bold text-sm text-zinc-900 dark:text-zinc-100">$${Number(r.amount || 0).toFixed(2)}</span>
+                                </td>
+                                <td class="px-3.5 py-3 max-w-xs">
+                                    <div class="text-xs text-zinc-800 dark:text-zinc-200 truncate font-mono" title="${escapeJsAttr(r.description || '')}">
+                                        ${r.description || '<span class="text-zinc-400">Standard expense request</span>'}
+                                    </div>
+                                    ${r.rejection_note ? `<div class="text-[10px] text-rose-600 dark:text-rose-400 font-medium truncate mt-0.5">Note: ${r.rejection_note}</div>` : ''}
+                                </td>
+                                <td class="px-3.5 py-3 whitespace-nowrap">
+                                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                        <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
+                                        ${statusText}
+                                    </span>
+                                </td>
+                                <td class="px-3.5 py-3 whitespace-nowrap">${approverHtml}</td>
+                                <td class="px-3.5 py-3 font-mono text-zinc-500 dark:text-zinc-400 text-[11px] whitespace-nowrap">${r.created_at || '—'}</td>
+                                <td class="px-3.5 py-3 text-right whitespace-nowrap">${actionButtons}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+            }
+
+            if (mobileContainer) {
+                if (records.length === 0) {
+                    mobileContainer.innerHTML = `<div class="p-6 text-center text-zinc-400 dark:text-zinc-500 font-medium text-xs">No matching driver requests found.</div>`;
+                } else {
+                    mobileContainer.innerHTML = pagedRecords.map(r => {
+                        let statusBadge = r.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200' :
+                                          r.status === 'REJECTED' ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-200' :
+                                          'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200';
+                        return `
+                            <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div>
+                                        <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.trip_id}</span>
+                                        <span class="text-zinc-400 text-[11px] font-mono ml-1.5">#EXP-${r.id}</span>
+                                    </div>
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                        ${r.status}
+                                    </span>
+                                </div>
+                                <div class="flex items-center justify-between text-xs">
+                                    <div>
+                                        <div class="font-semibold text-zinc-900 dark:text-zinc-100">${r.driver_name}</div>
+                                        <div class="text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">+${r.driver_phone}</div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="font-mono font-bold text-base text-zinc-900 dark:text-zinc-100">$${Number(r.amount || 0).toFixed(2)}</div>
+                                        <div class="text-[11px] text-zinc-500 dark:text-zinc-400">${r.charge_label || r.charge_type}</div>
+                                    </div>
+                                </div>
+                                <div class="bg-zinc-50 dark:bg-zinc-900/50 p-2.5 rounded-md border border-zinc-100 dark:border-zinc-800/80 text-[11px] font-mono text-zinc-700 dark:text-zinc-300">
+                                    ${r.description || 'No description provided.'}
+                                </div>
+                                <div class="flex items-center justify-between pt-1">
+                                    <div class="text-[11px]">
+                                        ${r.approved_by ? `<span class="font-bold text-emerald-700 dark:text-emerald-400">By: ${r.approved_by}</span>` : '<span class="text-zinc-400 font-mono">Pending Approval</span>'}
+                                    </div>
+                                    <div class="flex items-center gap-1.5">
+                                        ${isMasterAdmin && r.status === 'PENDING' ? `
+                                            <button onclick="confirmApproveExpense(${r.id})" class="px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs cursor-pointer">
+                                                Approve
+                                            </button>
+                                            <button onclick="openRejectExpenseModal(${r.id})" class="px-2 py-1 rounded-md text-xs font-medium border border-rose-300 text-rose-700 hover:bg-rose-50 transition cursor-pointer">
+                                                Reject
+                                            </button>
+                                        ` : ''}
+                                        <button onclick="openApprovalDetailModal(${r.id})" class="px-2.5 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300">
+                                            Details
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+
+            renderPaginationControls('driver-appr-pagination-info', 'driver-appr-pagination-controls', driverApprPage, records.length, driverApprPageSize, 'changeDriverApprPage');
+        }
+
+        // =============================================================
+        // DRIVER EXPENSE APPROVAL MODAL & DECISION CONTROLLERS
+        // =============================================================
+        function openApprovalDetailModal(expId) {
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.driver_approvals) return;
+            const exp = cachedData.fleet.driver_approvals.find(e => Number(e.id) === Number(expId));
+            if (!exp) return;
+
+            // Subtitle
+            const subEl = document.getElementById('modal-appr-subtitle');
+            if (subEl) subEl.textContent = `Trip: ${exp.trip_id || 'N/A'} • Requested on ${exp.created_at || 'Recently'}`;
+
+            // Type badge
+            const typeBadgeEl = document.getElementById('modal-appr-type-badge');
+            if (typeBadgeEl) {
+                if (exp.charge_type === 'EXTRA_ALLOWANCE') {
+                    typeBadgeEl.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30';
+                    typeBadgeEl.textContent = 'Extra Allowance';
+                } else if (exp.charge_type === 'EMERGENCY_FUEL') {
+                    typeBadgeEl.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30';
+                    typeBadgeEl.textContent = 'Emergency Fuel';
+                } else {
+                    typeBadgeEl.className = 'px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30';
+                    typeBadgeEl.textContent = exp.charge_label || 'Other Expense';
+                }
+            }
+
+            // Status Banner
+            const bannerEl = document.getElementById('modal-appr-status-banner');
+            const pillEl = document.getElementById('modal-appr-status-pill');
+            const textEl = document.getElementById('modal-appr-status-text');
+            const approverInfoEl = document.getElementById('modal-appr-approver-info');
+
+            if (bannerEl && pillEl && textEl && approverInfoEl) {
+                if (exp.status === 'APPROVED') {
+                    bannerEl.className = 'p-3 rounded-lg border border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/80 dark:bg-emerald-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2';
+                    pillEl.className = 'px-2.5 py-1 rounded-md text-xs font-bold border border-emerald-300 bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200';
+                    pillEl.textContent = 'APPROVED';
+                    textEl.textContent = 'Authorized for disbursement & accounts settlement';
+                    approverInfoEl.innerHTML = `<span class="text-emerald-700 dark:text-emerald-300">✅ Authorized by <strong>${escapeJsAttr(exp.approved_by || 'Management')}</strong></span>`;
+                } else if (exp.status === 'REJECTED') {
+                    bannerEl.className = 'p-3 rounded-lg border border-rose-200 bg-rose-50/50 dark:border-rose-800/80 dark:bg-rose-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2';
+                    pillEl.className = 'px-2.5 py-1 rounded-md text-xs font-bold border border-rose-300 bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-200';
+                    pillEl.textContent = 'REJECTED';
+                    textEl.textContent = 'Disapproved by management';
+                    approverInfoEl.innerHTML = `<span class="text-rose-700 dark:text-rose-300">❌ Declined by <strong>${escapeJsAttr(exp.approved_by || 'Management')}</strong></span>`;
+                } else {
+                    bannerEl.className = 'p-3 rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800/80 dark:bg-amber-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2';
+                    pillEl.className = 'px-2.5 py-1 rounded-md text-xs font-bold border border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200';
+                    pillEl.textContent = 'PENDING REVIEW';
+                    textEl.textContent = 'Awaiting Master Admin sign-off';
+                    approverInfoEl.innerHTML = `<span class="text-amber-700 dark:text-amber-300 font-mono">Pending Action</span>`;
+                }
+            }
+
+            // Spec Cards
+            const tripIdEl = document.getElementById('modal-appr-trip-id');
+            if (tripIdEl) tripIdEl.textContent = exp.trip_id || 'N/A';
+            const compEl = document.getElementById('modal-appr-company');
+            if (compEl) compEl.textContent = exp.company_name || 'Tagoneswa Hardware';
+            const routeEl = document.getElementById('modal-appr-route');
+            if (routeEl) routeEl.textContent = `${exp.destination_city || ''} (${exp.route || 'Standard Corridor'})`;
+            const drvEl = document.getElementById('modal-appr-driver');
+            if (drvEl) drvEl.textContent = `${exp.driver_name || 'Driver'} (+${exp.driver_phone || ''})`;
+            const spEl = document.getElementById('modal-appr-salesperson');
+            if (spEl) spEl.textContent = `${exp.salesperson_name || 'Sales Rep'} (+${exp.salesperson_phone || ''})`;
+            const amtEl = document.getElementById('modal-appr-amount');
+            if (amtEl) amtEl.textContent = `$${Number(exp.amount || 0).toFixed(2)}`;
+            const dateEl = document.getElementById('modal-appr-date');
+            if (dateEl) dateEl.textContent = exp.created_at || '';
+            const descEl = document.getElementById('modal-appr-description');
+            if (descEl) descEl.textContent = exp.description || 'No itemized notes submitted.';
+
+            // Receipt note
+            const rcptEl = document.getElementById('modal-appr-receipt-info');
+            if (rcptEl) {
+                if (exp.receipt_image_id) {
+                    rcptEl.textContent = `Driver uploaded digital receipt proof (WhatsApp Media ID: ${exp.receipt_image_id}). Original physical paper receipt must be surrendered upon trip closure.`;
+                } else {
+                    rcptEl.textContent = `Physical receipt verification: Driver will surrender physical vendor receipt to Dispatch and Accounts upon vehicle return.`;
+                }
+            }
+
+            // Rejection note alert
+            const rejBlock = document.getElementById('modal-appr-rejection-block');
+            const rejNoteEl = document.getElementById('modal-appr-rejection-note');
+            if (rejBlock && rejNoteEl) {
+                if (exp.status === 'REJECTED' && exp.rejection_note) {
+                    rejBlock.classList.remove('hidden');
+                    rejNoteEl.textContent = exp.rejection_note;
+                } else {
+                    rejBlock.classList.add('hidden');
+                    rejNoteEl.textContent = '';
+                }
+            }
+
+            // Action buttons in modal footer
+            const actionsContainer = document.getElementById('modal-appr-actions-container');
+            const isMasterAdmin = window.currentUserRole === 'MASTER_ADMIN' || hasPermission('approve_trips');
+            if (actionsContainer) {
+                if (isMasterAdmin && exp.status === 'PENDING') {
+                    actionsContainer.innerHTML = `
+                        <button type="button" onclick="openRejectExpenseModal(${exp.id})" class="px-3 py-1.5 rounded-md text-xs font-medium border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer">
+                            Reject Request
+                        </button>
+                        <button type="button" onclick="confirmApproveExpense(${exp.id})" class="px-4 py-1.5 rounded-md text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition shadow-xs cursor-pointer flex items-center gap-1.5">
+                            <span>✓</span> Authorize & Approve ($${Number(exp.amount || 0).toFixed(2)})
+                        </button>
+                    `;
+                } else {
+                    actionsContainer.innerHTML = '';
+                }
+            }
+
+            const modal = document.getElementById('driverApprovalDetailModal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                syncBodyScrollLock();
+            }
+        }
+
+        function closeDriverApprovalModal() {
+            const modal = document.getElementById('driverApprovalDetailModal');
+            if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
+        }
+
+        function openRejectExpenseModal(expId) {
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.driver_approvals) return;
+            const exp = cachedData.fleet.driver_approvals.find(e => Number(e.id) === Number(expId));
+            if (!exp) return;
+
+            const idInput = document.getElementById('reject-modal-exp-id');
+            if (idInput) idInput.value = exp.id;
+
+            const summaryEl = document.getElementById('reject-modal-summary');
+            if (summaryEl) {
+                summaryEl.innerHTML = `Rejecting <strong>${escapeJsAttr(exp.charge_label || exp.charge_type)}</strong> request of <strong>$${Number(exp.amount || 0).toFixed(2)}</strong> for Trip <strong>${escapeJsAttr(exp.trip_id)}</strong> (Driver: ${escapeJsAttr(exp.driver_name)}).`;
+            }
+
+            const noteInput = document.getElementById('reject-modal-note');
+            if (noteInput) {
+                noteInput.value = '';
+            }
+
+            const modal = document.getElementById('rejectExpenseModal');
+            if (modal) {
+                modal.classList.remove('hidden');
+                syncBodyScrollLock();
+                setTimeout(() => { if (noteInput) noteInput.focus(); }, 100);
+            }
+        }
+
+        function closeRejectExpenseModal() {
+            const modal = document.getElementById('rejectExpenseModal');
+            if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
+        }
+
+        async function submitRejectExpense() {
+            const expId = document.getElementById('reject-modal-exp-id')?.value;
+            const note = (document.getElementById('reject-modal-note')?.value || '').trim();
+            if (!expId) return;
+            if (!note) {
+                alert('Please provide a reason / note for the rejection.');
+                return;
+            }
+            closeRejectExpenseModal();
+            await decideFleetApproval(expId, 'REJECT', note);
+        }
+
+        async function confirmApproveExpense(expId) {
+            if (!cachedData || !cachedData.fleet || !cachedData.fleet.driver_approvals) return;
+            const exp = cachedData.fleet.driver_approvals.find(e => Number(e.id) === Number(expId));
+            if (!exp) return;
+
+            const approverName = window.currentUserName || 'Master Admin';
+            const confirmed = confirm(
+                `Authorize ${exp.charge_label || exp.charge_type} of $${Number(exp.amount || 0).toFixed(2)} for Trip ${exp.trip_id}?\n\n` +
+                `• Driver: ${exp.driver_name} (+${exp.driver_phone})\n` +
+                `• Approver: ${approverName}\n\n` +
+                `Notifications will be sent immediately to the Driver, Accounts & Finance, and Sales Admin.`
+            );
+            if (!confirmed) return;
+
+            await decideFleetApproval(exp.id, 'APPROVE');
+        }
+
+        async function decideFleetApproval(expId, action, rejectionNote = '') {
+            showLoadingPopup(
+                action === 'APPROVE' ? 'Authorizing Expenditure...' : 'Recording Rejection...',
+                'Updating approvals ledger and notifying dispatch & accounts via WhatsApp...'
+            );
+
+            try {
+                const resp = await fetch('/api/v2/fleet/approvals/decide', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        expense_id: Number(expId),
+                        action: action,
+                        rejection_note: rejectionNote
+                    })
+                });
+
+                const data = await resp.json();
+                hideLoadingPopup();
+
+                if (!resp.ok) {
+                    alert(`Approval Action Error: ${data.detail || data.message || 'Operation failed.'}`);
+                    return;
+                }
+
+                closeDriverApprovalModal();
+                closeRejectExpenseModal();
+
+                if (typeof fetchDashboard === 'function') {
+                    await fetchDashboard();
+                }
+            } catch (err) {
+                hideLoadingPopup();
+                console.error('Failed to decide fleet approval:', err);
+                alert(`Network Error: ${err.message}`);
+            }
+        }
+
+        async function decideTripShortfall(tripId, action = 'APPROVE') {
+            const approverName = window.currentUserName || 'Master Admin';
+            const confirmed = confirm(`Authorize commercial route shortfall exception for Trip ${tripId}?\nApprover: ${approverName}`);
+            if (!confirmed) return;
+
+            showLoadingPopup('Authorizing Trip Shortfall...', 'Updating trip approval status...');
+            try {
+                const resp = await fetch('/api/v2/fleet/trip-approvals/decide', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        trip_id: tripId,
+                        action: action
+                    })
+                });
+
+                const data = await resp.json();
+                hideLoadingPopup();
+
+                if (!resp.ok) {
+                    alert(`Shortfall Action Error: ${data.detail || 'Operation failed.'}`);
+                    return;
+                }
+
+                if (typeof fetchDashboard === 'function') {
+                    await fetchDashboard();
+                }
+            } catch (err) {
+                hideLoadingPopup();
+                console.error('Failed to authorize trip shortfall:', err);
+                alert(`Network Error: ${err.message}`);
+            }
         }
 
         // =============================================================

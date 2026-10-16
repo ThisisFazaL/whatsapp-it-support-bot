@@ -627,6 +627,163 @@ async def api_update_operational_params(request: Request, db: AsyncSession = Dep
 
 
 # -------------------------------------------------------------
+# Master Admin Fleet Approvals API (Driver Expenses & Trip Shortfalls)
+# -------------------------------------------------------------
+@router.post("/api/v2/fleet/approvals/decide")
+async def api_decide_fleet_approval(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Enables Master Admin to approve or reject Driver Emergency Expenses & Extra Allowances
+    directly from the Sales to Fleet web dashboard.
+    Records the approver's full name, triggers notifications to Driver, Accounts, and Sales Admin,
+    updates pending recovery balances for extra allowances, and logs the decision into AuditLog.
+    """
+    user = get_current_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    if user.get("role") != "MASTER_ADMIN" and not user_has_permission(user, "approve_trips"):
+        raise HTTPException(status_code=403, detail="Access denied. Only Master Admin or authorized managers can approve expenses.")
+
+    body = await request.json()
+    exp_id = body.get("expense_id")
+    action = str(body.get("action", "")).upper()
+    rejection_note = body.get("rejection_note", "")
+
+    if not exp_id:
+        raise HTTPException(status_code=400, detail="Missing expense_id.")
+
+    if action not in ("APPROVE", "REJECT"):
+        raise HTTPException(status_code=400, detail="Invalid action. Must be APPROVE or REJECT.")
+
+    approver_name = user.get("name") or user.get("username", "Master Admin")
+
+    from app.handlers.driver_handler import execute_expense_approval_by_name, execute_expense_rejection_by_name
+
+    if action == "APPROVE":
+        res = await execute_expense_approval_by_name(
+            session=db,
+            exp_id=int(exp_id),
+            approver_name=approver_name
+        )
+    else:
+        note_clean = rejection_note.strip() if rejection_note else "Declined by management via web dashboard."
+        res = await execute_expense_rejection_by_name(
+            session=db,
+            exp_id=int(exp_id),
+            approver_name=approver_name,
+            note=note_clean
+        )
+
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Action failed."))
+
+    # Log to AuditLog with explicit approver attribution
+    audit = AuditLog(
+        username=approver_name,
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action=f"{action}_DRIVER_EXPENSE",
+        module="FLEET",
+        permission_used="approve_trips",
+        entity_id=f"EXP-{exp_id}",
+        new_value={
+            "expense_id": exp_id,
+            "action": action,
+            "approved_by": approver_name,
+            "trip_id": res.get("trip_id"),
+            "amount": res.get("amount")
+        },
+        remarks=f"{approver_name} {action.lower()}ed expense #{exp_id} ({res.get('charge_type', 'Expense')}) for trip {res.get('trip_id')}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Expense #{exp_id} successfully {action.lower()}ed.",
+        "approved_by": approver_name,
+        "expense_id": exp_id,
+        "decision": action
+    }
+
+
+@router.post("/api/v2/fleet/trip-approvals/decide")
+async def api_decide_trip_shortfall_approval(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Enables Master Admin to approve a trip shortfall / route override from the dashboard.
+    Records the approver's full name, updates status to APPROVED, and logs into AuditLog.
+    """
+    user = get_current_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    if user.get("role") != "MASTER_ADMIN" and not user_has_permission(user, "approve_trips"):
+        raise HTTPException(status_code=403, detail="Access denied. Only Master Admin can approve trip shortfalls.")
+
+    body = await request.json()
+    approval_id = body.get("approval_id")
+    trip_id = body.get("trip_id")
+    action = str(body.get("action", "APPROVE")).upper()
+
+    if not approval_id and not trip_id:
+        raise HTTPException(status_code=400, detail="Missing approval_id or trip_id.")
+
+    approver_name = user.get("name") or user.get("username", "Master Admin")
+
+    stmt = select(FleetTripApproval)
+    if approval_id:
+        stmt = stmt.where(FleetTripApproval.id == int(approval_id))
+    else:
+        stmt = stmt.where(FleetTripApproval.trip_id == str(trip_id)).order_by(FleetTripApproval.id.desc())
+
+    res = await db.execute(stmt)
+    fa = res.scalars().first()
+    if not fa:
+        raise HTTPException(status_code=404, detail="Trip approval record not found.")
+
+    target_status = "APPROVED" if action == "APPROVE" else "REJECTED"
+    fa.status = target_status
+    raw = fa.raw_data if isinstance(fa.raw_data, dict) else {}
+    raw["approved_by"] = approver_name
+    raw["decided_at"] = datetime.datetime.utcnow().isoformat()
+    fa.raw_data = raw
+
+    # Also update FleetTripRequest if found
+    tr_stmt = select(FleetTripRequest).where(FleetTripRequest.trip_id == fa.trip_id)
+    tr = (await db.execute(tr_stmt)).scalars().first()
+    if tr:
+        if action == "APPROVE" and tr.status in ("QUOTED", "CREATED", "SHORTFALL_RECORDED"):
+            tr.status = "APPROVED"
+
+    audit = AuditLog(
+        username=approver_name,
+        user_role=user.get("role", "MASTER_ADMIN"),
+        action=f"{action}_TRIP_SHORTFALL",
+        module="FLEET",
+        permission_used="approve_trips",
+        entity_id=fa.trip_id,
+        new_value={
+            "trip_id": fa.trip_id,
+            "status": target_status,
+            "approved_by": approver_name
+        },
+        remarks=f"{approver_name} {action.lower()}ed trip shortfall for {fa.trip_id}",
+        ip_address=get_client_ip(request),
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {
+        "status": "success",
+        "trip_id": fa.trip_id,
+        "status_updated": target_status,
+        "approved_by": approver_name
+    }
+
+
+# -------------------------------------------------------------
 # User Management & RBAC Administration (MASTER_ADMIN only)
 # -------------------------------------------------------------
 @router.get("/api/v2/admin/users")
@@ -2045,6 +2202,9 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
 
             rep_info = OFFICIAL_SALES_REPS_DIRECTORY.get(fa.salesperson_phone or "")
             co_name = getattr(fa, "company_name", None) or (rep_info.get("company") if rep_info else "Tagoneswa Hardware")
+            fa_raw = fa.raw_data if isinstance(fa.raw_data, dict) else {}
+            appr_by = fa_raw.get("approved_by", "")
+
             approval_records.append({
                 "id": fa.id,
                 "trip_id": fa.trip_id,
@@ -2064,6 +2224,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "dispatch_option": getattr(fa, "dispatch_option", "STANDARD"),
                 "has_shortfall": bool(fa.has_shortfall),
                 "status": fa.status,
+                "approved_by": appr_by,
                 "audit_flags": audit_flags,
                 "is_clean": len(audit_flags) == 0,
                 "created_at": fa.created_at.strftime("%Y-%m-%d %H:%M") if fa.created_at else "",
@@ -2286,8 +2447,76 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 "total_recovered": fleet_stats["total_recovered"]
             }
 
+        # 5.5 Driver Expense & Extra Allowance Approvals
+        emerg_stmt = select(FleetEmergencyExpense).order_by(FleetEmergencyExpense.id.desc())
+        emerg_entries = (await db.execute(emerg_stmt)).scalars().all()
+
+        trips_lookup_map = {tr.trip_id: tr for tr in raw_trips}
+        approvals_lookup_map = {fa.trip_id: fa for fa in fleet_approvals}
+
+        driver_approvals_list = []
+        pending_driver_approvals_count = 0
+        for e in emerg_entries:
+            tr = trips_lookup_map.get(e.trip_id)
+            fa = approvals_lookup_map.get(e.trip_id)
+
+            co_name = getattr(tr, "company_name", None) or getattr(fa, "company_name", None)
+            if not co_name and tr and tr.salesperson_phone:
+                co_name = OFFICIAL_SALES_REPS_DIRECTORY.get(tr.salesperson_phone, {}).get("company")
+            if not co_name and fa and fa.salesperson_phone:
+                co_name = OFFICIAL_SALES_REPS_DIRECTORY.get(fa.salesperson_phone, {}).get("company")
+            if not co_name:
+                co_name = "Tagoneswa Hardware"
+
+            drv_name = getattr(tr, "driver_name", None) or "Assigned Driver"
+            sp_name = getattr(tr, "salesperson_name", None) or getattr(fa, "salesperson_name", None) or "Sales Rep"
+            sp_phone = getattr(tr, "salesperson_phone", None) or getattr(fa, "salesperson_phone", None) or ""
+            dest_city = getattr(tr, "destination_city", None) or getattr(fa, "destination_city", None) or "--"
+            route_str = getattr(tr, "route", None) or getattr(fa, "route", None) or dest_city
+
+            is_extra = (e.charge_type == "EXTRA_ALLOWANCE")
+            charge_label = "Extra Allowance" if is_extra else ("Emergency Fuel" if e.charge_type == "EMERGENCY_FUEL" else (e.charge_type or "Emergency Expense"))
+
+            e_status = (e.status or "PENDING").upper()
+            if e_status == "PENDING":
+                pending_driver_approvals_count += 1
+
+            driver_approvals_list.append({
+                "id": e.id,
+                "trip_id": e.trip_id,
+                "company_name": co_name,
+                "company": co_name,
+                "driver_phone": e.driver_phone,
+                "driver_name": drv_name,
+                "salesperson_name": sp_name,
+                "salesperson_phone": sp_phone,
+                "destination_city": dest_city,
+                "route": route_str,
+                "charge_type": e.charge_type,
+                "charge_label": charge_label,
+                "amount": round(e.amount or 0.0, 2),
+                "description": e.description or "",
+                "receipt_image_id": e.receipt_image_id,
+                "status": e_status,
+                "approved_by": e.approved_by or "",
+                "rejection_note": getattr(e, "rejection_note", "") or "",
+                "created_at": e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "",
+                "date_only": e.created_at.strftime("%Y-%m-%d") if e.created_at else ""
+            })
+
         # 6. Prioritized Operational Exceptions & Alerts
         operations_alerts = []
+        if pending_driver_approvals_count > 0:
+            operations_alerts.append({
+                "id": "alert-pending-driver-approvals",
+                "severity": "urgent",
+                "category": "APPROVALS",
+                "title": f"{pending_driver_approvals_count} Driver Request(s) Awaiting Management Sign-off",
+                "description": f"{pending_driver_approvals_count} emergency expense or extra allowance request(s) awaiting Master Admin authorization.",
+                "action_label": "Review Approvals",
+                "target_subview": "approvals",
+                "can_action": (user.get("role") == "MASTER_ADMIN" or can_approve_trips) and not is_observer
+            })
         if total_pending_approvals > 0:
             operations_alerts.append({
                 "id": "alert-pending-approvals",
@@ -2435,8 +2664,6 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
         tot_accom = sum(tr.accommodation_allowance or 0.0 for tr in raw_trips)
         tot_tolls = sum(tr.toll_cost or 0.0 for tr in raw_trips)
 
-        emerg_stmt = select(FleetEmergencyExpense).order_by(FleetEmergencyExpense.created_at.desc())
-        emerg_entries = (await db.execute(emerg_stmt)).scalars().all()
         tot_emerg_fuel = sum(e.amount or 0.0 for e in emerg_entries if (e.charge_type or "").upper() == "EMERGENCY_FUEL")
         tot_emerg_other = sum(e.amount or 0.0 for e in emerg_entries if (e.charge_type or "").upper() != "EMERGENCY_FUEL")
         tot_opex = tot_allow + tot_emerg_fuel + tot_emerg_other
@@ -2671,6 +2898,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                 {**t, "trip_sales_value": 0.0}
                 for t in trips_list
             ],
+            "driver_approvals": driver_approvals_list,
             "payments": payments_list if can_view_balances else [],
             "ledger": ledger_records if can_view_balances else [],
             "audit_logs": audit_records,
@@ -2689,6 +2917,8 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
                     "active_ongoing_trips": active_trips_count,
                     "in_transit_trips": in_transit_trips,
                     "pending_trip_approvals": total_pending_approvals,
+                    "pending_driver_approvals": pending_driver_approvals_count,
+                    "total_pending_all": total_pending_approvals + pending_driver_approvals_count,
                     "pending_approvals_shortfall": pending_approvals_count,
                     "pending_quotes_count": quoted_trips_count,
                     "trucks_total": trucks_total,
@@ -4178,6 +4408,72 @@ async def dashboard_view(request: Request):
                     {approvals_card5_stat}
                 </div>
 
+                <!-- Card 1: Driver Expenses & Extra Allowance Approvals -->
+                <div class="rounded-xl border border-zinc-200 bg-white shadow-xs dark:border-zinc-800 dark:bg-zinc-950 overflow-hidden mb-4">
+                    <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-zinc-50/50 dark:bg-zinc-900/30">
+                        <div class="flex items-center gap-2.5">
+                            <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-xs border border-amber-500/20">
+                                ⚡
+                            </span>
+                            <div>
+                                <h3 class="text-sm font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                                    Driver Expenses & Extra Allowance Requests
+                                    <span id="driver-appr-count-badge" class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30">
+                                        0 Requests
+                                    </span>
+                                </h3>
+                                <p class="text-[11px] text-zinc-500 dark:text-zinc-400">Master Admin authorization for emergency fuel, repairs, and trip extra allowances</p>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2">
+                            <input type="text" id="driver-appr-search" placeholder="Search Trip, Driver, Reason..." oninput="filterDriverApprovalsTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-950 w-full sm:w-48 transition">
+
+                            <select id="driver-appr-type-filter" onchange="filterDriverApprovalsTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-950">
+                                <option value="ALL">All Charge Types</option>
+                                <option value="EXTRA_ALLOWANCE">Extra Allowance</option>
+                                <option value="EMERGENCY_FUEL">Emergency Fuel</option>
+                                <option value="OTHER">Other Emergency</option>
+                            </select>
+
+                            <select id="driver-appr-status-filter" onchange="filterDriverApprovalsTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-950">
+                                <option value="ALL">All Statuses</option>
+                                <option value="PENDING" selected>Pending Review</option>
+                                <option value="APPROVED">Approved</option>
+                                <option value="REJECTED">Rejected</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Responsive Mobile Card List -->
+                    <div id="driver-approvals-mobile-list" class="block md:hidden divide-y divide-zinc-200 dark:divide-zinc-800"></div>
+
+                    <!-- Desktop Table -->
+                    <div class="hidden md:block overflow-x-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-zinc-50/75 dark:bg-zinc-900/50 text-zinc-500 dark:text-zinc-400 font-medium uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
+                                <tr>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">ID / Trip</th>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">Approval Needed</th>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">Driver</th>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">Requested Amount</th>
+                                    <th class="px-3.5 py-2.5">Details & Itemized Breakdown</th>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">Status</th>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">Approver</th>
+                                    <th class="px-3.5 py-2.5 whitespace-nowrap">Date</th>
+                                    <th class="px-3.5 py-2.5 text-right whitespace-nowrap">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="driver-approvals-tbody" class="divide-y divide-zinc-200 dark:divide-zinc-800 text-zinc-800 dark:text-zinc-200"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="p-3 border-t border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row items-center justify-between gap-3 bg-zinc-50/50 dark:bg-zinc-900/30">
+                        <div class="text-xs text-zinc-500 dark:text-zinc-400 font-medium" id="driver-appr-pagination-info">Showing 0 entries</div>
+                        <div class="flex items-center gap-1.5" id="driver-appr-pagination-controls"></div>
+                    </div>
+                </div>
+
                 <!-- Approvals Table Card -->
                 <div class="rounded-xl border border-zinc-200 bg-white shadow-xs dark:border-zinc-800 dark:bg-zinc-950 overflow-hidden">
                     <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-zinc-50/50 dark:bg-zinc-900/30">
@@ -4217,7 +4513,9 @@ async def dashboard_view(request: Request):
                                     {approvals_cols_head}
                                     <th class="px-4 py-3 whitespace-nowrap">Audit Check</th>
                                     <th class="px-4 py-3 whitespace-nowrap">Status</th>
+                                    <th class="px-4 py-3 whitespace-nowrap">Approver</th>
                                     <th class="px-4 py-3 whitespace-nowrap">Date</th>
+                                    <th class="px-4 py-3 text-right whitespace-nowrap">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="fleet-approvals-table-body" class="divide-y divide-zinc-200 dark:divide-zinc-800 text-zinc-800 dark:text-zinc-200"></tbody>
@@ -4724,6 +5022,145 @@ async def dashboard_view(request: Request):
                 <button type="button" onclick="submitCreateUser()" id="modal-submit-create-user-btn" class="px-4 py-1.5 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-zinc-50 dark:text-zinc-900 transition shadow-xs cursor-pointer">
                     Create User
                 </button>
+    <!-- Modal 9: Driver Expense & Allowance Approval Details Modal -->
+    <div id="driverApprovalDetailModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0 bg-zinc-50/50 dark:bg-zinc-900/30">
+                <div class="flex items-center gap-2.5">
+                    <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-sm border border-amber-500/20">
+                        ⚡
+                    </span>
+                    <div>
+                        <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                            <span>Driver Expense Authorization</span>
+                            <span id="modal-appr-type-badge" class="px-2 py-0.5 rounded text-[10px] font-bold"></span>
+                        </h3>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400" id="modal-appr-subtitle">Review request details and authorize disbursement</p>
+                    </div>
+                </div>
+                <button onclick="closeDriverApprovalModal()" class="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer">✕</button>
+            </div>
+
+            <div class="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1 overscroll-contain text-xs">
+                <!-- Status & Approver Banner -->
+                <div id="modal-appr-status-banner" class="p-3 rounded-lg border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <span id="modal-appr-status-pill" class="px-2.5 py-1 rounded-md text-xs font-bold border"></span>
+                        <span id="modal-appr-status-text" class="text-xs font-medium text-zinc-700 dark:text-zinc-300"></span>
+                    </div>
+                    <div id="modal-appr-approver-info" class="text-xs font-semibold text-zinc-800 dark:text-zinc-200"></div>
+                </div>
+
+                <!-- 2-Column Specs Grid -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <!-- Left Spec Card -->
+                    <div class="p-3.5 rounded-lg border border-zinc-200 bg-zinc-50/60 dark:border-zinc-800 dark:bg-zinc-900/40 space-y-2">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Trip & Commercial Entity</div>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-zinc-500">Trip Reference:</span>
+                                <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100" id="modal-appr-trip-id">—</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-zinc-500">Company:</span>
+                                <span class="font-semibold text-zinc-800 dark:text-zinc-200" id="modal-appr-company">—</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-zinc-500">Destination & Route:</span>
+                                <span class="font-medium text-zinc-800 dark:text-zinc-200 text-right" id="modal-appr-route">—</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Spec Card -->
+                    <div class="p-3.5 rounded-lg border border-zinc-200 bg-zinc-50/60 dark:border-zinc-800 dark:bg-zinc-900/40 space-y-2">
+                        <div class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Personnel & Financials</div>
+                        <div class="space-y-1.5">
+                            <div class="flex items-center justify-between">
+                                <span class="text-zinc-500">Commercial Driver:</span>
+                                <span class="font-semibold text-zinc-900 dark:text-zinc-100" id="modal-appr-driver">—</span>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-zinc-500">Salesperson:</span>
+                                <span class="font-medium text-zinc-800 dark:text-zinc-200" id="modal-appr-salesperson">—</span>
+                            </div>
+                            <div class="flex items-center justify-between pt-1 border-t border-zinc-200/60 dark:border-zinc-800/60">
+                                <span class="font-bold text-zinc-700 dark:text-zinc-300">Requested Amount:</span>
+                                <span class="font-mono font-bold text-base text-amber-600 dark:text-amber-400" id="modal-appr-amount">$0.00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed Breakdown Card -->
+                <div class="p-3.5 rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900/60 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Itemized Breakdown & Reason</span>
+                        <span class="text-[10px] text-zinc-400 font-mono" id="modal-appr-date"></span>
+                    </div>
+                    <div class="p-3 rounded bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-100 dark:border-zinc-800/80 font-mono text-xs text-zinc-800 dark:text-zinc-200 leading-relaxed whitespace-pre-wrap" id="modal-appr-description">
+                        —
+                    </div>
+                </div>
+
+                <!-- Receipt & Evidence Info Card -->
+                <div class="p-3.5 rounded-lg border border-zinc-200 bg-zinc-50/40 dark:border-zinc-800 dark:bg-zinc-900/30 flex items-start gap-2.5">
+                    <span class="text-base shrink-0">🧾</span>
+                    <div>
+                        <div class="font-semibold text-zinc-800 dark:text-zinc-200">Receipt Verification Policy</div>
+                        <p class="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5" id="modal-appr-receipt-info">
+                            Driver must surrender the original physical vendor fuel / accommodation receipt to Dispatch & Accounts upon vehicle return.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Rejection Note Alert (if rejected) -->
+                <div id="modal-appr-rejection-block" class="hidden p-3.5 rounded-lg border border-rose-200 bg-rose-50/50 dark:border-rose-900/50 dark:bg-rose-950/30 space-y-1">
+                    <div class="font-bold text-rose-800 dark:text-rose-300 flex items-center gap-1.5">
+                        <span>⚠️</span> Rejection Reason
+                    </div>
+                    <div class="text-xs text-rose-700 dark:text-rose-300" id="modal-appr-rejection-note"></div>
+                </div>
+            </div>
+
+            <div class="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2 shrink-0 bg-zinc-50/50 dark:bg-zinc-900/30">
+                <button type="button" onclick="closeDriverApprovalModal()" class="px-3.5 py-1.5 rounded-md text-xs font-medium border border-zinc-200 bg-white hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    Close
+                </button>
+                <div class="flex items-center gap-2" id="modal-appr-actions-container">
+                    <!-- Populated dynamically: Approve / Reject buttons for Master Admin -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal 10: Reject Expense Note Modal -->
+    <div id="rejectExpenseModal" class="modal-overlay fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden">
+            <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
+                <div>
+                    <h3 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Reject Request</h3>
+                    <p class="text-xs text-zinc-500 dark:text-zinc-400">Specify reason to notify Driver & Sales Admin</p>
+                </div>
+                <button onclick="closeRejectExpenseModal()" class="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition cursor-pointer">✕</button>
+            </div>
+            <div class="p-4 sm:p-5 space-y-3 text-xs">
+                <input type="hidden" id="reject-modal-exp-id">
+                <div class="p-3 rounded-md bg-rose-50/50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300">
+                    <span id="reject-modal-summary" class="font-medium">Rejecting driver request...</span>
+                </div>
+                <div>
+                    <label class="block font-medium text-zinc-700 dark:text-zinc-300 mb-1">Rejection Reason / Note *</label>
+                    <textarea id="reject-modal-note" rows="3" placeholder="e.g. Rate exceeds corridor policy / unauthorized deviation / provide receipt" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md p-2.5 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-zinc-950"></textarea>
+                </div>
+            </div>
+            <div class="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-end gap-2 shrink-0">
+                <button type="button" onclick="closeRejectExpenseModal()" class="px-3.5 py-1.5 rounded-md text-xs font-medium border border-zinc-200 bg-white hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitRejectExpense()" class="px-4 py-1.5 rounded-md text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white transition shadow-xs cursor-pointer font-bold">
+                    Confirm Rejection
+                </button>
             </div>
         </div>
     </div>
@@ -4750,7 +5187,7 @@ async def dashboard_view(request: Request):
         window.currentUserCompany = '{user.get("company", "")}';
         window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.7.0"></script>
+    <script src="/static/js/dashboard.js?v=2.8.0"></script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)

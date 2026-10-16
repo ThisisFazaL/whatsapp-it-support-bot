@@ -305,6 +305,7 @@ class FleetEmergencyExpense(Base):
     receipt_image_id = Column(String(255), nullable=True)
     status = Column(String(50), default="PENDING")  # PENDING, APPROVED, REJECTED
     approved_by = Column(String(100), nullable=True)
+    rejection_note = Column(Text, nullable=True)
     verified_in_balancing = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -534,6 +535,10 @@ async def init_db_models():
                 except Exception:
                     pass
                 try:
+                    await conn.execute(text("ALTER TABLE fleet_emergency_expenses ADD COLUMN rejection_note TEXT"))
+                except Exception:
+                    pass
+                try:
                     await conn.execute(text("ALTER TABLE tickets ADD COLUMN estimated_completion_time VARCHAR(100)"))
                 except Exception:
                     pass
@@ -739,6 +744,9 @@ async def init_db_models():
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fee_trip_id ON fleet_emergency_expenses(trip_id)"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_fee_driver_phone ON fleet_emergency_expenses(driver_phone)"))
                 await conn.execute(text("ALTER TABLE fleet_emergency_expenses ADD COLUMN IF NOT EXISTS receipt_image_id VARCHAR(255)"))
+                await conn.execute(text("ALTER TABLE fleet_emergency_expenses ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'PENDING'"))
+                await conn.execute(text("ALTER TABLE fleet_emergency_expenses ADD COLUMN IF NOT EXISTS approved_by VARCHAR(100)"))
+                await conn.execute(text("ALTER TABLE fleet_emergency_expenses ADD COLUMN IF NOT EXISTS rejection_note TEXT"))
 
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS driver_pending_ledger (
@@ -1541,13 +1549,16 @@ async def set_emergency_expense_status(
     session: AsyncSession,
     exp_id: int,
     status: str,
-    approved_by: str
+    approved_by: str,
+    rejection_note: Optional[str] = None
 ) -> Optional[FleetEmergencyExpense]:
     """Updates approval status for an emergency expense."""
     exp = await get_emergency_expense_by_id(session, exp_id)
     if exp:
         exp.status = status
         exp.approved_by = approved_by
+        if rejection_note is not None:
+            exp.rejection_note = rejection_note
         await session.commit()
         await session.refresh(exp)
     return exp
