@@ -25,7 +25,8 @@ from app.auth import (
     ALL_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS, set_user_custom_permission,
     USER_CUSTOM_PERMISSIONS_CACHE, generate_session_id, set_user_session,
     invalidate_user_session, revoke_user_account, restore_user_account,
-    register_user_in_memory, is_user_active, ACTIVE_USER_SESSIONS, REVOKED_USERS
+    register_user_in_memory, is_user_active, ACTIVE_USER_SESSIONS, REVOKED_USERS,
+    get_user_allowed_domains, ROLE_DEFAULT_DOMAINS
 )
 from app.services.config_service import (
     get_fuel_price, get_meal_rate, get_accommodation_rate, get_expense_budget_pct, get_van_minimum_surcharge,
@@ -1231,6 +1232,16 @@ async def api_save_user(request: Request, db: AsyncSession = Depends(get_db)):
         USERS_DB[username]["is_active"] = is_active
         if full_name:
             USERS_DB[username]["name"] = full_name
+        USERS_DB[username]["allowed_domains"] = get_user_allowed_domains(USERS_DB[username])
+    else:
+        register_user_in_memory(username, {
+            "password_hash": w_user.password_hash,
+            "role": role,
+            "name": full_name or username.title(),
+            "company": w_user.company,
+            "phone": w_user.phone,
+            "is_active": is_active
+        })
 
     if not is_active:
         invalidate_user_session(username)
@@ -1804,7 +1815,7 @@ async def get_dashboard_data(request: Request, db: AsyncSession = Depends(get_db
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized session. Please log in.")
 
-    allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet"])
+    allowed = user.get("allowed_domains") or get_user_allowed_domains(user)
     
     it_payload = None
     projects_payload = None
@@ -3109,7 +3120,7 @@ async def dashboard_view(request: Request):
     if not user:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
-    allowed = user.get("allowed_domains", ["it", "projects", "logistics", "fleet", "accounts", "admin"])
+    allowed = user.get("allowed_domains") or get_user_allowed_domains(user)
     default_tab = "fleet" if user["role"] in ("MASTER_ADMIN", "EXECUTIVE_OBSERVER", "FLEET_ADMIN", "SALES_ADMIN", "ACCOUNTS_USER", "LOGISTICS_MANAGER") else ("logistics" if user["role"] == "LOGISTICS_ADMIN" else ("projects" if user["role"] == "PROJECTS_ADMIN" else "it"))
 
     # Generate navigation tab buttons based on allowed domains

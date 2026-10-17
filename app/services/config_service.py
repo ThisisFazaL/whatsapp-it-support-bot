@@ -198,7 +198,8 @@ async def load_settings_into_cache(session: AsyncSession):
         try:
             from app.auth import (
                 load_all_user_custom_permissions, sync_db_roles_to_users_db,
-                load_revocation_and_sessions, register_user_in_memory, USERS_DB
+                load_revocation_and_sessions, register_user_in_memory, USERS_DB,
+                get_user_allowed_domains
             )
 
             # 1. Fetch all revoked/blacklisted usernames

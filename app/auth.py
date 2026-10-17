@@ -255,30 +255,23 @@ ROLE_DEFAULT_PERMISSIONS: Dict[str, Set[str]] = {
     }
 }
 
+# Default workspaces/domains mapped by Role
+ROLE_DEFAULT_DOMAINS: Dict[str, List[str]] = {
+    "MASTER_ADMIN": ["it", "projects", "logistics", "fleet", "accounts", "admin"],
+    "EXECUTIVE_OBSERVER": ["it", "projects", "logistics", "fleet"],
+    "IT_ADMIN": ["it"],
+    "PROJECTS_ADMIN": ["projects"],
+    "LOGISTICS_ADMIN": ["logistics", "fleet"],
+    "LOGISTICS_MANAGER": ["logistics", "fleet"],
+    "FLEET_ADMIN": ["fleet", "logistics"],
+    "SALES_ADMIN": ["fleet"],
+    "ACCOUNTS_USER": ["accounts", "fleet"],
+    "LOGISTICS_USER": ["fleet", "logistics"],
+}
+
 # In-memory synchronized user custom permission overrides: {username: {permission_key: is_granted}}
 # Populated dynamically from user_custom_permissions database records at startup.
 USER_CUSTOM_PERMISSIONS_CACHE: Dict[str, Dict[str, bool]] = {}
-
-def sync_db_roles_to_users_db(user_roles: Dict[str, str]):
-    """Synchronizes active WebUser database roles into runtime USERS_DB."""
-    for username, role in user_roles.items():
-        u = username.strip().lower()
-        if u in USERS_DB and role:
-            USERS_DB[u]["role"] = role
-
-def set_user_custom_permission(username: str, permission_key: str, is_granted: bool):
-    """Updates user custom permission in the memory cache."""
-    u = username.strip().lower()
-    if u not in USER_CUSTOM_PERMISSIONS_CACHE:
-        USER_CUSTOM_PERMISSIONS_CACHE[u] = {}
-    USER_CUSTOM_PERMISSIONS_CACHE[u][permission_key] = is_granted
-
-def load_all_user_custom_permissions(perms_map: Dict[str, Dict[str, bool]]):
-    """Bulk loads user custom permissions into the memory cache."""
-    global USER_CUSTOM_PERMISSIONS_CACHE
-    USER_CUSTOM_PERMISSIONS_CACHE.clear()
-    for u, perms in perms_map.items():
-        USER_CUSTOM_PERMISSIONS_CACHE[u.strip().lower()] = dict(perms)
 
 def user_has_permission(user: Optional[Dict], permission_key: str) -> bool:
     """
@@ -338,6 +331,67 @@ def require_permission(user: Optional[Dict], permission_key: str):
             status_code=403,
             detail=f"Permission denied: '{permission_key}' required. Role '{role}' is not authorized."
         )
+
+def get_user_allowed_domains(user: Optional[Dict[str, Any]]) -> List[str]:
+    """
+    Computes effective allowed domains for a user dynamically:
+    1. MASTER_ADMIN always has all domains.
+    2. Starts with base domains for their role from ROLE_DEFAULT_DOMAINS.
+    3. Factors in workspace view permissions (both role defaults and custom user overrides):
+       - view_fleet_workspace -> 'fleet'
+       - view_workshop_workspace -> 'logistics'
+       - view_it_workspace -> 'it'
+       - view_projects_workspace -> 'projects'
+    """
+    if not user:
+        return []
+    role = user.get("role", "")
+    if role == "MASTER_ADMIN":
+        return list(ROLE_DEFAULT_DOMAINS.get("MASTER_ADMIN", ["it", "projects", "logistics", "fleet", "accounts", "admin"]))
+
+    base_domains = list(ROLE_DEFAULT_DOMAINS.get(role, ["fleet"]))
+
+    domain_perm_map = {
+        "fleet": "view_fleet_workspace",
+        "logistics": "view_workshop_workspace",
+        "it": "view_it_workspace",
+        "projects": "view_projects_workspace",
+    }
+
+    for domain, perm in domain_perm_map.items():
+        has_perm = user_has_permission(user, perm)
+        if has_perm and domain not in base_domains:
+            base_domains.append(domain)
+        elif not has_perm and domain in base_domains:
+            base_domains.remove(domain)
+
+    return base_domains
+
+def sync_db_roles_to_users_db(user_roles: Dict[str, str]):
+    """Synchronizes active WebUser database roles into runtime USERS_DB and re-evaluates allowed_domains."""
+    for username, role in user_roles.items():
+        u = username.strip().lower()
+        if u in USERS_DB and role:
+            USERS_DB[u]["role"] = role
+            USERS_DB[u]["allowed_domains"] = get_user_allowed_domains(USERS_DB[u])
+
+def set_user_custom_permission(username: str, permission_key: str, is_granted: bool):
+    """Updates user custom permission in the memory cache and synchronizes allowed_domains."""
+    u = username.strip().lower()
+    if u not in USER_CUSTOM_PERMISSIONS_CACHE:
+        USER_CUSTOM_PERMISSIONS_CACHE[u] = {}
+    USER_CUSTOM_PERMISSIONS_CACHE[u][permission_key] = is_granted
+    if u in USERS_DB:
+        USERS_DB[u]["allowed_domains"] = get_user_allowed_domains(USERS_DB[u])
+
+def load_all_user_custom_permissions(perms_map: Dict[str, Dict[str, bool]]):
+    """Bulk loads user custom permissions into the memory cache and refreshes allowed_domains."""
+    global USER_CUSTOM_PERMISSIONS_CACHE
+    USER_CUSTOM_PERMISSIONS_CACHE.clear()
+    for u, perms in perms_map.items():
+        USER_CUSTOM_PERMISSIONS_CACHE[u.strip().lower()] = dict(perms)
+    for u in USERS_DB:
+        USERS_DB[u]["allowed_domains"] = get_user_allowed_domains(USERS_DB[u])
 
 # =========================================================================
 # Session Tracking & Account Revocation Blacklist (Synchronized with DB)
@@ -401,18 +455,19 @@ def restore_user_account(username: str):
         USERS_DB[u]["is_active"] = True
 
 def register_user_in_memory(username: str, user_data: Dict[str, Any]):
-    """Registers or updates a dynamic user into runtime USERS_DB."""
+    """Registers or updates a dynamic user into runtime USERS_DB with dynamic allowed_domains."""
     u = username.strip().lower()
-    USERS_DB[u] = {
+    user_obj = {
         "username": u,
         "password": user_data.get("password") or user_data.get("password_hash", ""),
         "role": user_data.get("role", "LOGISTICS_USER"),
         "name": user_data.get("name") or user_data.get("full_name") or u.title(),
         "company": user_data.get("company", ""),
         "phone": user_data.get("phone", ""),
-        "is_active": user_data.get("is_active", True),
-        "allowed_domains": ["fleet", "logistics"]
+        "is_active": user_data.get("is_active", True)
     }
+    user_obj["allowed_domains"] = get_user_allowed_domains(user_obj)
+    USERS_DB[u] = user_obj
     USER_STATUS_CACHE[u] = bool(user_data.get("is_active", True))
 
 def create_session_token(username: str, role: str, session_id: Optional[str] = None) -> str:
@@ -478,6 +533,7 @@ def authenticate_user(username: str, password: str) -> Optional[Dict]:
         if hmac.compare_digest(str(user["password"]), password.strip()):
             user["custom_permissions"] = USER_CUSTOM_PERMISSIONS_CACHE.get(u, {})
             user["effective_permissions"] = list(get_effective_permissions(user))
+            user["allowed_domains"] = get_user_allowed_domains(user)
             user["is_active"] = True
             return user
     return None
@@ -498,5 +554,6 @@ def get_current_user_from_request(request: Request) -> Optional[Dict]:
             user["session_id"] = payload.get("sid")
             user["custom_permissions"] = USER_CUSTOM_PERMISSIONS_CACHE.get(username, {})
             user["effective_permissions"] = list(get_effective_permissions(user))
+            user["allowed_domains"] = get_user_allowed_domains(user)
             return user
     return None
