@@ -41,74 +41,72 @@ async def start_workshop_flow(session: AsyncSession, staff: WorkshopStaff, is_st
         clean_p = "".join(filter(str.isdigit, str(phone)))
         last_9 = clean_p[-9:] if len(clean_p) >= 9 else clean_p
 
+        # Find any non-completed trip assigned to this driver
         trip_stmt = select(FleetTripRequest).where(
-            (FleetTripRequest.driver_phone == phone) |
-            (FleetTripRequest.driver_phone == clean_p) |
-            (FleetTripRequest.driver_phone.endswith(last_9))
+            (
+                (FleetTripRequest.driver_phone == phone) |
+                (FleetTripRequest.driver_phone == clean_p) |
+                (FleetTripRequest.driver_phone.endswith(last_9))
+            ),
+            FleetTripRequest.status.notin_(["COMPLETED", "CLOSED", "BALANCED"])
         ).order_by(FleetTripRequest.created_at.desc()).limit(1)
         trip = (await session.execute(trip_stmt)).scalars().first()
 
-        if not trip:
-            recent_stmt = select(FleetTripRequest).order_by(FleetTripRequest.created_at.desc()).limit(1)
-            trip = (await session.execute(recent_stmt)).scalars().first()
+        # Case 1: Trip is actively in transit -> restore transit menu
+        if trip and trip.status in {"ACTIVE", "EN_ROUTE", "IN_TRANSIT"}:
+            from app.handlers.driver_handler import send_driver_transit_menu
+            await send_driver_transit_menu(session, clean_p, trip.trip_id)
+            return
 
-        if not trip:
-            trip = FleetTripRequest(
-                trip_id="06102026-murambinda",
-                company_name="LG Plast",
-                salesperson_phone="263779214825",
-                salesperson_name="Ashraf Nedziwe",
-                destination_city="Murambinda",
-                route="Route 5 East to Mutare and Chipinge",
-                trip_sales_value=6546.86,
-                transport_charge=204.16,
-                truck_plate="AGZ 7331",
-                driver_name=staff.full_name,
-                driver_phone=clean_p,
-                crew_count=2,
-                meal_count=3,
-                toll_gates_count=4,
-                toll_cost=24.0,
-                food_allowance=40.0,
-                total_allowance=184.0,
-                allowance_status="TRANSFERRED",
-                status="TRANSFERRED",
-                created_at=datetime.datetime.utcnow(),
-                updated_at=datetime.datetime.utcnow()
+        # Case 2: Allowance has been transferred -> prompt for departure time or start trip
+        if trip and trip.status == "TRANSFERRED":
+            await set_user_state(
+                session,
+                clean_p,
+                current_step="awaiting_departure_time",
+                current_data={"trip_id": trip.trip_id},
+                flow_name="fleet_driver"
             )
-            session.add(trip)
-            await session.commit()
+            drv_prompt = (
+                f"💵 *ALLOWANCE TRANSFERRED: {trip.trip_id}*\n"
+                "────────────────────\n"
+                f"🏢 Company: *{trip.company_name}*\n"
+                f"📍 Destination: *{trip.destination_city}* ({trip.route})\n"
+                f"🚚 Truck: *{trip.truck_plate}*\n"
+                f"💰 Total Allowance: *${trip.total_allowance:,.2f}*\n"
+                "────────────────────\n"
+                "Please enter your scheduled departure time:\n"
+                "_(e.g. 06:30 AM or 07:00 AM)_"
+            )
+            await meta_api.send_text_message(phone, drv_prompt)
+            return
 
-        # Reset trip parameters for clean departure recording
-        trip.driver_phone = clean_p
-        trip.driver_name = staff.full_name
-        trip.status = "TRANSFERRED"
-        trip.allowance_status = "TRANSFERRED"
-        trip.departure_time = None
-        trip.start_odometer = None
-        await session.commit()
+        # Case 3: Trip is dispatched by Edward/Zayn, awaiting Accounts allowance disbursement
+        if trip and trip.status == "DISPATCHED":
+            drv_info = (
+                f"🚚 *TRIP SCHEDULED: {trip.trip_id}*\n"
+                "────────────────────\n"
+                f"🏢 Company: *{trip.company_name}*\n"
+                f"📍 Destination: *{trip.destination_city}* ({trip.route})\n"
+                f"🚚 Truck: *{trip.truck_plate}*\n"
+                f"💰 Total Allowance: *${trip.total_allowance:,.2f}*\n"
+                "────────────────────\n"
+                "Your trip has been scheduled by Logistics and is awaiting allowance transfer from Accounts.\n"
+                "You will receive an alert as soon as the funds are transferred."
+            )
+            await meta_api.send_text_message(phone, drv_info)
+            return
 
-        # Set user state to awaiting_departure_time in fleet_driver flow
-        await set_user_state(
-            session,
-            phone,
-            current_step="awaiting_departure_time",
-            current_data={"trip_id": trip.trip_id},
-            flow_name="fleet_driver"
-        )
-
-        drv_prompt = (
-            f"💵 *ALLOWANCE TRANSFERRED: {trip.trip_id}*\n"
+        # Case 4: Idle driver (no active trip assigned)
+        idle_msg = (
+            f"👋 *Hello {staff.full_name}!* 🚚\n"
             "────────────────────\n"
-            f"🏢 Company: *{trip.company_name}*\n"
-            f"📍 Destination: *{trip.destination_city}* ({trip.route})\n"
-            f"🚚 Truck: *{trip.truck_plate}*\n"
-            f"💰 Total Allowance: *${trip.total_allowance:,.2f}*\n"
+            "Role: *Commercial Fleet Driver*\n"
             "────────────────────\n"
-            "Please enter your scheduled departure time:\n"
-            "_(e.g. 06:30 AM or 07:00 AM)_"
+            "You currently do not have any active trips assigned.\n\n"
+            "Once Logistics (Edward) allocates a trip to you and Accounts disburses your allowance, your trip details and departure instructions will appear here automatically."
         )
-        await meta_api.send_text_message(phone, drv_prompt)
+        await meta_api.send_text_message(phone, idle_msg)
         return
 
     elif role in {"CLERK", "LOGISTICS_ASSISTANT", "LOGISTICS ASSISTANT", "ASSISTANT"}:
