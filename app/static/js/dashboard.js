@@ -3530,8 +3530,8 @@ function escapeJsAttr(val) {
                                     <button onclick="openRejectExpenseModal(${r.id})" class="px-2 py-1 rounded-md text-xs font-medium border border-rose-300 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer" title="Reject Request">
                                         Reject
                                     </button>
-                                    <button onclick="openApprovalDetailModal(${r.id})" class="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer" title="View Details">
-                                        🔍
+                                    <button onclick="openApprovalDetailModal(${r.id})" class="px-2 py-1 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer flex items-center gap-1" title="View Full Details & Breakdown">
+                                        <span>👁️</span> Details
                                     </button>
                                 </div>
                             `;
