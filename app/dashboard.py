@@ -784,6 +784,112 @@ async def api_decide_trip_shortfall_approval(request: Request, db: AsyncSession 
 
 
 # -------------------------------------------------------------
+# Building Projects Ticket Progress Management API
+# -------------------------------------------------------------
+@router.post("/api/v2/projects/tickets/update-progress")
+async def api_update_project_ticket_progress(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Enables Project Administrators and Master Admins to update the progress, status,
+    ETC, actual time taken, work done note, and assigned lead for a project ticket directly from the dashboard.
+    """
+    user = get_current_user_from_request(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    role = user.get("role", "")
+    allowed = user.get("allowed_domains", [])
+    if role not in ("MASTER_ADMIN", "PROJECTS_ADMIN") and "projects" not in allowed and not user_has_permission(user, "manage_project_tickets"):
+        raise HTTPException(status_code=403, detail="Access denied. Projects Administrator privileges required.")
+
+    body = await request.json()
+    ticket_num = str(body.get("ticket_number", "")).strip()
+    if not ticket_num:
+        raise HTTPException(status_code=400, detail="Missing ticket_number.")
+
+    stmt = select(MaintenanceTicket).where(
+        (MaintenanceTicket.ticket_number == ticket_num) |
+        (MaintenanceTicket.ticket_number.ilike(f"%{ticket_num}%"))
+    )
+    ticket = (await db.execute(stmt)).scalars().first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Project ticket '{ticket_num}' not found.")
+
+    status_id = body.get("status_id")
+    if status_id is not None:
+        try:
+            s_id = int(status_id)
+            if s_id in (1, 2, 3, 4):
+                ticket.status_id = s_id
+                if s_id == 4:
+                    ticket.closed_at = datetime.datetime.utcnow()
+                elif s_id == 1:
+                    ticket.closed_at = None
+        except (ValueError, TypeError):
+            pass
+
+    if "estimated_completion_time" in body:
+        etc_val = str(body.get("estimated_completion_time") or "").strip()
+        ticket.estimated_completion_time = etc_val or None
+
+    if "actual_time_taken" in body:
+        actual_val = str(body.get("actual_time_taken") or "").strip()
+        ticket.actual_time_taken = actual_val or None
+
+    if "resolution_note" in body:
+        note_val = str(body.get("resolution_note") or "").strip()
+        ticket.resolution_note = note_val or None
+
+    assigned_admin = body.get("assigned_admin")
+    if assigned_admin and assigned_admin != "Unassigned":
+        admin_stmt = select(SupportAdmin).where(SupportAdmin.full_name.ilike(f"%{assigned_admin.strip()}%"))
+        admin_obj = (await db.execute(admin_stmt)).scalars().first()
+        if admin_obj:
+            asg_stmt = select(MaintenanceTicketAssignment).where(MaintenanceTicketAssignment.ticket_id == ticket.ticket_id)
+            asg = (await db.execute(asg_stmt)).scalars().first()
+            if asg:
+                asg.admin_id = admin_obj.admin_id
+            else:
+                db.add(MaintenanceTicketAssignment(ticket_id=ticket.ticket_id, admin_id=admin_obj.admin_id))
+
+    ticket.updated_at = datetime.datetime.utcnow()
+    await db.commit()
+
+    # Optional WhatsApp alert to reporter if resolved or closed
+    try:
+        if ticket.status_id in (3, 4) and ticket.employee_id:
+            emp_stmt = select(Employee).where(Employee.employee_id == ticket.employee_id)
+            emp = (await db.execute(emp_stmt)).scalars().first()
+            if emp and emp.phone:
+                from app.meta_api import meta_api
+                status_label = "🟢 *RESOLVED*" if ticket.status_id == 3 else "✅ *CLOSED*"
+                updater = user.get("name") or user.get("username", "Project Lead")
+                alert_text = (
+                    f"ℹ️ *[PROJECT TICKET UPDATE]*\n\n"
+                    f"🎫 Ticket: *{ticket.ticket_number}*\n"
+                    f"🏢 Status: {status_label}\n"
+                    f"👤 Updated By: *{updater}*\n"
+                )
+                if ticket.estimated_completion_time:
+                    alert_text += f"⏱️ *Est. Time:* {ticket.estimated_completion_time}\n"
+                if ticket.actual_time_taken:
+                    alert_text += f"⏱️ *Time Taken:* {ticket.actual_time_taken}\n"
+                if ticket.resolution_note:
+                    alert_text += f"📝 *Work Done:* {ticket.resolution_note}\n"
+                await meta_api.send_text_message(emp.phone, alert_text)
+    except Exception as e:
+        logger.warning(f"Could not dispatch reporter notification for dashboard progress update: {e}")
+
+    return {
+        "status": "success",
+        "ticket_number": ticket.ticket_number,
+        "status_id": ticket.status_id,
+        "estimated_completion_time": ticket.estimated_completion_time,
+        "actual_time_taken": ticket.actual_time_taken,
+        "resolution_note": ticket.resolution_note
+    }
+
+
+# -------------------------------------------------------------
 # User Management & RBAC Administration (MASTER_ADMIN only)
 # -------------------------------------------------------------
 @router.get("/api/v2/admin/users")
@@ -3677,8 +3783,6 @@ async def dashboard_view(request: Request):
 
                         <select id="it-status-filter" onchange="filterITTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-950 dark:focus:ring-zinc-300 transition">
                             <option value="ALL">All Statuses</option>
-                            <option value="ONGOING">⚡ Ongoing Work (Open & In Progress)</option>
-                            <option value="COMPLETED">✅ Completed Work (Resolved & Closed)</option>
                             <option value="Open">Open</option>
                             <option value="In Progress">In Progress</option>
                             <option value="Resolved">Resolved</option>
@@ -3807,8 +3911,6 @@ async def dashboard_view(request: Request):
 
                         <select id="proj-status-filter" onchange="filterProjectsTable(true)" class="bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-950 dark:focus:ring-zinc-300 transition">
                             <option value="ALL">All Statuses</option>
-                            <option value="ONGOING">⚡ Ongoing Work (Open & In Progress)</option>
-                            <option value="COMPLETED">✅ Completed Work (Resolved & Closed)</option>
                             <option value="Open">Open</option>
                             <option value="In Progress">In Progress</option>
                             <option value="Resolved">Resolved</option>
@@ -3840,6 +3942,7 @@ async def dashboard_view(request: Request):
                                 <th class="px-4 py-3 whitespace-nowrap">Est. Time (ETC)</th>
                                 <th class="px-4 py-3 whitespace-nowrap">Time Taken & Work Done</th>
                                 <th class="px-4 py-3 whitespace-nowrap">Date Created</th>
+                                <th class="px-4 py-3 whitespace-nowrap text-right">Action</th>
                             </tr>
                         </thead>
                         <tbody id="proj-table-body" class="divide-y divide-zinc-200 dark:divide-zinc-800 text-zinc-800 dark:text-zinc-200">
@@ -5164,6 +5267,84 @@ async def dashboard_view(request: Request):
                 </button>
                 <button type="button" onclick="submitRejectExpense()" class="px-4 py-1.5 rounded-md text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white transition shadow-xs cursor-pointer font-bold">
                     Confirm Rejection
+                </button>
+    <!-- Project Ticket Progress Modal -->
+    <div id="projectProgressModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+        <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden max-h-[90vh]">
+            <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0 bg-zinc-50/50 dark:bg-zinc-900/40">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30">🏗️ PROJECT</span>
+                        <h3 class="text-base font-semibold text-zinc-900 dark:text-zinc-100" id="modal-proj-ticket-title">Update Ticket Progress</h3>
+                    </div>
+                    <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5" id="modal-proj-ticket-sub">Manage project work status, time tracking, and resolution</p>
+                </div>
+                <button onclick="closeProjectProgressModal()" class="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition cursor-pointer">✕</button>
+            </div>
+            
+            <div class="p-4 sm:p-5 space-y-4 text-xs overflow-y-auto">
+                <input type="hidden" id="modal-proj-ticket-number">
+                
+                <!-- Ticket Summary Box -->
+                <div class="bg-zinc-50 dark:bg-zinc-900/60 p-3 rounded-lg border border-zinc-200/80 dark:border-zinc-800/80 space-y-1.5">
+                    <div class="flex justify-between items-center">
+                        <span class="text-zinc-500 dark:text-zinc-400">Reporter:</span>
+                        <strong class="text-zinc-900 dark:text-zinc-100" id="modal-proj-reporter">--</strong>
+                    </div>
+                    <div>
+                        <span class="text-zinc-500 dark:text-zinc-400">Description:</span>
+                        <p class="text-zinc-800 dark:text-zinc-200 mt-0.5 italic" id="modal-proj-desc">--</p>
+                    </div>
+                </div>
+
+                <!-- Status Selector & Lead -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-medium text-zinc-700 dark:text-zinc-300 mb-1">Work Status *</label>
+                        <select id="modal-proj-status" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <option value="1">⏳ Open</option>
+                            <option value="2">⚡ In Progress</option>
+                            <option value="3">🟢 Resolved</option>
+                            <option value="4">✅ Closed</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-medium text-zinc-700 dark:text-zinc-300 mb-1">Assigned Lead / Tech</label>
+                        <select id="modal-proj-admin" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <option value="Stanclea">Stanclea</option>
+                            <option value="Omar Arizai">Omar Arizai</option>
+                            <option value="Unassigned">Unassigned</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Time Estimates & Actuals -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-medium text-zinc-700 dark:text-zinc-300 mb-1">⏱️ Estimated Time (ETC)</label>
+                        <input type="text" id="modal-proj-etc" placeholder="e.g. 2 hours, Tomorrow 10 AM, 3 days" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-3 py-2 text-xs placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block font-medium text-zinc-700 dark:text-zinc-300 mb-1">⏱️ Actual Time Taken</label>
+                        <input type="text" id="modal-proj-actual-time" placeholder="e.g. 45 mins, 2 hours, 1.5 days" class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-3 py-2 text-xs placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                    </div>
+                </div>
+
+                <!-- Resolution Note / Work Done -->
+                <div>
+                    <label class="block font-medium text-zinc-700 dark:text-zinc-300 mb-1">📝 Work Done / Progress Note</label>
+                    <textarea id="modal-proj-resolution-note" rows="3" placeholder="Enter details of work completed or progress update..." class="w-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md p-2.5 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-1 focus:ring-blue-500"></textarea>
+                </div>
+
+                <div id="modal-proj-feedback" class="text-xs font-medium hidden"></div>
+            </div>
+
+            <div class="p-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-end gap-2 shrink-0 bg-zinc-50/50 dark:bg-zinc-900/40">
+                <button type="button" onclick="closeProjectProgressModal()" class="px-3.5 py-1.5 rounded-md text-xs font-medium border border-zinc-200 bg-white hover:bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800 transition cursor-pointer">
+                    Cancel
+                </button>
+                <button type="button" onclick="submitSaveProjectProgress()" id="modal-submit-proj-btn" class="px-4 py-1.5 rounded-md text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white transition shadow-xs cursor-pointer flex items-center gap-1.5">
+                    <span>Save Progress</span>
                 </button>
             </div>
         </div>

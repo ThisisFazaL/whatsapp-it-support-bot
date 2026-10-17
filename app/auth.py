@@ -187,6 +187,7 @@ ALL_PERMISSIONS: List[str] = [
     "manage_workshop_tickets",
     "view_it_workspace",
     "view_projects_workspace",
+    "manage_project_tickets",
     "view_audit_logs",
     "manage_user_permissions",
     "view_analytics"
@@ -240,7 +241,8 @@ ROLE_DEFAULT_PERMISSIONS: Dict[str, Set[str]] = {
         "view_it_workspace"
     },
     "PROJECTS_ADMIN": {
-        "view_projects_workspace"
+        "view_projects_workspace",
+        "manage_project_tickets"
     },
     "EXECUTIVE_OBSERVER": {
         "view_fleet_workspace",

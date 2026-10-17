@@ -29,6 +29,7 @@ function escapeJsAttr(val) {
             'addSalesRepModal',
             'driverApprovalDetailModal',
             'rejectExpenseModal',
+            'projectProgressModal',
             'globalLoadingPopup'
         ];
 
@@ -75,6 +76,7 @@ function escapeJsAttr(val) {
                 case 'userManagementModal': closeUserManagementModal(); break;
                 case 'driverApprovalDetailModal': closeDriverApprovalModal(); break;
                 case 'rejectExpenseModal': closeRejectExpenseModal(); break;
+                case 'projectProgressModal': closeProjectProgressModal(); break;
                 default:
                     const el = document.getElementById(id);
                     if (el) el.classList.add('hidden');
@@ -2299,17 +2301,7 @@ function escapeJsAttr(val) {
                                  (r.estimated_completion_time && r.estimated_completion_time.toLowerCase().includes(q)) ||
                                  (r.actual_time_taken && r.actual_time_taken.toLowerCase().includes(q));
                 
-                let matchesStatus = false;
-                if (statusFilter === 'ALL') {
-                    matchesStatus = true;
-                } else if (statusFilter === 'ONGOING') {
-                    matchesStatus = (r.status === 'Open' || r.status === 'In Progress');
-                } else if (statusFilter === 'COMPLETED') {
-                    matchesStatus = (r.status === 'Resolved' || r.status === 'Closed');
-                } else {
-                    matchesStatus = (r.status === statusFilter);
-                }
-
+                const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
                 const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
                 return matchesQ && matchesStatus && matchesAdmin;
             });
@@ -2484,17 +2476,7 @@ function escapeJsAttr(val) {
                                  (r.actual_time_taken && r.actual_time_taken.toLowerCase().includes(q));
                 const matchesLoc = locFilter === 'ALL' || r.location === locFilter;
                 const matchesAdmin = adminFilter === 'ALL' || r.assigned_admin === adminFilter;
-                
-                let matchesStatus = false;
-                if (statusFilter === 'ALL') {
-                    matchesStatus = true;
-                } else if (statusFilter === 'ONGOING') {
-                    matchesStatus = (r.status === 'Open' || r.status === 'In Progress');
-                } else if (statusFilter === 'COMPLETED') {
-                    matchesStatus = (r.status === 'Resolved' || r.status === 'Closed');
-                } else {
-                    matchesStatus = (r.status === statusFilter);
-                }
+                const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
 
                 return matchesQ && matchesLoc && matchesAdmin && matchesStatus;
             });
@@ -2514,7 +2496,7 @@ function escapeJsAttr(val) {
             const projMobile = document.getElementById('proj-cards-list');
             if (tbody) {
                 if (records.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching project tickets found.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="10" class="px-4 py-8 text-center text-zinc-400 dark:text-zinc-500 font-medium">No matching project tickets found.</td></tr>';
                 } else {
                     tbody.innerHTML = pagedRecords.map(r => {
                         let statusBadge = 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30';
@@ -2534,10 +2516,11 @@ function escapeJsAttr(val) {
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap"><span class="inline-flex items-center gap-1"><svg class="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>${r.location}</span></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5"><strong class="text-zinc-900 dark:text-zinc-100">${r.category}</strong><br><small class="text-zinc-500 dark:text-zinc-400">${r.description}</small></td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
-                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${statusBadge} whitespace-nowrap">
+                                    <button onclick="openProjectProgressModal('${escapeJsAttr(r.ticket_number)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold border ${statusBadge} hover:ring-2 hover:ring-blue-400/50 transition-all cursor-pointer group" title="Click to update status and progress">
                                         <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
-                                        ${r.status}
-                                    </span>
+                                        <span>${r.status}</span>
+                                        <svg class="w-3 h-3 opacity-60 group-hover:opacity-100 transition-opacity ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                                    </button>
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">${r.assigned_admin}</td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 whitespace-nowrap">
@@ -2548,6 +2531,12 @@ function escapeJsAttr(val) {
                                     ${r.resolution_note ? `<small class="text-zinc-600 dark:text-zinc-400 italic">Work: "${r.resolution_note}"</small>` : (!r.actual_time_taken ? '<span class="text-zinc-400 dark:text-zinc-500 font-mono text-[11px]">--</span>' : '')}
                                 </td>
                                 <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-zinc-500 dark:text-zinc-400 font-mono text-[11px] whitespace-nowrap">${r.created_at}</td>
+                                <td class="px-4 sm:px-5 py-3 sm:py-3.5 text-right whitespace-nowrap">
+                                    <button onclick="openProjectProgressModal('${escapeJsAttr(r.ticket_number)}')" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-zinc-50 dark:text-zinc-900 shadow-xs transition-all cursor-pointer">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                        <span>Update</span>
+                                    </button>
+                                </td>
                             </tr>
                         `;
                     }).join('');
@@ -2600,6 +2589,12 @@ function escapeJsAttr(val) {
                                 <div class="flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400 pt-1 border-t border-zinc-100 dark:border-zinc-900">
                                     <span>Lead: <strong class="text-zinc-800 dark:text-zinc-200">${r.assigned_admin}</strong></span>
                                     <span class="font-mono">${r.created_at}</span>
+                                </div>
+                                <div class="pt-1 flex justify-end">
+                                    <button onclick="openProjectProgressModal('${escapeJsAttr(r.ticket_number)}')" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-zinc-50 dark:text-zinc-900 transition-all cursor-pointer">
+                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                        <span>Update Progress</span>
+                                    </button>
                                 </div>
                             </div>
                         `;
@@ -5250,3 +5245,137 @@ function escapeJsAttr(val) {
                 }
             }, 1500);
         }
+
+        // =============================================================
+        // MODAL 11: BUILDING PROJECTS TICKET PROGRESS
+        // =============================================================
+        function openProjectProgressModal(ticketNumber) {
+            const modal = document.getElementById('projectProgressModal');
+            if (!modal) return;
+            const r = (cachedData?.projects?.records || []).find(x => x.ticket_number === ticketNumber);
+            if (!r) return;
+
+            document.getElementById('modal-proj-ticket-number').value = r.ticket_number;
+            document.getElementById('modal-proj-ticket-title').textContent = `Update ${r.ticket_number}`;
+            document.getElementById('modal-proj-ticket-sub').textContent = `${r.location} • ${r.category}`;
+            document.getElementById('modal-proj-reporter').textContent = `${r.employee_name} ${r.employee_phone ? '(+' + r.employee_phone + ')' : ''}`;
+            document.getElementById('modal-proj-desc').textContent = r.description;
+
+            let sId = '1';
+            if (r.status === 'In Progress') sId = '2';
+            else if (r.status === 'Resolved') sId = '3';
+            else if (r.status === 'Closed') sId = '4';
+            document.getElementById('modal-proj-status').value = sId;
+
+            document.getElementById('modal-proj-etc').value = r.estimated_completion_time || '';
+            document.getElementById('modal-proj-actual-time').value = r.actual_time_taken || '';
+            document.getElementById('modal-proj-resolution-note').value = r.resolution_note || '';
+
+            const adminSelect = document.getElementById('modal-proj-admin');
+            if (adminSelect) {
+                if (r.assigned_admin && !Array.from(adminSelect.options).some(o => o.value === r.assigned_admin)) {
+                    const opt = document.createElement('option');
+                    opt.value = r.assigned_admin;
+                    opt.textContent = r.assigned_admin;
+                    adminSelect.appendChild(opt);
+                }
+                adminSelect.value = r.assigned_admin || 'Stanclea';
+            }
+
+            const fb = document.getElementById('modal-proj-feedback');
+            if (fb) fb.classList.add('hidden');
+            modal.classList.remove('hidden');
+            syncBodyScrollLock();
+        }
+
+        function closeProjectProgressModal() {
+            const modal = document.getElementById('projectProgressModal');
+            if (modal) modal.classList.add('hidden');
+            syncBodyScrollLock();
+        }
+
+        async function submitSaveProjectProgress() {
+            const btn = document.getElementById('modal-submit-proj-btn');
+            const fb = document.getElementById('modal-proj-feedback');
+            const ticketNumber = document.getElementById('modal-proj-ticket-number').value;
+            const statusId = document.getElementById('modal-proj-status').value;
+            const etc = document.getElementById('modal-proj-etc').value;
+            const actualTime = document.getElementById('modal-proj-actual-time').value;
+            const resolutionNote = document.getElementById('modal-proj-resolution-note').value;
+            const assignedAdmin = document.getElementById('modal-proj-admin').value;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="inline-block animate-spin mr-1">⌛</span> Saving...';
+            }
+            if (fb) fb.classList.add('hidden');
+
+            try {
+                const resp = await fetch('/api/v2/projects/tickets/update-progress', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ticket_number: ticketNumber,
+                        status_id: parseInt(statusId, 10),
+                        estimated_completion_time: etc,
+                        actual_time_taken: actualTime,
+                        resolution_note: resolutionNote,
+                        assigned_admin: assignedAdmin
+                    })
+                });
+                const res = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(res.detail || 'Failed to update ticket progress.');
+                }
+
+                // Update local cachedData
+                if (cachedData && cachedData.projects && cachedData.projects.records) {
+                    const item = cachedData.projects.records.find(x => x.ticket_number === ticketNumber);
+                    if (item) {
+                        const statusNames = { '1': 'Open', '2': 'In Progress', '3': 'Resolved', '4': 'Closed' };
+                        item.status = statusNames[statusId] || item.status;
+                        item.estimated_completion_time = etc;
+                        item.actual_time_taken = actualTime;
+                        item.resolution_note = resolutionNote;
+                        if (assignedAdmin && assignedAdmin !== 'Unassigned') {
+                            item.assigned_admin = assignedAdmin;
+                        }
+
+                        // Recalculate stats
+                        const st = cachedData.projects.stats;
+                        if (st) {
+                            st.open = cachedData.projects.records.filter(x => x.status === 'Open').length;
+                            st.in_progress = cachedData.projects.records.filter(x => x.status === 'In Progress').length;
+                            st.resolved = cachedData.projects.records.filter(x => x.status === 'Resolved').length;
+                            st.closed = cachedData.projects.records.filter(x => x.status === 'Closed').length;
+                            const statOpen = document.getElementById('proj-stat-open');
+                            if (statOpen) statOpen.textContent = st.in_progress;
+                            const statComp = document.getElementById('proj-stat-completed');
+                            if (statComp) statComp.textContent = st.resolved + st.closed;
+                        }
+                    }
+                    filterProjectsTable(false);
+                }
+
+                closeProjectProgressModal();
+                if (typeof showToast === 'function') {
+                    showToast(`Ticket ${ticketNumber} updated successfully!`);
+                }
+            } catch (err) {
+                if (fb) {
+                    fb.textContent = err.message || 'An error occurred while saving.';
+                    fb.className = 'text-xs font-medium text-rose-600 dark:text-rose-400 p-2 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 block';
+                    fb.classList.remove('hidden');
+                } else {
+                    alert(err.message || 'An error occurred.');
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = 'Save Progress';
+                }
+            }
+        }
+        window.openProjectProgressModal = openProjectProgressModal;
+        window.closeProjectProgressModal = closeProjectProgressModal;
+        window.submitSaveProjectProgress = submitSaveProjectProgress;
