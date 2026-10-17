@@ -41,12 +41,16 @@ function escapeJsAttr(val) {
             if (titleEl) titleEl.textContent = title;
             if (msgEl) msgEl.textContent = message;
             popup.classList.remove('hidden');
+            popup.style.display = 'flex';
             syncBodyScrollLock();
         }
 
         function hideLoadingPopup() {
             const popup = document.getElementById('globalLoadingPopup');
-            if (popup) popup.classList.add('hidden');
+            if (popup) {
+                popup.classList.add('hidden');
+                popup.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
         window.showLoadingPopup = showLoadingPopup;
@@ -55,12 +59,13 @@ function escapeJsAttr(val) {
         function syncBodyScrollLock() {
             const anyOpen = ALL_MODAL_IDS.some(id => {
                 const el = document.getElementById(id);
-                return el && !el.classList.contains('hidden');
+                return el && !el.classList.contains('hidden') && el.style.display !== 'none';
             });
             if (anyOpen) {
                 document.body.classList.add('modal-open');
             } else {
                 document.body.classList.remove('modal-open');
+                document.body.style.overflow = '';
             }
         }
 
@@ -79,7 +84,10 @@ function escapeJsAttr(val) {
                 case 'projectProgressModal': closeProjectProgressModal(); break;
                 default:
                     const el = document.getElementById(id);
-                    if (el) el.classList.add('hidden');
+                    if (el) {
+                        el.classList.add('hidden');
+                        el.style.display = 'none';
+                    }
                     syncBodyScrollLock();
             }
         }
@@ -94,29 +102,19 @@ function escapeJsAttr(val) {
                         closeModalById(id);
                     }
                 });
-                // Prevent scrolling through the overlay backdrop
-                modal.addEventListener('wheel', (e) => {
-                    if (e.target === modal) {
-                        e.preventDefault();
-                    }
-                }, { passive: false });
-                modal.addEventListener('touchmove', (e) => {
-                    if (e.target === modal) {
-                        e.preventDefault();
-                    }
-                }, { passive: false });
             });
 
-            // Escape key closes topmost modal
+            // Escape key closes open modals and restores scrolling
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
                     for (const id of ALL_MODAL_IDS) {
                         const el = document.getElementById(id);
-                        if (el && !el.classList.contains('hidden')) {
+                        if (el && !el.classList.contains('hidden') && el.style.display !== 'none') {
                             closeModalById(id);
-                            break;
                         }
                     }
+                    document.body.classList.remove('modal-open');
+                    document.body.style.overflow = '';
                 }
             });
         }
@@ -131,13 +129,17 @@ function escapeJsAttr(val) {
             const modal = document.getElementById('userManagementModal');
             if (!modal) return;
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
             loadUsersList();
         }
 
         function closeUserManagementModal() {
             const modal = document.getElementById('userManagementModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -430,6 +432,7 @@ function escapeJsAttr(val) {
             const m = document.getElementById('createUserModal');
             if (m) {
                 m.classList.remove('hidden');
+                m.style.display = 'flex';
                 syncBodyScrollLock();
                 const uInput = document.getElementById('create-user-username');
                 if (uInput) {
@@ -450,7 +453,10 @@ function escapeJsAttr(val) {
 
         function closeCreateUserModal() {
             const m = document.getElementById('createUserModal');
-            if (m) m.classList.add('hidden');
+            if (m) {
+                m.classList.add('hidden');
+                m.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
         window.closeCreateUserModal = closeCreateUserModal;
@@ -3754,13 +3760,17 @@ function escapeJsAttr(val) {
             const modal = document.getElementById('driverApprovalDetailModal');
             if (modal) {
                 modal.classList.remove('hidden');
+                modal.style.display = 'flex';
                 syncBodyScrollLock();
             }
         }
 
         function closeDriverApprovalModal() {
             const modal = document.getElementById('driverApprovalDetailModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -3785,6 +3795,7 @@ function escapeJsAttr(val) {
             const modal = document.getElementById('rejectExpenseModal');
             if (modal) {
                 modal.classList.remove('hidden');
+                modal.style.display = 'flex';
                 syncBodyScrollLock();
                 setTimeout(() => { if (noteInput) noteInput.focus(); }, 100);
             }
@@ -3792,7 +3803,10 @@ function escapeJsAttr(val) {
 
         function closeRejectExpenseModal() {
             const modal = document.getElementById('rejectExpenseModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -4440,12 +4454,16 @@ function escapeJsAttr(val) {
                 if (opsBtn) opsBtn.style.display = (canMeal || canAccom || canFuel || canCity) ? '' : 'none';
             }
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
         }
 
         function closeCityConfigModal() {
             const modal = document.getElementById('cityMinimumsModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -4680,12 +4698,16 @@ function escapeJsAttr(val) {
             }
 
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
         }
 
         function closeClearPaymentModal() {
             const modal = document.getElementById('clearPaymentModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -4806,13 +4828,17 @@ function escapeJsAttr(val) {
             const modal = document.getElementById('auditLogsModal');
             if (!modal) return;
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
             loadAuditLogs();
         }
 
         function closeAuditLogsModal() {
             const modal = document.getElementById('auditLogsModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -4938,12 +4964,16 @@ function escapeJsAttr(val) {
             const fb = document.getElementById('modal-truck-feedback');
             if (fb) fb.classList.add('hidden');
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
         }
 
         function closeAddTruckModal() {
             const modal = document.getElementById('addTruckModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -5041,12 +5071,16 @@ function escapeJsAttr(val) {
             const fb = document.getElementById('modal-driver-feedback');
             if (fb) fb.classList.add('hidden');
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
         }
 
         function closeAddDriverModal() {
             const modal = document.getElementById('addDriverModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -5135,12 +5169,16 @@ function escapeJsAttr(val) {
             const fb = document.getElementById('modal-salesrep-feedback');
             if (fb) fb.classList.add('hidden');
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
             syncBodyScrollLock();
         }
 
         function closeAddSalesRepModal() {
             const modal = document.getElementById('addSalesRepModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
             syncBodyScrollLock();
         }
 
@@ -5251,7 +5289,10 @@ function escapeJsAttr(val) {
         // =============================================================
         function openProjectProgressModal(ticketNumber) {
             const modal = document.getElementById('projectProgressModal');
-            if (!modal) return;
+            if (!modal) {
+                console.error('projectProgressModal element not found');
+                return;
+            }
             const cleanNum = String(ticketNumber || '').trim();
             const r = (cachedData?.projects?.records || []).find(x => String(x.ticket_number || '').trim() === cleanNum);
             if (!r) {
@@ -5259,21 +5300,29 @@ function escapeJsAttr(val) {
                 return;
             }
 
-            document.getElementById('modal-proj-ticket-number').value = r.ticket_number;
-            document.getElementById('modal-proj-ticket-title').textContent = `Update ${r.ticket_number}`;
-            document.getElementById('modal-proj-ticket-sub').textContent = `${r.location} • ${r.category}`;
-            document.getElementById('modal-proj-reporter').textContent = `${r.employee_name} ${r.employee_phone ? '(+' + r.employee_phone + ')' : ''}`;
-            document.getElementById('modal-proj-desc').textContent = r.description;
+            const setField = (id, val, isPropVal = true) => {
+                const el = document.getElementById(id);
+                if (el) {
+                    if (isPropVal) el.value = val;
+                    else el.textContent = val;
+                }
+            };
+
+            setField('modal-proj-ticket-number', r.ticket_number);
+            setField('modal-proj-ticket-title', `Update ${r.ticket_number}`, false);
+            setField('modal-proj-ticket-sub', `${r.location} • ${r.category}`, false);
+            setField('modal-proj-reporter', `${r.employee_name} ${r.employee_phone ? '(+' + r.employee_phone + ')' : ''}`, false);
+            setField('modal-proj-desc', r.description, false);
 
             let sId = '1';
             if (r.status === 'In Progress') sId = '2';
             else if (r.status === 'Resolved') sId = '3';
             else if (r.status === 'Closed') sId = '4';
-            document.getElementById('modal-proj-status').value = sId;
+            setField('modal-proj-status', sId);
 
-            document.getElementById('modal-proj-etc').value = r.estimated_completion_time || '';
-            document.getElementById('modal-proj-actual-time').value = r.actual_time_taken || '';
-            document.getElementById('modal-proj-resolution-note').value = r.resolution_note || '';
+            setField('modal-proj-etc', r.estimated_completion_time || '');
+            setField('modal-proj-actual-time', r.actual_time_taken || '');
+            setField('modal-proj-resolution-note', r.resolution_note || '');
 
             const adminSelect = document.getElementById('modal-proj-admin');
             if (adminSelect) {
@@ -5287,14 +5336,24 @@ function escapeJsAttr(val) {
             }
 
             const fb = document.getElementById('modal-proj-feedback');
-            if (fb) fb.classList.add('hidden');
+            if (fb) {
+                fb.classList.add('hidden');
+                fb.style.display = 'none';
+            }
             modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+            modal.style.zIndex = '80';
             syncBodyScrollLock();
         }
 
         function closeProjectProgressModal() {
             const modal = document.getElementById('projectProgressModal');
-            if (modal) modal.classList.add('hidden');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.style.display = 'none';
+            }
+            document.body.classList.remove('modal-open');
+            document.body.style.overflow = '';
             syncBodyScrollLock();
         }
 

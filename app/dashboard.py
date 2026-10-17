@@ -3584,8 +3584,12 @@ async def dashboard_view(request: Request):
             animation: spinFast 0.6s linear infinite;
         }}
         body.modal-open {{
-            overflow: hidden !important;
-            height: 100vh !important;
+            overflow: hidden;
+        }}
+        .modal-overlay.hidden,
+        .modal-overlay[style*="display: none"],
+        [hidden] {{
+            display: none !important;
         }}
         .modal-overlay {{
             overscroll-behavior: contain;
@@ -4656,7 +4660,7 @@ async def dashboard_view(request: Request):
     <!-- ========================================================= -->
 
     <!-- Modal 1: City Minimums & Fuel Price -->
-    <div id="cityMinimumsModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="cityMinimumsModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -4736,7 +4740,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 2: Clear Payment Modal -->
-    <div id="clearPaymentModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="clearPaymentModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -4789,7 +4793,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 3: Audit Logs Modal -->
-    <div id="auditLogsModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="auditLogsModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -4825,7 +4829,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 4: Add / Edit Truck Modal -->
-    <div id="addTruckModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="addTruckModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -4879,7 +4883,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 5: Add / Edit Driver Modal -->
-    <div id="addDriverModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="addDriverModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -4924,7 +4928,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 6: Add / Edit Sales Rep Modal -->
-    <div id="addSalesRepModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="addSalesRepModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -4981,7 +4985,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 7: User Management & Permissions (MASTER_ADMIN only) -->
-    <div id="userManagementModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="userManagementModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-5xl xl:max-w-6xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -5083,7 +5087,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 8: Add New User Account Modal -->
-    <div id="createUserModal" class="modal-overlay fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain" style="z-index: 70;">
+    <div id="createUserModal" class="modal-overlay fixed inset-0 z-[70] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain" style="display: none; z-index: 70;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden" style="z-index: 71;">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -5141,7 +5145,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 9: Driver Expense & Allowance Approval Details Modal -->
-    <div id="driverApprovalDetailModal" class="modal-overlay fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain" style="z-index: 60;">
+    <div id="driverApprovalDetailModal" class="modal-overlay fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain" style="display: none; z-index: 60;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden" style="z-index: 61;">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0 bg-zinc-50/50 dark:bg-zinc-900/30">
                 <div class="flex items-center gap-2.5">
@@ -5253,7 +5257,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Modal 10: Reject Expense Note Modal -->
-    <div id="rejectExpenseModal" class="modal-overlay fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain">
+    <div id="rejectExpenseModal" class="modal-overlay fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
                 <div>
@@ -5284,7 +5288,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Project Ticket Progress Modal -->
-    <div id="projectProgressModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="projectProgressModal" class="modal-overlay fixed inset-0 z-[80] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none; z-index: 80;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden max-h-[90vh]">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0 bg-zinc-50/50 dark:bg-zinc-900/40">
                 <div>
@@ -5366,7 +5370,7 @@ async def dashboard_view(request: Request):
     </div>
 
     <!-- Global Action Loading Modal Popup -->
-    <div id="globalLoadingPopup" class="modal-overlay fixed inset-0 z-[100] hidden flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
+    <div id="globalLoadingPopup" class="modal-overlay fixed inset-0 z-[100] hidden flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain" style="display: none;">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-2xl max-w-xs w-full flex flex-col items-center text-center space-y-3.5">
             <div class="relative w-10 h-10 flex items-center justify-center">
                 <div class="w-9 h-9 border-3 border-zinc-300 dark:border-zinc-700 border-t-zinc-900 dark:border-t-zinc-100 rounded-full animate-spin"></div>
@@ -5387,7 +5391,14 @@ async def dashboard_view(request: Request):
         window.currentUserCompany = '{user.get("company", "")}';
         window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.8.2"></script>
+    <script src="/static/js/dashboard.js?v={int(time.time())}"></script>
 </body>
 </html>"""
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(
+        content=html_content,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
