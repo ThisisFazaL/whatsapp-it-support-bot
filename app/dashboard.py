@@ -5022,9 +5022,13 @@ async def dashboard_view(request: Request):
                 <button type="button" onclick="submitCreateUser()" id="modal-submit-create-user-btn" class="px-4 py-1.5 rounded-md text-xs font-medium bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-zinc-50 dark:text-zinc-900 transition shadow-xs cursor-pointer">
                     Create User
                 </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal 9: Driver Expense & Allowance Approval Details Modal -->
-    <div id="driverApprovalDetailModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
-        <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+    <div id="driverApprovalDetailModal" class="modal-overlay fixed inset-0 z-[60] hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/70 backdrop-blur-xs overscroll-contain" style="z-index: 60;">
+        <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden" style="z-index: 61;">
             <div class="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0 bg-zinc-50/50 dark:bg-zinc-900/30">
                 <div class="flex items-center gap-2.5">
                     <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-sm border border-amber-500/20">
@@ -5187,7 +5191,7 @@ async def dashboard_view(request: Request):
         window.currentUserCompany = '{user.get("company", "")}';
         window.currentUserName = `{user.get("name", "")}`;
     </script>
-    <script src="/static/js/dashboard.js?v=2.8.1"></script>
+    <script src="/static/js/dashboard.js?v=2.8.2"></script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
