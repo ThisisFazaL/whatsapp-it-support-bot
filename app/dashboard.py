@@ -5279,6 +5279,10 @@ async def dashboard_view(request: Request):
                 <button type="button" onclick="submitRejectExpense()" class="px-4 py-1.5 rounded-md text-xs font-medium bg-rose-600 hover:bg-rose-700 text-white transition shadow-xs cursor-pointer font-bold">
                     Confirm Rejection
                 </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Project Ticket Progress Modal -->
     <div id="projectProgressModal" class="modal-overlay fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-xs overscroll-contain">
         <div class="modal-card bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden max-h-[90vh]">

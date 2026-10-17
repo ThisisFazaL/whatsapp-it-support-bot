@@ -2561,10 +2561,10 @@ function escapeJsAttr(val) {
                             <div class="p-4 space-y-2.5 text-xs bg-white dark:bg-zinc-950">
                                 <div class="flex items-center justify-between gap-2">
                                     <span class="font-mono font-bold text-zinc-900 dark:text-zinc-100">${r.ticket_number}</span>
-                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}">
+                                    <button onclick="openProjectProgressModal('${escapeJsAttr(r.ticket_number)}')" class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge} cursor-pointer hover:ring-2 hover:ring-blue-400/50 transition-all">
                                         <span class="w-1.5 h-1.5 rounded-full ${statusDot}"></span>
-                                        ${r.status}
-                                    </span>
+                                        <span>${r.status}</span>
+                                    </button>
                                 </div>
                                 <div>
                                     <div class="font-semibold text-zinc-900 dark:text-zinc-100">${r.employee_name} <span class="font-normal text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">+${r.employee_phone}</span></div>
@@ -5252,8 +5252,12 @@ function escapeJsAttr(val) {
         function openProjectProgressModal(ticketNumber) {
             const modal = document.getElementById('projectProgressModal');
             if (!modal) return;
-            const r = (cachedData?.projects?.records || []).find(x => x.ticket_number === ticketNumber);
-            if (!r) return;
+            const cleanNum = String(ticketNumber || '').trim();
+            const r = (cachedData?.projects?.records || []).find(x => String(x.ticket_number || '').trim() === cleanNum);
+            if (!r) {
+                console.warn('Ticket not found in cachedData.projects.records:', cleanNum);
+                return;
+            }
 
             document.getElementById('modal-proj-ticket-number').value = r.ticket_number;
             document.getElementById('modal-proj-ticket-title').textContent = `Update ${r.ticket_number}`;
